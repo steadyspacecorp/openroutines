@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Cut a release: cross-compile with the version stamped in, checksum, tag,
+# and create the GitHub release with the binaries attached.
+#
+# Usage: bin/release vX.Y.Z[-suffix] [notes-file]
+set -euo pipefail
+
+version="${1:?usage: bin/release vX.Y.Z[-suffix] [notes-file]}"
+notes="${2:-}"
+[[ "$version" == v* ]] || { echo "version must start with v" >&2; exit 1; }
+
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$repo"
+[[ -z "$(git status --porcelain)" ]] || { echo "working tree not clean -- commit first" >&2; exit 1; }
+
+dist="$repo/dist"
+rm -rf "$dist" && mkdir -p "$dist"
+ldflags="-s -w -X github.com/steadyspacecorp/openroutines/internal/version.Version=$version"
+
+for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+  os="${target%/*}" arch="${target#*/}"
+  echo "building $os/$arch"
+  GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
+    go build -trimpath -ldflags "$ldflags" -o "$dist/openroutines_${version}_${os}_${arch}" ./cmd/openroutines
+done
+(cd "$dist" && shasum -a 256 openroutines_* > checksums.txt)
+
+git tag -a "$version" -m "$version"
+git push origin "$version"
+if [[ -n "$notes" ]]; then
+  gh release create "$version" "$dist"/* --title "$version" --notes-file "$notes"
+else
+  gh release create "$version" "$dist"/* --title "$version" --generate-notes
+fi
+echo "released $version"

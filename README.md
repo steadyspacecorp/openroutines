@@ -2,7 +2,7 @@
 
 The framework for running simple, secure, and durable autonomous AI agents.
 
-> **Status: design phase.** This README is a spec we are building against -- the CLI and supervisor described below are under construction and there is nothing to install yet. [DESIGN.md](DESIGN.md) tracks the decisions and the open hardening work.
+> **Status: pre-alpha.** The CLI and supervisor work end to end for local agents. Still landing: production deployment of the container image, `openroutines update`, and sandbox hardening (see [DESIGN.md](DESIGN.md)). While the repo is private there is no brew/curl install -- collaborators grab a binary from [Releases](../../releases).
 
 ## Background
 
@@ -172,4 +172,4 @@ openroutines is [MIT licensed](LICENSE). Agents you scaffold with it are yours -
 
 Contributions are welcome, with one ask: read [DESIGN.md](DESIGN.md) first. This is an opinionated framework, and the opinions are documented -- each decision comes with its reasoning. Bug fixes and small improvements can go straight to a pull request. For anything that touches a documented decision, open an issue and argue with the reasoning, not just the behavior; if the rationale doesn't hold up, we'll change the design.
 
-To work on the framework itself, clone this repo -- the CLI, supervisor, and embedded agent template all live here. You'll need Go 1.24+ (install it however you like; if you use [mise](https://mise.jdx.dev), the pinned toolchain in `mise.toml` is picked up automatically). Build and test with the standard commands: `go build ./...`, `go vet ./...`, `go test ./...`.
+To work on the framework itself, clone this repo -- the CLI, supervisor, and embedded agent template all live here. You'll need Go 1.25+ (install it however you like; if you use [mise](https://mise.jdx.dev), the pinned toolchain in `mise.toml` is picked up automatically). Build and test with the standard commands: `go build ./...`, `go vet ./...`, `go test ./...`.
