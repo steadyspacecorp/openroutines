@@ -174,7 +174,7 @@ sequenceDiagram
 
 ## Open questions
 
-Hardening backlog -- known gaps between the design above and a fully defensible production posture, roughly in priority order:
+Hardening backlog -- known gaps between the design above and a fully defensible production posture, roughly in priority order. (This section holds the reasoning; execution is tracked in the repo's GitHub issues.)
 
 - **Threat model document.** A trust-boundary inventory: what we trust (the `main` branch, the container host, opencode, the model provider) versus what we don't (memory content, skill content, model output, fetched web content), and what each enforcement layer is responsible for.
 - **Per-routine network egress control.** The largest remaining exfiltration channel. Candidates: Landlock TCP scoping (kernel 6.7+) for port-level rules, or an in-container proxy with per-routine destination allowlists for host-level ones.
