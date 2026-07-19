@@ -113,11 +113,12 @@ openroutines routines run doc-drift
 Day to day:
 
 ```bash
-openroutines status                # master key, models, routines and schedules, skills, memory sync state
-openroutines routines list         # also: edit, activate, deactivate, remove
-openroutines routines test <name>  # like run, but memory writes are discarded
-openroutines skills new            # also: list, remove
-openroutines check                 # validate config, frontmatter, and schedules; made for CI
+openroutines status                   # master key, models, routines and schedules, skills, memory sync state
+openroutines routines list            # also: edit, activate, deactivate, remove
+openroutines routines test <name>     # like run, but memory writes are discarded
+openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove
+openroutines credentials set <name>   # add/replace one encrypted secret; also: list, remove
+openroutines check                    # validate config, frontmatter, and schedules; made for CI
 ```
 
 Skills follow the open [Agent Skills](https://agentskills.io/) standard, so any skill written for Claude Code, Cursor, opencode, or the rest of the ecosystem works in your agent's `skills/` directory unchanged. A routine only gets the skills its frontmatter declares. Treat a skill like the dependency it is, though: it's instructions -- and sometimes code -- that your agent will follow unattended, so review what you vendor in.

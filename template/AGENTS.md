@@ -43,7 +43,8 @@ deployed container runs whatever routine is due.
 ## Secrets
 
 - Never write a secret into any tracked file. Secrets go in the encrypted
-  store: `openroutines` manages `credentials.yml.enc` with `master.key`
-  (gitignored). Credential names are lowercase snake_case and become env vars
-  (`slack_webhook` -> `SLACK_WEBHOOK`) only in runs that declare them.
+  store via `openroutines credentials set <name>` (never edit
+  `credentials.yml.enc` by hand). Credential names are lowercase snake_case
+  and become env vars (`slack_webhook` -> `SLACK_WEBHOOK`) only in runs that
+  declare them.
 - `master.key` must never be committed or printed.
