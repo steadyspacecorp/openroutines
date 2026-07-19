@@ -153,21 +153,21 @@ sequenceDiagram
     participant O as Origin
 
     loop every minute
-        S->>S: re-read frontmatter, find occurrences<br/>in (watermark, now] or a pending run to retry
+        S->>S: re-read frontmatter, find firings<br/>since the watermark or a pending run to retry
     end
     Note over S: one run at a time, in due order
     S->>W: record pending run (run_id, scheduled_for, covered_through)
-    S->>O: push intent commit -- required before acting
+    S->>O: push intent commit, required before acting
     S->>St: snapshot memory files into staging
-    S->>S: flock routine, build clean env (declared credentials + run metadata)
-    S->>R: spawn process group in Landlock sandbox,<br/>generated agent definition (declared skills only)
-    R->>St: do the job; append worklog / intentions / blockers,<br/>update own ledger
+    S->>S: flock routine, build clean env (declared credentials and run metadata)
+    S->>R: spawn model process in the run container,<br/>generated agent definition (declared skills only)
+    R->>St: do the job, append worklog / intentions / blockers,<br/>update own ledger
     R-->>S: exit (or timeout: SIGTERM group, grace, SIGKILL)
     alt attempt succeeded
         S->>St: validate staged tree (regular files only, limits)
-        S->>W: import diff + run record, advance watermark, clear pending
+        S->>W: import diff and run record, advance watermark, clear pending
     else attempt failed
-        S->>W: run record + blocker; pending survives (same run_id, max attempts)
+        S->>W: run record and blocker, pending survives (same run_id, max attempts)
     end
     S->>St: discard staging
     S->>O: push memory branch (retry later if it fails)
