@@ -78,16 +78,23 @@ func EnsureWorktree(repoDir string) error {
 	// worktree whose directory was excluded from the image. Prune stale
 	// registrations or the add below fails on first boot.
 	_, _ = git(repoDir, "worktree", "prune")
-	if _, err := git(repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err == nil {
-		// Branch exists locally; just add the worktree.
-		if _, err := git(repoDir, "worktree", "add", wt, Branch); err != nil {
-			return err
+	if _, err := git(repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
+		// First use: create the orphan branch from an empty tree via plumbing.
+		// (worktree add --orphan needs git >= 2.42; this works everywhere.)
+		tree, err := gitStdin(repoDir, "", "mktree")
+		if err != nil {
+			return fmt.Errorf("creating memory branch: %w", err)
 		}
-	} else {
-		// First use: create the orphan branch via a new worktree (git >= 2.42).
-		if _, err := git(repoDir, "worktree", "add", "--orphan", "-b", Branch, wt); err != nil {
-			return fmt.Errorf("creating memory branch (requires git >= 2.42): %w", err)
+		commit, err := git(repoDir, "-c", "user.name=openroutines", "-c", "user.email=agent@openroutines.dev", "commit-tree", tree, "-m", "Initialize memory")
+		if err != nil {
+			return fmt.Errorf("creating memory branch: %w", err)
 		}
+		if _, err := git(repoDir, "branch", Branch, commit); err != nil {
+			return fmt.Errorf("creating memory branch: %w", err)
+		}
+	}
+	if _, err := git(repoDir, "worktree", "add", wt, Branch); err != nil {
+		return err
 	}
 	// Seed the primitives and the ledgers directory if absent.
 	for name, content := range primitives {
