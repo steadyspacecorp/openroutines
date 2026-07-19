@@ -1,0 +1,66 @@
+// Package cli implements the openroutines command surface.
+package cli
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/steadyspacecorp/openroutines/internal/version"
+)
+
+const usage = `openroutines -- run simple, secure, and durable autonomous AI agents
+
+Usage:
+  openroutines scaffold <path>      create a new agent repository
+  openroutines configure            fill in agent.yaml, generate the master key
+  openroutines check                validate the agent; made for CI
+  openroutines status               show what the agent has and still needs
+  openroutines routines <command>   new, list, run, test, edit, activate, deactivate, remove
+  openroutines skills <command>     new, list, remove
+  openroutines supervise            run the scheduler (container entrypoint)
+  openroutines update               bump the pinned framework version
+  openroutines version              print the version
+
+Run any command from inside an agent repository (except scaffold).
+`
+
+// Run dispatches a CLI invocation and returns the process exit code.
+func Run(args []string) int {
+	if len(args) == 0 {
+		fmt.Print(usage)
+		return 0
+	}
+	cmd, rest := args[0], args[1:]
+	switch cmd {
+	case "scaffold":
+		return cmdScaffold(rest)
+	case "configure":
+		return cmdConfigure(rest)
+	case "check":
+		return cmdCheck(rest)
+	case "routines":
+		return cmdRoutines(rest)
+	case "status", "skills", "supervise", "update":
+		return notYet(cmd)
+	case "version", "--version", "-v":
+		fmt.Println(version.Version)
+		return 0
+	case "help", "--help", "-h":
+		fmt.Print(usage)
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "openroutines: unknown command %q\n\n", cmd)
+		fmt.Print(usage)
+		return 2
+	}
+}
+
+func notYet(cmd string) int {
+	fmt.Fprintf(os.Stderr, "openroutines %s: not implemented yet (design phase -- see DESIGN.md)\n", cmd)
+	return 1
+}
+
+func fail(err error) int {
+	fmt.Fprintf(os.Stderr, "openroutines: %v\n", err)
+	return 1
+}

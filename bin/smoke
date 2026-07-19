@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Smoke test: build the CLI, scaffold an agent, configure it, and verify that
+# `check` passes on a good agent and fails on a broken one. Run from anywhere;
+# used by CI and useful locally after any change.
+set -euo pipefail
+
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+bin="$work/openroutines"
+(cd "$repo" && go build -o "$bin" ./cmd/openroutines)
+
+"$bin" version
+
+# Scaffold + configure a fresh agent.
+"$bin" scaffold "$work/agent" >/dev/null
+cd "$work/agent"
+printf 'smoke-agent\nSmoke-tests the openroutines CLI\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
+  | "$bin" configure >/dev/null
+
+# A freshly configured agent must pass check (warnings allowed; no origin yet).
+"$bin" check
+
+# routines new mints a valid, inactive routine; check must still pass.
+"$bin" routines new smoke-routine >/dev/null
+"$bin" check >/dev/null
+
+# A broken routine must make check fail.
+cat > routines/broken.md <<'EOF'
+---
+id: not-a-valid-id
+schedule: "99 99 * * *"
+credentials: [Bad-Name]
+skills: [nonexistent]
+---
+Body
+EOF
+if "$bin" check >/dev/null 2>&1; then
+  echo "FAIL: check passed on a broken routine" >&2
+  exit 1
+fi
+
+echo "smoke: OK"

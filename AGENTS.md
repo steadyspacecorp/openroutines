@@ -46,4 +46,4 @@ Use these terms exactly; the docs and code should agree:
 
 ## Verifying changes
 
-Until CI exists: `go build ./... && go vet ./...`, run the framework's own `openroutines check` against a scaffolded temp agent, and exercise the affected subcommand end-to-end in a scratch directory. Template changes: scaffold a fresh agent and inspect the output -- the embedded template only updates when the binary is rebuilt.
+Toolchain: Go 1.24+ (any install method; `mise.toml` pins a version for mise users but mise is not required). Before handing work back: `go build ./... && go vet ./... && go test ./...` plus `bin/smoke`, which builds the CLI, scaffolds a throwaway agent, and asserts `check` passes on a good agent and fails on a broken one -- CI (`.github/workflows/ci.yml`) runs exactly these. For template changes, scaffold a fresh agent and inspect the output -- the embedded template only updates when the binary is rebuilt.

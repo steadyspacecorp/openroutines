@@ -1,0 +1,10 @@
+# The agent's memory lives on its own git branch (a worktree at memory/),
+# never in main's history.
+memory/
+
+# The master key unlocks credentials.yml.enc. Local only; production gets it
+# as OPENROUTINES_MASTER_KEY.
+master.key
+
+# Generated opencode agent definitions -- derived from routine frontmatter.
+.opencode/
