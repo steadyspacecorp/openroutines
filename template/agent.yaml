@@ -1,11 +1,10 @@
-name: pm-agent
+name: {{AGENT_NAME}}
 description: >
-  Gathers user research into themes, updates specifications against
-  technical constraints, and checks documentation against what shipped.
+  {{JOB_DESCRIPTION}}
 owner:
-  name: Henry Poydar
-  email: henry@steady.space
-timezone: America/New_York
+  name: {{OWNER_NAME}}
+  email: {{OWNER_EMAIL}}
+timezone: {{TIMEZONE}}
 defaults:
-  model: anthropic/claude-sonnet-5
+  model: {{DEFAULT_MODEL}}
   timeout: 5m
