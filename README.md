@@ -130,18 +130,27 @@ An ORA deploys as a plain Docker container. Anything that runs a container runs 
 
 The one prerequisite is a git origin the agent can push to -- GitHub, GitLab, Gitea, even a bare repo on a VPS. The origin is where memory durably lives; a deployed agent without one has no durable memory. (Local development needs no origin, and `openroutines check` verifies one before you deploy.)
 
+First, give the agent its own identity for pushing memory -- a deploy key scoped to this one repository:
+
+```bash
+ssh-keygen -t ed25519 -f agent_deploy_key -N "" -C "my-agent deploy key"
+gh repo deploy-key add agent_deploy_key.pub --allow-write --title "my-agent"
+```
+
+Then build and run (the agent image builds `FROM` the openroutines base image on GHCR, which carries the supervisor and opencode; while that registry is private, `docker login ghcr.io` first):
+
 ```bash
 docker build -t my-agent .
-docker run -d --name my-agent \
-  -e OPENROUTINES_MASTER_KEY=<master key> \
-  -e OPENROUTINES_DEPLOY_KEY=<ssh key with read/write access to the repo> \
+docker run -d --name my-agent --restart unless-stopped --stop-timeout 30 \
+  -e OPENROUTINES_MASTER_KEY=<contents of master.key> \
+  -e OPENROUTINES_DEPLOY_KEY="$(cat agent_deploy_key)" \
   my-agent
 ```
 
 The image contains the pinned `openroutines` binary, opencode, git, and your repo's `main` branch. The entrypoint is the supervisor: every minute it re-reads your routines' frontmatter and runs whatever is due. Two secrets arrive by environment variable, and neither is ever in the image:
 
 - **`OPENROUTINES_MASTER_KEY`** decrypts the credentials file. Individual routines receive only the credentials their frontmatter declares.
-- **`OPENROUTINES_DEPLOY_KEY`** lets the agent push its memory. On boot the supervisor fetches the `memory` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded. Scope the key to this one repository.
+- **`OPENROUTINES_DEPLOY_KEY`** lets the agent push its memory. On boot the supervisor fetches the `memory` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
 
 A few properties fall out of the design (see [DESIGN.md](DESIGN.md) for the reasoning):
 

@@ -25,6 +25,18 @@ for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
 done
 (cd "$dist" && shasum -a 256 openroutines_* > checksums.txt)
 
+# Publish the agent base image (multi-arch) to GHCR. Requires a gh token
+# with write:packages: `gh auth refresh -s write:packages`.
+echo "publishing ghcr.io/steadyspacecorp/openroutines:$version"
+gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
+docker buildx create --name openroutines-builder --use >/dev/null 2>&1 || docker buildx use openroutines-builder
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg VERSION="$version" \
+  -f Dockerfile.release \
+  -t "ghcr.io/steadyspacecorp/openroutines:$version" \
+  --push .
+
 git tag -a "$version" -m "$version"
 git push origin "$version"
 if [[ -n "$notes" ]]; then

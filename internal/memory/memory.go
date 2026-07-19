@@ -40,6 +40,9 @@ func newGitCmd(dir string, args []string) *exec.Cmd {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	if sshCommand != "" {
+		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND="+sshCommand)
+	}
 	return cmd
 }
 
@@ -71,6 +74,10 @@ func EnsureWorktree(repoDir string) error {
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
 		return nil // already materialized
 	}
+	// A production image carries .git from build time, which may register a
+	// worktree whose directory was excluded from the image. Prune stale
+	// registrations or the add below fails on first boot.
+	_, _ = git(repoDir, "worktree", "prune")
 	if _, err := git(repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err == nil {
 		// Branch exists locally; just add the worktree.
 		if _, err := git(repoDir, "worktree", "add", wt, Branch); err != nil {

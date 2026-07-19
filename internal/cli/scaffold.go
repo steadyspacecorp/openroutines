@@ -34,6 +34,7 @@ func cmdScaffold(args []string) int {
 	replacer := strings.NewReplacer(
 		"{{AGENT_NAME}}", name,
 		"{{CHECKIN_ID}}", routine.NewID(),
+		"{{OPENROUTINES_VERSION}}", version.Version,
 	)
 
 	err := fs.WalkDir(openroutines.TemplateFS, templateRoot, func(path string, d fs.DirEntry, err error) error {

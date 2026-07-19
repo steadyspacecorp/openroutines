@@ -1,0 +1,32 @@
+# The openroutines base image, published to GHCR by bin/release.
+#
+# Agent Dockerfiles build FROM this: it carries the openroutines binary
+# (supervisor + CLI), pinned opencode, git, and ssh -- everything a deployed
+# agent runs on. Keep the runtime stage of template/Dockerfile in sync.
+
+ARG VERSION
+
+FROM debian:bookworm-slim
+ARG VERSION
+ARG TARGETARCH
+ARG OPENCODE_VERSION=1.18.3
+
+LABEL org.opencontainers.image.source=https://github.com/steadyspacecorp/openroutines
+LABEL org.opencontainers.image.description="openroutines agent base image"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates curl bash openssh-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 10001 agent
+
+COPY dist/openroutines_${VERSION}_linux_${TARGETARCH} /usr/local/bin/openroutines
+RUN chmod 755 /usr/local/bin/openroutines
+
+USER agent
+ENV HOME=/home/agent
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${OPENCODE_VERSION} --no-modify-path
+ENV PATH="/home/agent/.opencode/bin:${PATH}"
+ENV OPENROUTINES_IN_CONTAINER=1
+
+WORKDIR /agent
+ENTRYPOINT ["openroutines", "supervise"]

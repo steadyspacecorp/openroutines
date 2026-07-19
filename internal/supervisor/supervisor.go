@@ -71,6 +71,11 @@ func (s *Supervisor) stateDir() string {
 // Run is the supervise loop: startup, then one Tick per minute until ctx is
 // cancelled, then shutdown (final commit and push, lease release).
 func (s *Supervisor) Run(ctx context.Context) error {
+	if configured, err := memory.ConfigureDeployKey(); err != nil {
+		return fmt.Errorf("deploy key: %w", err)
+	} else if configured {
+		s.Log.Printf("deploy key configured for memory sync")
+	}
 	if err := memory.EnsureWorktree(s.Dir); err != nil {
 		return err
 	}
