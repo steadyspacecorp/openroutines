@@ -1,4 +1,4 @@
-# Open Routines
+# openroutines
 
 The framework for running simple, secure, and durable autonomous AI agents.
 
@@ -10,13 +10,13 @@ An autonomous AI agent is software that uses AI models to fulfill a job descript
 
 For example: a product management agent that gathers user research into themes, updates specifications against technical constraints, and checks that documentation hasn't drifted from what shipped. Or an IT ops agent that triages tickets, monitors licenses, and surfaces compliance issues.
 
-Open Routines is an opinionated way to generate and maintain a single autonomous agent as described above -- one job description, one runtime, and a handful of routines -- and to treat it like any other deployed software, with established lifecycle, security, and durability patterns.
+openroutines is an opinionated way to generate and maintain a single autonomous agent as described above -- one job description, one runtime, and a handful of routines -- and to treat it like any other deployed software, with established lifecycle, security, and durability patterns.
 
 ## What it does
 
-Use Open Routines to generate a runnable agent in the form of a git repository with a deployable Docker container. The repository contains agent configuration details, skills, structured memory, encrypted credentials, and a set of routines as markdown files. Under the hood, [opencode](https://opencode.ai) handles the back and forth with the AI models you choose.
+Use openroutines to generate a runnable agent in the form of a git repository with a deployable Docker container. The repository contains agent configuration details, skills, structured memory, encrypted credentials, and a set of routines as markdown files. Under the hood, [opencode](https://opencode.ai) handles the back and forth with the AI models you choose.
 
-You work on an Open Routines-generated agent (ORA) the same way you would with any software project: configure and test locally, and then deploy the project via git and Docker. If your git origin is GitHub, GitLab, or the like, you can also wire up standard CI/CD.
+You work on an openroutines-generated agent (ORA) the same way you would with any software project: configure and test locally, and then deploy the project via git and Docker. If your git origin is GitHub, GitLab, or the like, you can also wire up standard CI/CD.
 
 The heart of the agent is the markdown files that describe each routine. Using frontmatter, you explicitly scope the schedule, skills, credentials, and the model. The body of the file is the prompt.
 
@@ -122,7 +122,7 @@ openroutines check                 # validate config, frontmatter, and schedules
 
 Skills follow the open [Agent Skills](https://agentskills.io/) standard, so any skill written for Claude Code, Cursor, opencode, or the rest of the ecosystem works in your agent's `skills/` directory unchanged. A routine only gets the skills its frontmatter declares. Treat a skill like the dependency it is, though: it's instructions -- and sometimes code -- that your agent will follow unattended, so review what you vendor in.
 
-To contribute to Open Routines itself, clone this repo -- see [License and contributing](#license-and-contributing).
+To contribute to openroutines itself, clone this repo -- see [License and contributing](#license-and-contributing).
 
 ## Deploying your agent
 
@@ -154,7 +154,7 @@ For continuous deployment, wire the usual hooks: run `openroutines check` on eve
 
 ## Updating your agent
 
-Your agent pins the Open Routines version it runs against in `.openroutines-version`. The deployed container installs exactly that release, so laptop, CI, and production always agree.
+Your agent pins the openroutines version it runs against in `.openroutines-version`. The deployed container installs exactly that release, so laptop, CI, and production always agree.
 
 To update the framework:
 
@@ -168,7 +168,7 @@ Updates never touch what's yours: routines, skills, memory, and credentials belo
 
 ## License and contributing
 
-Open Routines is [MIT licensed](LICENSE). Agents you scaffold with it are yours -- the license places no claim on your routines, skills, or memory.
+openroutines is [MIT licensed](LICENSE). Agents you scaffold with it are yours -- the license places no claim on your routines, skills, or memory.
 
 Contributions are welcome, with one ask: read [DESIGN.md](DESIGN.md) first. This is an opinionated framework, and the opinions are documented -- each decision comes with its reasoning. Bug fixes and small improvements can go straight to a pull request. For anything that touches a documented decision, open an issue and argue with the reasoning, not just the behavior; if the rationale doesn't hold up, we'll change the design.
 

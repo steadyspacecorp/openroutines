@@ -1,10 +1,10 @@
 # Design
 
-The decisions behind Open Routines, and why we made them. The [README](README.md) says what the framework does; this document says why it works the way it does.
+The decisions behind openroutines, and why we made them. The [README](README.md) says what the framework does; this document says why it works the way it does.
 
 ## One agent, one job description, one runtime
 
-**Decision.** An Open Routines-generated agent (ORA) is a single agent with a single mandate, defined in `agent.yaml`. There is no fleet management, no orchestration graph, no agent-to-agent protocol.
+**Decision.** An openroutines-generated agent (ORA) is a single agent with a single mandate, defined in `agent.yaml`. There is no fleet management, no orchestration graph, no agent-to-agent protocol.
 
 **Why.** Most of the complexity -- and most of the failure modes -- in agent frameworks comes from coordination between agents. A single agent with a clear job description is easy to reason about, easy to secure, and easy to hold accountable ("what did it do?" is one log and one memory). If you need two jobs done, deploy two agents. This also makes the security model tractable: exactly one runtime means exactly one writer to memory, one credential set, one blast radius.
 
@@ -133,6 +133,12 @@ Each logical run therefore produces two commits: a small **intent commit** befor
 And local runs go through the same container: `openroutines routines run` builds (or reuses) the agent's image and executes the run inside it with the working copy mounted as a volume, via the same run-once code path the supervisor uses in production. Docker is therefore a prerequisite for `routines run`/`test` -- but not for `scaffold`, `configure`, `check`, or `routines new`, which stay native and instant (`check` uses Docker for exactly one optional probe: verifying the sandbox inside the image).
 
 **Why.** Skill-permission gating (see above) is context hygiene, not a wall -- a routine with bash can `cat` any file it can reach. Landlock turns the declare-or-it-doesn't-exist principle into kernel enforcement, the same way clean-env construction does for credentials: a third enforcement point, built from scratch per run. Running locally through the container is what makes the sandbox -- and everything else -- identical in both places: same image, same opencode version, same env construction, same kernel-level restrictions (Docker Desktop's VM kernel supports Landlock). "Test locally exactly as it runs in production" becomes mechanically true rather than approximately true, and the works-locally-breaks-in-prod bug class is structurally gone. The volume mount keeps the dev loop fast (no rebuild per routine edit) and writes memory into the local worktree, where it stays until pushed. What sandboxing still doesn't cover: network egress. Be precise about the consequence: a prompt-injected routine can exfiltrate anything it *legitimately holds* -- its declared credentials, the memory it can read, the files in its sandbox -- to any host it can reach. Scoping caps what a routine holds; nothing yet caps where it can send. That's why grants are **authority, not configuration**: declaring a skill or credential is handing the routine power to act and to leak, and should be reviewed with exactly that gravity. Per-routine egress control (Landlock's TCP scoping landed in kernel 6.7; a proxy-based allowlist is the fuller answer) is the highest-value future tier -- see open questions.
+
+## The name is lowercase: openroutines
+
+**Decision.** The project is **openroutines** -- one word, all lowercase, in prose, headings, and code alike, even at the start of a sentence. Never "Open Routines" or "OpenRoutines". The name, the repo, the domain, the Homebrew formula, and the binary are all the same token.
+
+**Why.** Lowercase is the tool-not-platform ethos rendered in typography -- opencode set the precedent, and the two names sit side by side throughout these docs, where matching styles read as kinship. One token means the thing you type is the thing it's called: no brand-to-binary mapping to remember. The spaced form also collided with the product's own domain language ("routines" are the files; "open routines" mid-sentence is ambiguous). And yes, we know about OpenRouter -- the names share a prefix and an audience. We're keeping ours anyway, deliberately: different layer entirely (they route model requests; we run agents), and the all-lowercase styling keeps the two visually distinct where they'll inevitably appear near each other.
 
 ## Appendix: one run, end to end
 
