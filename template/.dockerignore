@@ -1,0 +1,6 @@
+# Never bake these into an image: memory belongs to its branch, the master
+# key must arrive by environment variable, and generated/dev files are local.
+memory/
+master.key
+.opencode/
+.openroutines-tmp/

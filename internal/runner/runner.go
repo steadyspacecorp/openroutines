@@ -114,9 +114,6 @@ func EffectiveTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 // for the caller to import or discard. The caller must Cleanup() the staging.
 // Cancelling ctx kills the attempt's process group (shutdown semantics).
 func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Routine, meta Meta) (*ExecResult, *Staging, error) {
-	if _, err := exec.LookPath("opencode"); err != nil {
-		return nil, nil, fmt.Errorf("opencode not found in PATH -- install it: https://opencode.ai (the deployed container ships it)")
-	}
 	model, err := EffectiveModel(agent, r)
 	if err != nil {
 		return nil, nil, err
@@ -146,6 +143,9 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	if err := buildWorkspace(dir, workspace); err != nil {
 		return nil, nil, err
 	}
+	if err := copyDeclaredSkills(dir, workspace, r.FM.Skills); err != nil {
+		return nil, nil, err
+	}
 	if err := memory.Snapshot(dir, staging.MemoryDir); err != nil {
 		return nil, nil, err
 	}
@@ -159,10 +159,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 
 	// Clean environment: constructed, never inherited.
 	env := []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + os.Getenv("HOME"), // opencode auth/config lives under HOME
 		"TZ=" + agent.Timezone,
-		"TMPDIR=" + runTmp,
 		"OPENROUTINES_RUN_ID=" + meta.RunID,
 		"OPENROUTINES_ATTEMPT_ID=" + meta.AttemptID,
 	}
@@ -176,20 +173,51 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		env = append(env, strings.ToUpper(k)+"="+v)
 	}
 
-	cmd := exec.Command("opencode", "run", "--agent", "routine", "-m", model, r.Body)
-	cmd.Dir = workspace
-	cmd.Env = env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Spawn the model process: in the runtime container by default (the
+	// container boundary is the trust boundary), natively inside the
+	// production image or when a contributor opts out.
+	var cmd *exec.Cmd
+	containerName := ""
+	if nativeMode() {
+		if _, err := exec.LookPath("opencode"); err != nil {
+			return nil, nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
+		}
+		cmd = exec.Command("opencode", "run", "--agent", "routine", "-m", model, r.Body)
+		cmd.Dir = workspace
+		cmd.Env = append(env,
+			"PATH="+os.Getenv("PATH"),
+			"HOME="+os.Getenv("HOME"), // opencode auth/config lives under HOME
+			"TMPDIR="+runTmp,
+		)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	} else {
+		if _, err := exec.LookPath("docker"); err != nil {
+			return nil, nil, fmt.Errorf("docker is required to run routines -- the model process executes in a container (see README prerequisites); contributors with opencode installed locally can set OPENROUTINES_NATIVE=1")
+		}
+		if err := ensureRuntimeImage(dir); err != nil {
+			return nil, nil, err
+		}
+		containerName = "openroutines-" + meta.RunID
+		cmd = containerCmd(containerName, workspace, env, model, r.Body)
+	}
 	scrubber := scrub.NewWriter(os.Stdout, secrets)
 	cmd.Stdout = scrubber
 	cmd.Stderr = scrubber
 
+	done := make(chan error, 1)
+	kill := func() {
+		if containerName != "" {
+			stopContainer(containerName)
+			<-done
+		} else {
+			killGroup(cmd, 10*time.Second, done)
+		}
+	}
 	started := time.Now()
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
 	res := &ExecResult{Outcome: Completed}
-	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case werr := <-done:
@@ -203,10 +231,10 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		}
 	case <-time.After(timeout):
 		res.Outcome = Timeout
-		killGroup(cmd, 10*time.Second, done)
+		kill()
 	case <-ctx.Done():
 		res.Outcome = Canceled
-		killGroup(cmd, 10*time.Second, done)
+		kill()
 	}
 	res.Duration = time.Since(started).Round(time.Millisecond)
 	scrubber.Flush()
@@ -315,6 +343,7 @@ func buildWorkspace(dir, workspace string) error {
 		".git":              true,
 		memory.Dir:          true,
 		".opencode":         true,
+		"skills":            true, // only declared skills travel in -- see copyDeclaredSkills
 		creds.KeyFileName:   true,
 		".openroutines-tmp": true,
 	}
@@ -348,6 +377,44 @@ func buildWorkspace(dir, workspace string) error {
 		}
 		return os.WriteFile(dest, raw, 0o644)
 	})
+}
+
+// copyDeclaredSkills places exactly the routine's declared skills into the
+// workspace at opencode's discovery path (.opencode/skills/). Undeclared
+// skills are not merely permission-denied -- they are not present at all.
+func copyDeclaredSkills(dir, workspace string, names []string) error {
+	for _, name := range names {
+		src := filepath.Join(dir, "skills", name)
+		if _, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil {
+			return fmt.Errorf("declared skill %q not found in skills/", name)
+		}
+		dest := filepath.Join(workspace, ".opencode", "skills", name)
+		err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(src, path)
+			target := filepath.Join(dest, rel)
+			if d.IsDir() {
+				return os.MkdirAll(target, 0o755)
+			}
+			if !d.Type().IsRegular() {
+				return nil
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(target, raw, 0o755)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeAgentDefinition generates the opencode agent for this run: default-deny

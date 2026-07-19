@@ -58,6 +58,7 @@ func fixture(t *testing.T, mode string) string {
 	binDir := t.TempDir()
 	os.WriteFile(filepath.Join(binDir, "opencode"), []byte(fakeOpencode), 0o755)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("OPENROUTINES_NATIVE", "1") // tests use the fake opencode, not the container
 	return dir
 }
 
