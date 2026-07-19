@@ -1,15 +1,16 @@
-// Package runner executes one routine run: the same per-run pipeline the
-// supervisor uses, invoked directly by `openroutines routines run|test`.
+// Package runner executes one routine attempt: the per-run pipeline shared by
+// `openroutines routines run|test` and the supervisor.
 //
 // The pipeline (DESIGN.md "Appendix: one run, end to end"): assemble a
 // disposable run workspace (repo files plus a staged copy of memory, no git
 // metadata anywhere), generate the opencode agent definition granting only
 // declared skills, construct a clean environment holding only declared
 // credentials, spawn headless opencode in its own process group with a
-// timeout, then validate-and-import memory (run) or discard it (test).
+// timeout, then let the caller validate-and-import memory or discard it.
 package runner
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -34,8 +35,35 @@ const (
 	Completed Outcome = "completed"
 	Timeout   Outcome = "timeout"
 	Crashed   Outcome = "crashed"
+	Canceled  Outcome = "canceled" // shutdown interrupted the attempt
 )
 
+// Meta identifies the attempt: run id (stable across retries), attempt id,
+// and the schedule window for supervisor-dispatched runs.
+type Meta struct {
+	RunID          string
+	AttemptID      string
+	ScheduledFor   string // RFC3339, empty for manual runs
+	CoveredThrough string // RFC3339, empty for manual runs
+}
+
+// ExecResult is one attempt's outcome.
+type ExecResult struct {
+	Outcome  Outcome
+	ExitCode int
+	Duration time.Duration
+}
+
+// Staging is the attempt's staged memory, awaiting import or discard.
+type Staging struct {
+	MemoryDir string
+	workspace string
+}
+
+// Cleanup discards the whole run workspace, staging included.
+func (s *Staging) Cleanup() { os.RemoveAll(s.workspace) }
+
+// Result is a completed manual run (routines run|test).
 type Result struct {
 	RunID    string
 	Outcome  Outcome
@@ -57,29 +85,20 @@ func newRunID() string {
 	return "run_" + string(buf)
 }
 
-// Run executes routine `name` from the agent repo at dir. keep=true imports
-// memory writes and records the run (routines run); keep=false discards
-// everything (routines test).
-func Run(dir, name string, keep bool) (*Result, error) {
-	agent, err := config.Load(dir)
-	if err != nil {
-		return nil, fmt.Errorf("not an agent repository: %w", err)
-	}
-	r, err := routine.Parse(filepath.Join(dir, "routines", name+".md"))
-	if err != nil {
-		return nil, err
-	}
-	if _, err := exec.LookPath("opencode"); err != nil {
-		return nil, fmt.Errorf("opencode not found in PATH -- install it: https://opencode.ai (the deployed container ships it)")
-	}
-
+// EffectiveModel resolves frontmatter over agent defaults.
+func EffectiveModel(agent *config.Agent, r *routine.Routine) (string, error) {
 	model := r.FM.Model
 	if model == "" {
 		model = agent.Defaults.Model
 	}
 	if model == "" || strings.Contains(model, "{{") {
-		return nil, fmt.Errorf("no model: set model in frontmatter or defaults.model in agent.yaml (openroutines configure)")
+		return "", fmt.Errorf("no model: set model in frontmatter or defaults.model in agent.yaml (openroutines configure)")
 	}
+	return model, nil
+}
+
+// EffectiveTimeout resolves frontmatter over agent defaults over 5m.
+func EffectiveTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 	timeout := 5 * time.Minute
 	for _, t := range []string{agent.Defaults.Timeout, r.FM.Timeout} {
 		if t != "" {
@@ -88,35 +107,54 @@ func Run(dir, name string, keep bool) (*Result, error) {
 			}
 		}
 	}
+	return timeout
+}
+
+// Execute performs one attempt and returns its result plus the staged memory
+// for the caller to import or discard. The caller must Cleanup() the staging.
+// Cancelling ctx kills the attempt's process group (shutdown semantics).
+func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Routine, meta Meta) (*ExecResult, *Staging, error) {
+	if _, err := exec.LookPath("opencode"); err != nil {
+		return nil, nil, fmt.Errorf("opencode not found in PATH -- install it: https://opencode.ai (the deployed container ships it)")
+	}
+	model, err := EffectiveModel(agent, r)
+	if err != nil {
+		return nil, nil, err
+	}
+	timeout := EffectiveTimeout(agent, r)
 
 	secrets, err := resolveCredentials(dir, r, model)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
 	if err := memory.EnsureWorktree(dir); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Assemble the disposable run workspace.
 	workspace, err := os.MkdirTemp("", "openroutines-run-*")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer os.RemoveAll(workspace)
+	staging := &Staging{MemoryDir: filepath.Join(workspace, memory.Dir), workspace: workspace}
+	ok := false
+	defer func() {
+		if !ok {
+			staging.Cleanup()
+		}
+	}()
+
 	if err := buildWorkspace(dir, workspace); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := memory.Snapshot(dir, filepath.Join(workspace, memory.Dir)); err != nil {
-		return nil, err
+	if err := memory.Snapshot(dir, staging.MemoryDir); err != nil {
+		return nil, nil, err
 	}
-	runID := newRunID()
-	if err := writeAgentDefinition(workspace, agent, r, runID); err != nil {
-		return nil, err
+	if err := writeAgentDefinition(workspace, agent, r, meta.RunID); err != nil {
+		return nil, nil, err
 	}
 	runTmp := filepath.Join(workspace, ".runtmp")
 	if err := os.MkdirAll(runTmp, 0o755); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Clean environment: constructed, never inherited.
@@ -125,14 +163,19 @@ func Run(dir, name string, keep bool) (*Result, error) {
 		"HOME=" + os.Getenv("HOME"), // opencode auth/config lives under HOME
 		"TZ=" + agent.Timezone,
 		"TMPDIR=" + runTmp,
-		"OPENROUTINES_RUN_ID=" + runID,
-		"OPENROUTINES_ATTEMPT_ID=attempt_01",
+		"OPENROUTINES_RUN_ID=" + meta.RunID,
+		"OPENROUTINES_ATTEMPT_ID=" + meta.AttemptID,
+	}
+	if meta.ScheduledFor != "" {
+		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor)
+	}
+	if meta.CoveredThrough != "" {
+		env = append(env, "OPENROUTINES_COVERED_THROUGH="+meta.CoveredThrough)
 	}
 	for k, v := range secrets {
 		env = append(env, strings.ToUpper(k)+"="+v)
 	}
 
-	// Spawn headless opencode in its own process group.
 	cmd := exec.Command("opencode", "run", "--agent", "routine", "-m", model, r.Body)
 	cmd.Dir = workspace
 	cmd.Env = env
@@ -143,16 +186,16 @@ func Run(dir, name string, keep bool) (*Result, error) {
 
 	started := time.Now()
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	res := &Result{RunID: runID, Outcome: Completed}
+	res := &ExecResult{Outcome: Completed}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case werr := <-done:
 		if werr != nil {
 			res.Outcome = Crashed
-			if ee, ok := werr.(*exec.ExitError); ok {
+			if ee, isExit := werr.(*exec.ExitError); isExit {
 				res.ExitCode = ee.ExitCode()
 			} else {
 				res.ExitCode = -1
@@ -161,35 +204,49 @@ func Run(dir, name string, keep bool) (*Result, error) {
 	case <-time.After(timeout):
 		res.Outcome = Timeout
 		killGroup(cmd, 10*time.Second, done)
+	case <-ctx.Done():
+		res.Outcome = Canceled
+		killGroup(cmd, 10*time.Second, done)
 	}
 	res.Duration = time.Since(started).Round(time.Millisecond)
 	scrubber.Flush()
 
+	ok = true
+	return res, staging, nil
+}
+
+// Run executes routine `name` manually. keep=true imports memory writes and
+// records the run (routines run); keep=false discards everything (test).
+func Run(dir, name string, keep bool) (*Result, error) {
+	agent, err := config.Load(dir)
+	if err != nil {
+		return nil, fmt.Errorf("not an agent repository: %w", err)
+	}
+	r, err := routine.Parse(filepath.Join(dir, "routines", name+".md"))
+	if err != nil {
+		return nil, err
+	}
+	runID := newRunID()
+	exec, staging, err := Execute(context.Background(), dir, agent, r, Meta{RunID: runID, AttemptID: "attempt_01"})
+	if err != nil {
+		return nil, err
+	}
+	defer staging.Cleanup()
+
+	res := &Result{RunID: runID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration}
 	if !keep {
 		return res, nil // test: discard staging, record nothing
 	}
 
-	// run: import on success; always record; blocker on failure.
 	if res.Outcome == Completed {
-		if err := memory.Import(dir, filepath.Join(workspace, memory.Dir)); err != nil {
+		if err := memory.Import(dir, staging.MemoryDir); err != nil {
 			res.Outcome = Crashed
 			_ = memory.AppendBlocker(dir, fmt.Sprintf("[%s] routine %s (%s): memory rejected: %v", timestamp(), r.Name, runID, err))
 		}
 	} else {
 		_ = memory.AppendBlocker(dir, fmt.Sprintf("[%s] routine %s (%s) %s after %s (exit %d)", timestamp(), r.Name, runID, res.Outcome, res.Duration, res.ExitCode))
 	}
-	record, _ := json.Marshal(map[string]any{
-		"run_id":      runID,
-		"routine":     r.Name,
-		"routine_id":  r.FM.ID,
-		"attempt":     1,
-		"outcome":     res.Outcome,
-		"started_at":  started.UTC().Format(time.RFC3339),
-		"duration_ms": res.Duration.Milliseconds(),
-		"exit_code":   res.ExitCode,
-		"manual":      true,
-	})
-	if err := memory.AppendRunRecord(dir, string(record)); err != nil {
+	if err := memory.AppendRunRecord(dir, RecordJSON(r, Meta{RunID: runID, AttemptID: "attempt_01"}, 1, exec, true)); err != nil {
 		return res, err
 	}
 	commit, err := memory.Commit(dir, fmt.Sprintf("Run %s (%s): %s", r.Name, runID, res.Outcome))
@@ -198,6 +255,24 @@ func Run(dir, name string, keep bool) (*Result, error) {
 	}
 	res.Commit = commit
 	return res, nil
+}
+
+// RecordJSON formats one run record line for runs.jsonl.
+func RecordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, manual bool) string {
+	record, _ := json.Marshal(map[string]any{
+		"run_id":          meta.RunID,
+		"routine":         r.Name,
+		"routine_id":      r.FM.ID,
+		"attempt":         attempt,
+		"outcome":         res.Outcome,
+		"recorded_at":     timestamp(),
+		"duration_ms":     res.Duration.Milliseconds(),
+		"exit_code":       res.ExitCode,
+		"scheduled_for":   meta.ScheduledFor,
+		"covered_through": meta.CoveredThrough,
+		"manual":          manual,
+	})
+	return string(record)
 }
 
 // resolveCredentials builds the routine's secret set: declared credentials
@@ -220,13 +295,13 @@ func resolveCredentials(dir string, r *routine.Routine, model string) (map[strin
 	}
 	out := map[string]string{}
 	for _, name := range r.FM.Credentials {
-		v, ok := store[name]
-		if !ok {
+		v, present := store[name]
+		if !present {
 			return nil, fmt.Errorf("routine declares credential %q, not present in %s", name, creds.FileName)
 		}
 		out[name] = v
 	}
-	if v, ok := store[providerKey]; ok {
+	if v, present := store[providerKey]; present {
 		out[providerKey] = v
 	}
 	return out, nil

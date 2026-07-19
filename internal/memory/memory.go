@@ -27,6 +27,22 @@ var primitives = map[string]string{
 	"blockers.md":   "# Blockers\n\nImpediments: failures, expired credentials, things needing help.\n",
 }
 
+// supervisorOwned paths never travel into staging and are never touched by
+// import: routines cannot read or rewrite scheduling state or run records.
+var supervisorOwned = map[string]bool{
+	"state":      true,
+	"runs.jsonl": true,
+}
+
+// newGitCmd builds a git invocation with hermetic environment: no system or
+// global config leaks in.
+func newGitCmd(dir string, args []string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	return cmd
+}
+
 // git runs a git command against the repo with hermetic configuration:
 // no system/global config, no hooks, no file-protocol tricks.
 func git(dir string, args ...string) (string, error) {
@@ -36,9 +52,7 @@ func git(dir string, args ...string) (string, error) {
 		"-c", "user.name=openroutines",
 		"-c", "user.email=agent@openroutines.dev",
 	}
-	cmd := exec.Command("git", append(base, args...)...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	cmd := newGitCmd(dir, append(base, args...))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
@@ -104,7 +118,7 @@ func Snapshot(repoDir, stagingDir string) error {
 		if err != nil || rel == "." {
 			return err
 		}
-		if d.Name() == ".git" {
+		if d.Name() == ".git" || supervisorOwned[topSegment(rel)] {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -119,6 +133,10 @@ func Snapshot(repoDir, stagingDir string) error {
 		}
 		return copyFile(path, dest)
 	})
+}
+
+func topSegment(rel string) string {
+	return strings.Split(rel, string(filepath.Separator))[0]
 }
 
 // Validate rejects a staged memory tree that contains anything but regular
@@ -136,6 +154,9 @@ func Validate(stagingDir string) error {
 		name := d.Name()
 		if name == ".git" || name == ".gitattributes" || name == ".gitmodules" || name == ".gitignore" {
 			return fmt.Errorf("staged memory contains git control file %q -- rejected", rel)
+		}
+		if supervisorOwned[topSegment(rel)] {
+			return fmt.Errorf("staged memory touches supervisor-owned path %q -- rejected", rel)
 		}
 		if d.IsDir() {
 			if strings.Count(rel, string(filepath.Separator)) > 8 {
@@ -191,7 +212,7 @@ func Import(repoDir, stagingDir string) error {
 		if rel == "." {
 			return nil
 		}
-		if d.Name() == ".git" {
+		if d.Name() == ".git" || supervisorOwned[topSegment(rel)] {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
