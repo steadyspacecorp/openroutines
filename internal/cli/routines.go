@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/runner"
 )
 
 const newRoutineTemplate = `---
@@ -31,11 +32,40 @@ func cmdRoutines(args []string) int {
 		return routinesNew(rest)
 	case "list":
 		return routinesList()
-	case "run", "test", "edit", "activate", "deactivate", "remove":
+	case "run":
+		return routinesRun(rest, true)
+	case "test":
+		return routinesRun(rest, false)
+	case "edit", "activate", "deactivate", "remove":
 		return notYet("routines " + sub)
 	default:
 		return fail(fmt.Errorf("unknown routines command %q", sub))
 	}
+}
+
+func routinesRun(args []string, keep bool) int {
+	if len(args) != 1 {
+		verb := "run"
+		if !keep {
+			verb = "test"
+		}
+		return fail(fmt.Errorf("usage: openroutines routines %s <name>", verb))
+	}
+	name := strings.TrimSuffix(args[0], ".md")
+	res, err := runner.Run(".", name, keep)
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Printf("\n%s: %s in %s (run %s)\n", name, res.Outcome, res.Duration, res.RunID)
+	if !keep {
+		fmt.Println("test mode: memory writes discarded, nothing recorded")
+	} else if res.Commit != "" {
+		fmt.Printf("memory updated: commit %s on the %s branch\n", res.Commit, "memory")
+	}
+	if res.Outcome != runner.Completed {
+		return 1
+	}
+	return 0
 }
 
 func routinesNew(args []string) int {
