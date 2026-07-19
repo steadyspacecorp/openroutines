@@ -22,24 +22,47 @@ looks like. Routines only get this skill if their frontmatter declares it.
 
 func cmdSkills(args []string) int {
 	if len(args) == 0 {
-		return fail(fmt.Errorf("usage: openroutines skills <new|list|remove> [name]"))
+		fmt.Print(skillsUsage)
+		return 2
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "new":
 		return skillsNew(rest)
+	case "add":
+		return skillsAdd(rest)
 	case "list":
 		return skillsList()
 	case "remove":
 		return skillsRemove(rest)
 	default:
-		return fail(fmt.Errorf("unknown skills command %q", sub))
+		fmt.Fprintf(os.Stderr, "openroutines: unknown skills command %q\n\n", sub)
+		fmt.Print(skillsUsage)
+		return 2
 	}
 }
 
+const skillsUsage = `Manage this agent's skills (Agent Skills format -- agentskills.io)
+
+Usage:
+  openroutines skills new <name>           scaffold a blank skill
+  openroutines skills new <git-url | owner/repo> [--path <sub/dir>]
+                                           vendor a skill from a git repository
+  openroutines skills list                 skills and which routines use them
+  openroutines skills remove <name>        refuses while any routine declares it
+`
+
 func skillsNew(args []string) int {
+	if len(args) == 0 {
+		return fail(fmt.Errorf("usage: openroutines skills new <name | git-url | owner/repo> [--path <sub/dir>]"))
+	}
+	// A skill name can't contain / : or @ -- so an argument that does is a
+	// source to vendor from, not a name to scaffold.
+	if strings.ContainsAny(args[0], "/:@") {
+		return skillsAdd(args)
+	}
 	if len(args) != 1 {
-		return fail(fmt.Errorf("usage: openroutines skills new <name>"))
+		return fail(fmt.Errorf("usage: openroutines skills new <name | git-url | owner/repo> [--path <sub/dir>]"))
 	}
 	name := args[0]
 	if !skill.NamePattern.MatchString(name) {

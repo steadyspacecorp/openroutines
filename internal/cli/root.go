@@ -38,13 +38,13 @@ func Run(args []string) int {
 		return cmdConfigure(rest)
 	case "check":
 		return cmdCheck(rest)
-	case "routines":
+	case "routines", "routine":
 		return cmdRoutines(rest)
 	case "supervise":
 		return cmdSupervise(rest)
 	case "status":
 		return cmdStatus(rest)
-	case "skills":
+	case "skills", "skill":
 		return cmdSkills(rest)
 	case "update":
 		return notYet(cmd)

@@ -25,7 +25,8 @@ record when done. Set active: true when it's ready to run on schedule.
 
 func cmdRoutines(args []string) int {
 	if len(args) == 0 {
-		return fail(fmt.Errorf("usage: openroutines routines <new|list|run|test|edit|activate|deactivate|remove> [name]"))
+		fmt.Print(routinesUsage)
+		return 2
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -46,9 +47,24 @@ func cmdRoutines(args []string) int {
 	case "remove":
 		return routinesRemove(rest)
 	default:
-		return fail(fmt.Errorf("unknown routines command %q", sub))
+		fmt.Fprintf(os.Stderr, "openroutines: unknown routines command %q\n\n", sub)
+		fmt.Print(routinesUsage)
+		return 2
 	}
 }
+
+const routinesUsage = `Manage this agent's routines (markdown files in routines/)
+
+Usage:
+  openroutines routines new <name>         create a routine (inactive, with a fresh id)
+  openroutines routines list               names, ids, schedules, grants
+  openroutines routines run <name>         run once now; memory writes are kept
+  openroutines routines test <name>        run once now; memory writes are discarded
+  openroutines routines edit <name>        open in $EDITOR, validate on close
+  openroutines routines activate <name>    set active: true
+  openroutines routines deactivate <name>  set active: false
+  openroutines routines remove <name>      delete the routine and its scheduling state
+`
 
 func routinesRun(args []string, keep bool) int {
 	if len(args) != 1 {
