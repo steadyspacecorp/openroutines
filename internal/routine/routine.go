@@ -90,6 +90,38 @@ func Parse(path string) (*Routine, error) {
 	return &Routine{Name: name, Path: path, FM: fm, Body: body}, nil
 }
 
+// SetActive rewrites the `active:` frontmatter field in place, preserving the
+// rest of the file byte for byte. Both directions are explicit: activation
+// and deactivation should each be a visible diff.
+func SetActive(path string, active bool) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	text := string(raw)
+	if !strings.HasPrefix(text, "---\n") {
+		return fmt.Errorf("%s: missing frontmatter", filepath.Base(path))
+	}
+	end := strings.Index(text[4:], "\n---")
+	if end < 0 {
+		return fmt.Errorf("%s: unterminated frontmatter", filepath.Base(path))
+	}
+	fmEnd := 4 + end // offset of the newline before the closing ---
+	head, tail := text[:fmEnd], text[fmEnd:]
+
+	value := "active: false"
+	if active {
+		value = "active: true"
+	}
+	activeLine := regexp.MustCompile(`(?m)^active:[^\n]*$`)
+	if activeLine.MatchString(head) {
+		head = activeLine.ReplaceAllString(head, value)
+	} else {
+		head += "\n" + value
+	}
+	return os.WriteFile(path, []byte(head+tail), 0o644)
+}
+
 // LoadDir parses every *.md routine in dir, sorted by name. A missing dir is
 // an empty agent, not an error.
 func LoadDir(dir string) ([]*Routine, []error) {

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -36,8 +37,14 @@ func cmdRoutines(args []string) int {
 		return routinesRun(rest, true)
 	case "test":
 		return routinesRun(rest, false)
-	case "edit", "activate", "deactivate", "remove":
-		return notYet("routines " + sub)
+	case "edit":
+		return routinesEdit(rest)
+	case "activate":
+		return routinesSetActive(rest, true)
+	case "deactivate":
+		return routinesSetActive(rest, false)
+	case "remove":
+		return routinesRemove(rest)
 	default:
 		return fail(fmt.Errorf("unknown routines command %q", sub))
 	}
@@ -85,6 +92,81 @@ func routinesNew(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("Created %s (inactive -- edit the schedule and prompt, then set active: true)\n", path)
+	return 0
+}
+
+func routinePath(arg string) string {
+	return filepath.Join("routines", strings.TrimSuffix(arg, ".md")+".md")
+}
+
+func routinesEdit(args []string) int {
+	if len(args) != 1 {
+		return fail(fmt.Errorf("usage: openroutines routines edit <name>"))
+	}
+	path := routinePath(args[0])
+	if _, err := os.Stat(path); err != nil {
+		return fail(fmt.Errorf("no routine %q", args[0]))
+	}
+	editor := os.Getenv("VISUAL")
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		return fail(fmt.Errorf("set $EDITOR (or $VISUAL) to use routines edit -- or just open %s", path))
+	}
+	cmd := exec.Command(editor, path)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fail(err)
+	}
+	// A routine you just edited should still be valid.
+	if _, err := routine.Parse(path); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func routinesSetActive(args []string, active bool) int {
+	verb := "activate"
+	if !active {
+		verb = "deactivate"
+	}
+	if len(args) != 1 {
+		return fail(fmt.Errorf("usage: openroutines routines %s <name>", verb))
+	}
+	path := routinePath(args[0])
+	if _, err := os.Stat(path); err != nil {
+		return fail(fmt.Errorf("no routine %q", args[0]))
+	}
+	if err := routine.SetActive(path, active); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("%sd %s (commit the diff to make it stick in production)\n", verb, path)
+	return 0
+}
+
+func routinesRemove(args []string) int {
+	if len(args) != 1 {
+		return fail(fmt.Errorf("usage: openroutines routines remove <name>"))
+	}
+	path := routinePath(args[0])
+	r, err := routine.Parse(path)
+	if err != nil {
+		return fail(fmt.Errorf("no routine %q: %v", args[0], err))
+	}
+	if err := os.Remove(path); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("Removed %s\n", path)
+	// Best effort: clean up the routine's scheduling state so the memory
+	// branch doesn't accumulate orphans. Its ledger stays -- that's memory.
+	if r.FM.ID != "" {
+		statePath := filepath.Join("memory", "state", r.FM.ID+".json")
+		if err := os.Remove(statePath); err == nil {
+			fmt.Printf("Removed scheduling state %s (commit inside memory/ to record it)\n", statePath)
+		}
+	}
 	return 0
 }
 

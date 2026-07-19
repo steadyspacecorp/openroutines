@@ -268,6 +268,34 @@ func AppendRunRecord(repoDir, record string) error {
 	return err
 }
 
+// WorktreeStatus reports the memory worktree's state for `openroutines
+// status` -- root `git status` never shows memory churn, so this must.
+type WorktreeStatus struct {
+	Materialized bool
+	Uncommitted  int    // files with uncommitted changes (human curation in progress)
+	LastCommit   string // subject of the latest memory commit
+	Unpushed     int    // commits origin hasn't seen yet
+}
+
+// Status inspects the memory worktree; zero value when not yet materialized.
+func Status(repoDir string) WorktreeStatus {
+	wt := WorktreePath(repoDir)
+	if _, err := os.Stat(filepath.Join(wt, ".git")); err != nil {
+		return WorktreeStatus{}
+	}
+	st := WorktreeStatus{Materialized: true}
+	if out, err := git(wt, "status", "--porcelain"); err == nil && out != "" {
+		st.Uncommitted = len(strings.Split(out, "\n"))
+	}
+	if out, err := git(wt, "log", "-1", "--format=%h %s"); err == nil {
+		st.LastCommit = out
+	}
+	if out, err := git(wt, "rev-list", "--count", "refs/remotes/origin/"+Branch+"..HEAD"); err == nil {
+		fmt.Sscanf(out, "%d", &st.Unpushed)
+	}
+	return st
+}
+
 func copyFile(src, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err

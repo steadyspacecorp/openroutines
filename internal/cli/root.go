@@ -42,7 +42,11 @@ func Run(args []string) int {
 		return cmdRoutines(rest)
 	case "supervise":
 		return cmdSupervise(rest)
-	case "status", "skills", "update":
+	case "status":
+		return cmdStatus(rest)
+	case "skills":
+		return cmdSkills(rest)
+	case "update":
 		return notYet(cmd)
 	case "version", "--version", "-v":
 		fmt.Println(version.Version)

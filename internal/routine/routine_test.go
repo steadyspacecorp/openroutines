@@ -3,6 +3,7 @@ package routine
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +43,29 @@ func TestNewIDMatchesPattern(t *testing.T) {
 		if id := NewID(); !IDPattern.MatchString(id) {
 			t.Fatalf("generated id %q does not match pattern", id)
 		}
+	}
+}
+
+func TestSetActiveTogglesInPlace(t *testing.T) {
+	p := writeTemp(t, "---\nid: r_abc12345\nschedule: \"0 9 * * 1\"\n# keep me\n---\nBody stays.\n")
+	if err := SetActive(p, false); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Parse(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FM.IsActive() {
+		t.Fatal("expected inactive")
+	}
+	raw, _ := os.ReadFile(p)
+	if !strings.Contains(string(raw), "# keep me") || !strings.Contains(string(raw), "Body stays.") {
+		t.Fatalf("file surgery damaged content: %q", raw)
+	}
+	if err := SetActive(p, true); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ = Parse(p); !r.FM.IsActive() {
+		t.Fatal("expected active again")
 	}
 }
