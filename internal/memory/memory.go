@@ -21,10 +21,22 @@ const (
 )
 
 // primitives are the framework-blessed shared memory files, seeded on init.
+// Each opens with a fenced example of its format: the file teaches its own
+// shape at the point of use, and the retention trimmer preserves everything
+// that isn't a record. Agents may reshape the headers in their own memory
+// branch -- seeding is create-if-missing and never overwrites.
 var primitives = map[string]string{
-	"worklog.md":    "# Worklog\n\nRaw facts of what runs accomplished. Append-only; full facts, no polish.\n",
-	"intentions.md": "# Intentions\n\nOpen items the agent means to act on, and items waiting on a human.\n",
-	"blockers.md":   "# Blockers\n\nImpediments: failures, expired credentials, things needing help.\n",
+	"worklog.md": "# Worklog\n\nRaw facts of what runs accomplished. Append-only; full facts, no polish.\n\n" +
+		"Format (one line per entry):\n\n```markdown\n" +
+		"- YYYY-MM-DD <routine>: <what happened, why it matters, links, people>\n" +
+		"- YYYY-MM-DD <routine> NO-OP: <what was checked and found clean>\n```\n",
+	"intentions.md": "# Intentions\n\nOpen items the agent means to act on, and items waiting on a human.\n\n" +
+		"Format:\n\n```markdown\n" +
+		"- [ ] <description> (source: <who or where it came from>, added YYYY-MM-DD)\n" +
+		"- [x] <description> (source: ..., added YYYY-MM-DD, done YYYY-MM-DD)\n```\n",
+	"blockers.md": "# Blockers\n\nImpediments: failures, expired credentials, things needing help.\n\n" +
+		"Format (one ask per entry):\n\n```markdown\n" +
+		"- YYYY-MM-DD <routine>: <what is stuck or who must act, and why>\n```\n",
 }
 
 // supervisorOwned paths never travel into staging and are never touched by
