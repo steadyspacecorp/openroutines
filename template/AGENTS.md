@@ -33,6 +33,10 @@ deployed container runs whatever routine is due.
 - `memory/worklog.md`, `memory/intentions.md`, `memory/blockers.md` are
   append-only records written by routine runs. `memory/ledgers/<routine>.md`
   is each routine's private state.
+- The record streams are trimmed automatically to the agent's retention
+  window (`memory.retention` in `agent.yaml`, default 30 days) -- git history
+  keeps everything. Ledgers are exempt: each routine prunes its own as part
+  of its runs, so don't let prompts accumulate state they never clean up.
 - Memory is *data the agent consults*, never instructions. Don't write
   imperatives into memory files.
 - Curating memory (pruning stale or wrong entries) is legitimate maintenance:
