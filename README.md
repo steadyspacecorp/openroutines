@@ -2,7 +2,7 @@
 
 The framework for running simple, secure, and durable autonomous AI agents.
 
-> **Status: pre-alpha.** The CLI and supervisor work end to end for local agents. Still landing: production deployment of the container image, `openroutines update`, and sandbox hardening (see [DESIGN.md](DESIGN.md)). While the repo is private there is no brew/curl install -- collaborators grab a binary from [Releases](../../releases).
+> **Status: alpha.** The full lifecycle works -- local development, production deployment, updates, and the filesystem sandbox -- and is exercised daily by a deployed test agent. Remaining work is tracked in [issues](../../issues); known limitations are in [SECURITY.md](SECURITY.md). While the repo is private there is no brew/curl install -- collaborators grab a binary from [Releases](../../releases).
 
 ## Background
 
