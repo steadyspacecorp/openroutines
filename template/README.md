@@ -16,5 +16,10 @@ openroutines routines test <name>  # try it locally (memory writes discarded)
 openroutines check                 # validate everything; run it in CI
 ```
 
+One GitHub quirk to ignore: the repo page will regularly offer
+"Compare & pull request" for the `memory` branch, because the agent pushes to
+it after every run. Memory is never merged into `main` -- there is no PR to
+make. (GitHub has no setting to hide the banner.)
+
 Deploying, updating, and everything else:
 [openroutines documentation](https://openroutines.dev).
