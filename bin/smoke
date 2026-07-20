@@ -1,32 +1,38 @@
 #!/usr/bin/env bash
-# Smoke test: build the CLI, scaffold an agent, configure it, and verify that
-# `check` passes on a good agent and fails on a broken one. Run from anywhere;
-# used by CI and useful locally after any change.
+# Smoke test: build the CLI, scaffold an agent, and exercise the core flows
+# end to end. Run from anywhere; used by CI and useful locally after any
+# change. One line per step; details only on failure.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+step() { printf 'ok  %s\n' "$1"; }
+die() {
+  printf 'FAIL %s\n' "$1" >&2
+  [[ -s "$work/out" ]] && sed 's/^/  | /' "$work/out" >&2
+  exit 1
+}
+run() { "$bin" "$@" >"$work/out" 2>&1; }
+
 bin="$work/openroutines"
 (cd "$repo" && go build -o "$bin" ./cmd/openroutines)
+printf 'smoke: testing %s\n' "$("$bin" version)"
 
-"$bin" version
-
-# Scaffold + configure a fresh agent.
-"$bin" scaffold "$work/agent" >/dev/null
+run scaffold "$work/agent" || die "scaffold"
 cd "$work/agent"
 printf 'smoke-agent\nSmoke-tests the openroutines CLI\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
-  | "$bin" configure >/dev/null
+  | "$bin" configure >"$work/out" 2>&1 || die "configure"
+step "scaffold + configure"
 
-# A freshly configured agent must pass check (warnings allowed; no origin yet).
-"$bin" check
+run check || die "check on a fresh agent (should pass with warnings)"
+step "check passes on a fresh agent"
 
-# routines new mints a valid, inactive routine; check must still pass.
-"$bin" routines new smoke-routine >/dev/null
-"$bin" check >/dev/null
+run routines new smoke-routine || die "routines new"
+run check || die "check after routines new"
+step "routines new mints a valid inactive routine"
 
-# A broken routine must make check fail.
 cat > routines/broken.md <<'EOF'
 ---
 id: not-a-valid-id
@@ -36,18 +42,19 @@ skills: [nonexistent]
 ---
 Body
 EOF
-if "$bin" check >/dev/null 2>&1; then
-  echo "FAIL: check passed on a broken routine" >&2
-  exit 1
+if run check; then
+  die "check passed on a broken routine"
 fi
 rm routines/broken.md
+step "check fails on a broken routine"
 
 # update: brings an agent to the running binary's version, rewriting
 # framework-owned files (non-interactive stdin applies automatically).
 echo "v0.0.0-old" > .openroutines-version
 sed -i.bak 's/openroutines:v[^ ]* AS agent/openroutines:v0.0.0-old AS agent/' Dockerfile && rm -f Dockerfile.bak
-"$bin" update </dev/null >/dev/null
-grep -q "$("$bin" version)" .openroutines-version || { echo "FAIL: update did not bump the pin" >&2; exit 1; }
-grep -q "openroutines:$("$bin" version) AS agent" Dockerfile || { echo "FAIL: update did not rewrite the FROM tag" >&2; exit 1; }
+"$bin" update </dev/null >"$work/out" 2>&1 || die "update"
+grep -q "$("$bin" version)" .openroutines-version || die "update did not bump the pin"
+grep -q "openroutines:$("$bin" version) AS agent" Dockerfile || die "update did not rewrite the FROM tag"
+step "update bumps the pin and rewrites the base-image tag"
 
 echo "smoke: OK"
