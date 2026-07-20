@@ -30,10 +30,15 @@ var primitives = map[string]string{
 		"Format (one line per entry):\n\n```markdown\n" +
 		"- YYYY-MM-DD <routine>: <what happened, why it matters, links, people>\n" +
 		"- YYYY-MM-DD <routine> NO-OP: <what was checked and found clean>\n```\n",
-	"intentions.md": "# Intentions\n\nOpen items the agent means to act on, and items waiting on a human.\n\n" +
+	"intentions.md": "# Intentions\n\nOpen items the agent means to act on, and items waiting on a human.\n" +
+		"A waiting item is a handoff: it returns to the open list only when a\n" +
+		"human's answer turns it back into agent work.\n\n" +
 		"Format:\n\n```markdown\n" +
+		"## Open\n\n" +
 		"- [ ] <description> (source: <who or where it came from>, added YYYY-MM-DD)\n" +
-		"- [x] <description> (source: ..., added YYYY-MM-DD, done YYYY-MM-DD)\n```\n",
+		"- [x] <description> (source: ..., added YYYY-MM-DD, done YYYY-MM-DD)\n\n" +
+		"## Waiting on humans\n\n" +
+		"- <ask> (source: <who or where it came from>, raised YYYY-MM-DD)\n```\n",
 	"blockers.md": "# Blockers\n\nImpediments: failures, expired credentials, things needing help.\n\n" +
 		"Format (one ask per entry):\n\n```markdown\n" +
 		"- YYYY-MM-DD <routine>: <what is stuck or who must act, and why>\n```\n",
