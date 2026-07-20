@@ -51,7 +51,7 @@ func newGitCmd(dir string, args []string) *exec.Cmd {
 func git(dir string, args ...string) (string, error) {
 	base := []string{
 		"-c", "core.hooksPath=/dev/null",
-		"-c", "protocol.file.allow=never",
+		"-c", "protocol.file.allow=user",
 		"-c", "user.name=openroutines",
 		"-c", "user.email=agent@openroutines.dev",
 	}
@@ -79,8 +79,22 @@ func EnsureWorktree(repoDir string) error {
 	// registrations or the add below fails on first boot.
 	_, _ = git(repoDir, "worktree", "prune")
 	if _, err := git(repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
-		// First use: create the orphan branch from an empty tree via plumbing.
-		// (worktree add --orphan needs git >= 2.42; this works everywhere.)
+		// No local branch. A deployed container's .git never has one, but the
+		// agent's real memory usually exists on origin: adopt it rather than
+		// minting a new root (found live: every container generation was
+		// splicing a stray root commit into the lineage).
+		if HasOrigin(repoDir) {
+			if _, lerr := git(repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); lerr == nil {
+				if _, ferr := git(repoDir, "fetch", "--quiet", "origin", "+refs/heads/"+Branch+":refs/heads/"+Branch); ferr != nil {
+					return fmt.Errorf("adopting memory branch from origin: %w", ferr)
+				}
+			}
+		}
+	}
+	if _, err := git(repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
+		// Truly first use: create the orphan branch from an empty tree via
+		// plumbing. (worktree add --orphan needs git >= 2.42; this works
+		// everywhere.)
 		tree, err := gitStdin(repoDir, "", "mktree")
 		if err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)

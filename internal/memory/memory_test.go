@@ -2,7 +2,9 @@ package memory
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,5 +46,59 @@ func TestValidateRejectsOversizedFile(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "big.md"), big, 0o644)
 	if err := Validate(dir); err == nil {
 		t.Fatal("expected rejection for oversized file")
+	}
+}
+
+// A second clone (a new container generation) must adopt the existing memory
+// branch from origin instead of minting a fresh root.
+func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
+	base := t.TempDir()
+	run := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	bare := filepath.Join(base, "origin.git")
+	run(base, "git", "init", "-q", "--bare", bare)
+
+	// Generation 1: create memory, write a fact, push.
+	a := filepath.Join(base, "a")
+	run(base, "git", "clone", "-q", bare, a)
+	os.WriteFile(filepath.Join(a, "x.txt"), []byte("x"), 0o644)
+	run(a, "git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
+	run(a, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "main")
+	run(a, "git", "push", "-q", "origin", "main")
+	if err := EnsureWorktree(a); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(a, "memory", "worklog.md"), []byte("generation one fact\n"), 0o644)
+	if _, err := Commit(a, "Fact from generation one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Push(a); err != nil {
+		t.Fatal(err)
+	}
+
+	// Generation 2: fresh clone (no local memory branch), must adopt.
+	b := filepath.Join(base, "b")
+	run(base, "git", "clone", "-q", bare, b)
+	if err := EnsureWorktree(b); err != nil {
+		t.Fatal(err)
+	}
+	log := run(filepath.Join(b, "memory"), "git", "log", "--oneline")
+	if !strings.Contains(log, "Fact from generation one") {
+		t.Fatalf("generation two did not adopt origin history: %q", log)
+	}
+	if got := strings.Count(log, "Memory branch root"); got != 1 {
+		t.Fatalf("expected exactly 1 root commit, got %d: %q", got, log)
+	}
+	worklog, _ := os.ReadFile(filepath.Join(b, "memory", "worklog.md"))
+	if !strings.Contains(string(worklog), "generation one fact") {
+		t.Fatalf("adopted worklog missing: %q", worklog)
 	}
 }

@@ -156,7 +156,7 @@ func ReleaseLease(repoDir string) {
 func gitStdin(dir, stdin string, args ...string) (string, error) {
 	base := []string{
 		"-c", "core.hooksPath=/dev/null",
-		"-c", "protocol.file.allow=never",
+		"-c", "protocol.file.allow=user",
 	}
 	cmd := newGitCmd(dir, append(base, args...))
 	cmd.Stdin = strings.NewReader(stdin)
