@@ -172,7 +172,7 @@ To update the framework:
 openroutines update
 ```
 
-This bumps the pin to the latest release and, if that release changed any framework-owned files (the Dockerfile, mostly), applies those changes interactively and shows you the diff. Review, commit, push -- your next deploy runs the new version. Rolling back an update is `git revert`.
+This brings the agent up to the version of the `openroutines` binary you're running (install the newer binary first). It bumps the pin, rewrites the Dockerfile's base-image tag, and offers any other framework-owned file changes interactively with a diff. Review, commit, push -- your next deploy runs the new version. Rolling back an update is `git revert`.
 
 Updates never touch what's yours: routines, skills, memory, and credentials belong to the agent, not the framework.
 

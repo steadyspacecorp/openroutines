@@ -50,7 +50,7 @@ func Run(args []string) int {
 	case "credentials", "credential":
 		return cmdCredentials(rest)
 	case "update":
-		return notYet(cmd)
+		return cmdUpdate(rest)
 	case "version", "--version", "-v":
 		fmt.Println(version.Version)
 		return 0
@@ -62,11 +62,6 @@ func Run(args []string) int {
 		fmt.Print(usage)
 		return 2
 	}
-}
-
-func notYet(cmd string) int {
-	fmt.Fprintf(os.Stderr, "openroutines %s: not implemented yet (design phase -- see DESIGN.md)\n", cmd)
-	return 1
 }
 
 func fail(err error) int {

@@ -40,5 +40,14 @@ if "$bin" check >/dev/null 2>&1; then
   echo "FAIL: check passed on a broken routine" >&2
   exit 1
 fi
+rm routines/broken.md
+
+# update: brings an agent to the running binary's version, rewriting
+# framework-owned files (non-interactive stdin applies automatically).
+echo "v0.0.0-old" > .openroutines-version
+sed -i.bak 's/openroutines:v[^ ]* AS agent/openroutines:v0.0.0-old AS agent/' Dockerfile && rm -f Dockerfile.bak
+"$bin" update </dev/null >/dev/null
+grep -q "$("$bin" version)" .openroutines-version || { echo "FAIL: update did not bump the pin" >&2; exit 1; }
+grep -q "openroutines:$("$bin" version) AS agent" Dockerfile || { echo "FAIL: update did not rewrite the FROM tag" >&2; exit 1; }
 
 echo "smoke: OK"
