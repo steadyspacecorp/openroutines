@@ -1,9 +1,8 @@
 // Package routine parses routine markdown files: YAML frontmatter declaring
-// the scope (id, schedule, grants) and a body that is the prompt.
+// the scope (schedule, grants) and a body that is the prompt.
 package routine
 
 import (
-	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,10 +13,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Frontmatter is a routine's declared scope. Every field but ID and Schedule
+// Frontmatter is a routine's declared scope. Every field but Schedule
 // is optional; see DESIGN.md "Routines are markdown files" for defaults.
 type Frontmatter struct {
-	ID          string   `yaml:"id"`
 	Schedule    string   `yaml:"schedule"`
 	Timeout     string   `yaml:"timeout,omitempty"`
 	Active      *bool    `yaml:"active,omitempty"`
@@ -38,23 +36,6 @@ type Routine struct {
 	Path string
 	FM   Frontmatter
 	Body string // the prompt
-}
-
-// IDPattern is the generated routine id format: r_ + 8 lowercase alphanumerics.
-var IDPattern = regexp.MustCompile(`^r_[a-z0-9]{8}$`)
-
-const idAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
-
-// NewID mints a routine id like "r_7f3k2m9q".
-func NewID() string {
-	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		panic(err) // crypto/rand failure is not recoverable
-	}
-	for i, b := range buf {
-		buf[i] = idAlphabet[int(b)%len(idAlphabet)]
-	}
-	return "r_" + string(buf)
 }
 
 // Parse reads one routine file. The file must begin with a "---" frontmatter

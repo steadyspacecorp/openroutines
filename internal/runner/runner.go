@@ -312,7 +312,6 @@ func RecordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, man
 	record, _ := json.Marshal(map[string]any{
 		"run_id":          meta.RunID,
 		"routine":         r.Name,
-		"routine_id":      r.FM.ID,
 		"attempt":         attempt,
 		"outcome":         res.Outcome,
 		"recorded_at":     timestamp(),

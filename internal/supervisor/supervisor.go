@@ -136,7 +136,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	var due []dispatch
 	stateChanged := false
 	for _, r := range routines {
-		if !r.FM.IsActive() || r.FM.ID == "" || r.FM.Schedule == "" {
+		if !r.FM.IsActive() || r.FM.Schedule == "" {
 			continue
 		}
 		spec, err := cron.ParseStandard(r.FM.Schedule)
@@ -144,14 +144,14 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			s.Log.Printf("%s: bad schedule %q: %v", r.Name, r.FM.Schedule, err)
 			continue
 		}
-		st, err := schedule.Load(s.stateDir(), r.FM.ID)
+		st, err := schedule.Load(s.stateDir(), r.Name)
 		if err != nil {
 			s.Log.Printf("%s: %v", r.Name, err)
 			continue
 		}
 		if st == nil {
 			// First sight of this routine: it owes nothing from before it existed.
-			st = &schedule.State{RoutineID: r.FM.ID, Watermark: now}
+			st = &schedule.State{Routine: r.Name, Watermark: now}
 			if err := st.Save(s.stateDir()); err != nil {
 				s.Log.Printf("%s: %v", r.Name, err)
 				continue

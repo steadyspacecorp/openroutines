@@ -13,11 +13,11 @@ deployed container runs whatever routine is due.
 
 ## Working on it
 
-- **Routines are markdown**: YAML frontmatter declares the scope -- `id`
-  (generated, immutable -- never edit or copy it), `schedule` (cron),
-  `timeout`, `active`, `skills`, `credentials`, `model`, `worklog` -- and the
-  body is the prompt. Create new ones with `openroutines routines new <name>`
-  so the id is minted properly.
+- **Routines are markdown**: YAML frontmatter declares the scope --
+  `schedule` (cron), `timeout`, `active`, `skills`, `credentials`, `model`,
+  `worklog` -- and the body is the prompt. The filename is the routine's
+  identity: renaming a routine retires it and starts a new one with fresh
+  scheduling state.
 - **Grants are explicit**: a routine gets only the skills and credentials its
   frontmatter declares. When adding a capability, add the grant in the same
   change so the diff shows what the routine can now touch.

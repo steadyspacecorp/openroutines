@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	openroutines "github.com/steadyspacecorp/openroutines"
-	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
@@ -33,7 +32,6 @@ func cmdScaffold(args []string) int {
 	// Substitutions applied to every templated text file.
 	replacer := strings.NewReplacer(
 		"{{AGENT_NAME}}", name,
-		"{{CHECKIN_ID}}", routine.NewID(),
 		"{{OPENROUTINES_VERSION}}", version.Version,
 	)
 

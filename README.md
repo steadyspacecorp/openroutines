@@ -22,7 +22,6 @@ The heart of the agent is the markdown files that describe each routine. Using f
 
 ```markdown
 ---
-id: r_7f3k2m9q
 schedule: "0 9 * * 1"
 timeout: 15m
 active: true

@@ -1,5 +1,4 @@
 ---
-id: {{CHECKIN_ID}}
 schedule: "0 6,18 * * *"
 timeout: 10m
 worklog: false

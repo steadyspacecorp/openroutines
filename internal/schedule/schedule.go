@@ -30,7 +30,7 @@ type Pending struct {
 
 // State is one routine's durable scheduling record.
 type State struct {
-	RoutineID string    `json:"routine_id"`
+	Routine   string    `json:"routine"`
 	Watermark time.Time `json:"watermark"`
 	Pending   *Pending  `json:"pending,omitempty"`
 
@@ -80,13 +80,13 @@ func NewRunID() string {
 	return "run_" + string(buf)
 }
 
-func statePath(stateDir, routineID string) string {
-	return filepath.Join(stateDir, routineID+".json")
+func statePath(stateDir, name string) string {
+	return filepath.Join(stateDir, name+".json")
 }
 
 // Load reads a routine's state; nil (no error) when none exists yet.
-func Load(stateDir, routineID string) (*State, error) {
-	raw, err := os.ReadFile(statePath(stateDir, routineID))
+func Load(stateDir, name string) (*State, error) {
+	raw, err := os.ReadFile(statePath(stateDir, name))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -95,7 +95,7 @@ func Load(stateDir, routineID string) (*State, error) {
 	}
 	var s State
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return nil, fmt.Errorf("state %s: %w", routineID, err)
+		return nil, fmt.Errorf("state %s: %w", name, err)
 	}
 	return &s, nil
 }
@@ -109,7 +109,7 @@ func (s *State) Save(stateDir string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(statePath(stateDir, s.RoutineID), append(raw, '\n'), 0o644)
+	return os.WriteFile(statePath(stateDir, s.Routine), append(raw, '\n'), 0o644)
 }
 
 // Occurrences returns the first and last cron firing times in (after, until],

@@ -53,18 +53,8 @@ func cmdCheck(args []string) int {
 	for _, e := range parseErrs {
 		failf("%v", e)
 	}
-	seenIDs := map[string]string{}
 	for _, r := range routines {
 		var errs []string
-		if r.FM.ID == "" {
-			errs = append(errs, "missing id (openroutines routines new generates one)")
-		} else if !routine.IDPattern.MatchString(r.FM.ID) {
-			errs = append(errs, fmt.Sprintf("id %q is not a valid routine id", r.FM.ID))
-		} else if other, dup := seenIDs[r.FM.ID]; dup {
-			errs = append(errs, fmt.Sprintf("id %s duplicates %s -- a copied routine needs a new id", r.FM.ID, other))
-		} else {
-			seenIDs[r.FM.ID] = r.Name
-		}
 		if r.FM.Schedule == "" {
 			errs = append(errs, "missing schedule")
 		} else if _, err := cron.ParseStandard(r.FM.Schedule); err != nil {
@@ -98,7 +88,7 @@ func cmdCheck(args []string) int {
 			if !r.FM.IsActive() {
 				state = "inactive"
 			}
-			okf("%s (%s, %s, %s)", r.Name, r.FM.ID, r.FM.Schedule, state)
+			okf("%s (%s, %s)", r.Name, r.FM.Schedule, state)
 		} else {
 			for _, e := range errs {
 				failf("%s: %s", r.Name, e)

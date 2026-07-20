@@ -35,7 +35,6 @@ step "routines new mints a valid inactive routine"
 
 cat > routines/broken.md <<'EOF'
 ---
-id: not-a-valid-id
 schedule: "99 99 * * *"
 credentials: [Bad-Name]
 skills: [nonexistent]

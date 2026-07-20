@@ -52,7 +52,7 @@ func fixture(t *testing.T, mode string) string {
 	os.WriteFile(filepath.Join(dir, "agent.yaml"), []byte(agentYAML), 0o644)
 	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
-		"---\nid: r_test0001\nschedule: \"* * * * *\"\n---\nDo the fake thing.\n"), 0o644)
+		"---\nschedule: \"* * * * *\"\n---\nDo the fake thing.\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "fake-mode"), []byte(mode+"\n"), 0o644)
 
 	binDir := t.TempDir()
@@ -76,7 +76,7 @@ func newSupervisor(t *testing.T, dir string) *Supervisor {
 
 func loadState(t *testing.T, s *Supervisor) *schedule.State {
 	t.Helper()
-	st, err := schedule.Load(s.stateDir(), "r_test0001")
+	st, err := schedule.Load(s.stateDir(), "every-minute")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,11 +17,11 @@ func writeTemp(t *testing.T, content string) string {
 }
 
 func TestParse(t *testing.T) {
-	r, err := Parse(writeTemp(t, "---\nid: r_abc12345\nschedule: \"0 9 * * 1\"\nskills: [a]\n---\nDo the thing.\n"))
+	r, err := Parse(writeTemp(t, "---\nschedule: \"0 9 * * 1\"\nskills: [a]\n---\nDo the thing.\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.FM.ID != "r_abc12345" || r.FM.Schedule != "0 9 * * 1" || r.Body != "Do the thing." {
+	if r.FM.Schedule != "0 9 * * 1" || r.Body != "Do the thing." {
 		t.Fatalf("unexpected parse: %+v body=%q", r.FM, r.Body)
 	}
 	if !r.FM.IsActive() || !r.FM.LogsWork() {
@@ -38,16 +38,8 @@ func TestParseRejectsMissingFrontmatter(t *testing.T) {
 	}
 }
 
-func TestNewIDMatchesPattern(t *testing.T) {
-	for range 50 {
-		if id := NewID(); !IDPattern.MatchString(id) {
-			t.Fatalf("generated id %q does not match pattern", id)
-		}
-	}
-}
-
 func TestSetActiveTogglesInPlace(t *testing.T) {
-	p := writeTemp(t, "---\nid: r_abc12345\nschedule: \"0 9 * * 1\"\n# keep me\n---\nBody stays.\n")
+	p := writeTemp(t, "---\nschedule: \"0 9 * * 1\"\n# keep me\n---\nBody stays.\n")
 	if err := SetActive(p, false); err != nil {
 		t.Fatal(err)
 	}

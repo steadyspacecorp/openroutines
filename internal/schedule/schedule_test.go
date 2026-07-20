@@ -117,7 +117,7 @@ func TestNextRetryAtBackoffProgression(t *testing.T) {
 
 func TestBreakerTripAndReset(t *testing.T) {
 	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	s := &State{RoutineID: "r_x"}
+	s := &State{Routine: "x"}
 	if cd := s.RecordAbandonment(now); cd != 0 {
 		t.Fatalf("abandonment 1 must not trip: %v", cd)
 	}

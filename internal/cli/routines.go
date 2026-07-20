@@ -12,7 +12,6 @@ import (
 )
 
 const newRoutineTemplate = `---
-id: %s
 schedule: "0 9 * * *"
 active: false
 skills: []
@@ -56,7 +55,7 @@ func cmdRoutines(args []string) int {
 const routinesUsage = `Manage this agent's routines (markdown files in routines/)
 
 Usage:
-  openroutines routines new <name>         create a routine (inactive, with a fresh id)
+  openroutines routines new <name>         create a routine (inactive until you activate it)
   openroutines routines list               names, ids, schedules, grants
   openroutines routines run <name>         run once now; memory writes are kept
   openroutines routines test <name>        run once now; memory writes are discarded
@@ -103,7 +102,7 @@ func routinesNew(args []string) int {
 	if err := os.MkdirAll("routines", 0o755); err != nil {
 		return fail(err)
 	}
-	content := fmt.Sprintf(newRoutineTemplate, routine.NewID(), name)
+	content := fmt.Sprintf(newRoutineTemplate, name)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fail(err)
 	}
@@ -177,11 +176,9 @@ func routinesRemove(args []string) int {
 	fmt.Printf("Removed %s\n", path)
 	// Best effort: clean up the routine's scheduling state so the memory
 	// branch doesn't accumulate orphans. Its ledger stays -- that's memory.
-	if r.FM.ID != "" {
-		statePath := filepath.Join("memory", "state", r.FM.ID+".json")
-		if err := os.Remove(statePath); err == nil {
-			fmt.Printf("Removed scheduling state %s (commit inside memory/ to record it)\n", statePath)
-		}
+	statePath := filepath.Join("memory", "state", r.Name+".json")
+	if err := os.Remove(statePath); err == nil {
+		fmt.Printf("Removed scheduling state %s (commit inside memory/ to record it)\n", statePath)
 	}
 	return 0
 }
@@ -195,7 +192,7 @@ func routinesList() int {
 		fmt.Println("No routines. Create one: openroutines routines new <name>")
 		return 0
 	}
-	fmt.Printf("%-20s %-12s %-16s %-8s %s\n", "NAME", "ID", "SCHEDULE", "ACTIVE", "GRANTS")
+	fmt.Printf("%-20s %-16s %-8s %s\n", "NAME", "SCHEDULE", "ACTIVE", "GRANTS")
 	for _, r := range routines {
 		grants := []string{}
 		if len(r.FM.Skills) > 0 {
@@ -204,7 +201,7 @@ func routinesList() int {
 		if len(r.FM.Credentials) > 0 {
 			grants = append(grants, fmt.Sprintf("creds:%d", len(r.FM.Credentials)))
 		}
-		fmt.Printf("%-20s %-12s %-16s %-8v %s\n", r.Name, r.FM.ID, r.FM.Schedule, r.FM.IsActive(), strings.Join(grants, " "))
+		fmt.Printf("%-20s %-16s %-8v %s\n", r.Name, r.FM.Schedule, r.FM.IsActive(), strings.Join(grants, " "))
 	}
 	return 0
 }
