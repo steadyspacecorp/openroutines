@@ -132,7 +132,7 @@ Day to day:
 ```bash
 openroutines status                   # master key, models, routines and schedules, skills, memory sync state
 openroutines routines list            # also: edit, activate, deactivate, remove
-openroutines routines test <name>     # like run, but memory writes are discarded
+openroutines routines test <name>     # dry run: no outbound tools, no secrets, actions narrated
 openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove
 openroutines credentials set <name>   # add/replace one encrypted secret; also: list, remove
 openroutines check                    # validate config, frontmatter, and schedules; made for CI

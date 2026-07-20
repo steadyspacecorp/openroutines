@@ -58,7 +58,8 @@ Usage:
   openroutines routines new <name>         create a routine (inactive until you activate it)
   openroutines routines list               names, ids, schedules, grants
   openroutines routines run <name>         run once now; memory writes are kept
-  openroutines routines test <name>        run once now; memory writes are discarded
+  openroutines routines test <name>        dry run: outbound tools disabled, credentials withheld,
+                                           intended actions narrated, memory writes discarded
   openroutines routines edit <name>        open in $EDITOR, validate on close
   openroutines routines activate <name>    set active: true
   openroutines routines deactivate <name>  set active: false
@@ -80,7 +81,7 @@ func routinesRun(args []string, keep bool) int {
 	}
 	fmt.Printf("\n%s: %s in %s (run %s)\n", name, res.Outcome, res.Duration, res.RunID)
 	if !keep {
-		fmt.Println("test mode: memory writes discarded, nothing recorded")
+		fmt.Println("dry run: outbound tools were disabled and credentials withheld; memory writes discarded, nothing recorded")
 	} else if res.Commit != "" {
 		fmt.Printf("memory updated: commit %s on the %s branch\n", res.Commit, "memory")
 	}
