@@ -28,6 +28,14 @@ func cmdSandboxExec(args []string) int {
 	}
 	ro := filepath.SplitList(os.Getenv(sandbox.EnvRO))
 	rw := filepath.SplitList(os.Getenv(sandbox.EnvRW))
+	// Write-granted paths must exist before rules apply: Landlock can't
+	// grant what it can't resolve, and once confined nothing can create
+	// them (found live: opencode's first mkdir of ~/.local was denied).
+	for _, p := range rw {
+		if p != "" {
+			_ = os.MkdirAll(p, 0o755)
+		}
+	}
 
 	desc, err := sandbox.Apply(ro, rw)
 	switch {
