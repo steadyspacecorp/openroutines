@@ -1,0 +1,46 @@
+//go:build linux
+
+// Package sandbox applies the Landlock filesystem confinement to the model
+// process (DESIGN.md "Runs are sandboxed"). Rules bind to the calling
+// process and its children, so the runner re-execs through
+// `openroutines sandbox-exec`, which applies the rules to itself and then
+// execs opencode.
+package sandbox
+
+import (
+	"os"
+
+	"github.com/landlock-lsm/go-landlock/landlock"
+)
+
+// Apply restricts this process (and all its descendants) to read access on
+// ro paths and read-write on rw paths. Returns a description of the ABI
+// level that took effect. Paths that don't exist are skipped -- Landlock
+// errors on nonexistent rule paths.
+func Apply(ro, rw []string) (string, error) {
+	roRule := landlock.RODirs(existing(ro)...)
+	rwRule := landlock.RWDirs(existing(rw)...)
+	// V2 adds file re-parenting (renames across directories); fall back to
+	// V1 (basic fs) on older kernels. Both are strict: an error means no
+	// confinement took effect, and the caller decides fail-closed policy.
+	if err := landlock.V2.RestrictPaths(roRule, rwRule); err == nil {
+		return "landlock v2", nil
+	}
+	if err := landlock.V1.RestrictPaths(roRule, rwRule); err != nil {
+		return "", err
+	}
+	return "landlock v1", nil
+}
+
+func existing(paths []string) []string {
+	out := paths[:0:0]
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}

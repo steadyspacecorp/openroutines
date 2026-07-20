@@ -51,6 +51,10 @@ func Run(args []string) int {
 		return cmdCredentials(rest)
 	case "update":
 		return cmdUpdate(rest)
+	case "sandbox-exec": // internal: Landlock re-exec shim (see runner)
+		return cmdSandboxExec(rest)
+	case "sandbox-probe": // internal: boot-time availability check
+		return cmdSandboxProbe(rest)
 	case "version", "--version", "-v":
 		fmt.Println(version.Version)
 		return 0

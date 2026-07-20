@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -23,6 +25,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
+	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
 
@@ -88,7 +91,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		defer memory.ReleaseLease(s.Dir)
 	}
 	s.Log.Printf("supervising %s (instance %s, tick %s)", s.Dir, s.InstanceID, TickInterval)
-	s.Log.Printf("WARNING: filesystem sandbox (Landlock) is not implemented in this build yet -- see DESIGN.md")
+	if err := s.verifySandbox(); err != nil {
+		return err
+	}
 
 	ticker := time.NewTicker(TickInterval)
 	defer ticker.Stop()
@@ -339,6 +344,35 @@ func (s *Supervisor) pushBestEffort() {
 	if err := memory.Push(s.Dir); err != nil {
 		s.Log.Printf("memory push failed (will retry): %v", err)
 	}
+}
+
+// verifySandbox enforces the fail-closed policy at boot, not mid-run. Only
+// production (inside the agent image) spawns model processes natively behind
+// the Landlock shim; everywhere else they run in the per-run container, or
+// the operator has explicitly opted into unconfined dev mode.
+func (s *Supervisor) verifySandbox() error {
+	switch {
+	case os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		out, probeErr := exec.Command(self, "sandbox-probe").Output()
+		if probeErr == nil {
+			s.Log.Printf("filesystem sandbox: %s active for model processes", strings.TrimSpace(string(out)))
+			return nil
+		}
+		if os.Getenv(sandbox.EnvUnsafeOverride) == "1" {
+			s.Log.Printf("WARNING: filesystem sandbox DISABLED by %s -- model processes run unconfined", sandbox.EnvUnsafeOverride)
+			return nil
+		}
+		return fmt.Errorf("filesystem sandbox required but unavailable (host kernel without Landlock?) -- refusing to supervise; set %s=1 to run unconfined deliberately", sandbox.EnvUnsafeOverride)
+	case os.Getenv("OPENROUTINES_NATIVE") == "1":
+		s.Log.Printf("WARNING: OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
+	default:
+		s.Log.Printf("model processes run in the per-run container")
+	}
+	return nil
 }
 
 func (s *Supervisor) shutdown() {

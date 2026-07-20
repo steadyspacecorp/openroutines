@@ -26,6 +26,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
@@ -182,13 +183,34 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		if _, err := exec.LookPath("opencode"); err != nil {
 			return nil, nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
 		}
-		cmd = exec.Command("opencode", "run", "--agent", "routine", "-m", model, r.Body)
-		cmd.Dir = workspace
-		cmd.Env = append(env,
+		home := os.Getenv("HOME")
+		baseEnv := append(env,
 			"PATH="+os.Getenv("PATH"),
-			"HOME="+os.Getenv("HOME"), // opencode auth/config lives under HOME
+			"HOME="+home, // opencode auth/config lives under HOME
 			"TMPDIR="+runTmp,
 		)
+		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+			// Production: the model process runs behind the Landlock shim --
+			// our own binary applies the rules to itself, then execs opencode.
+			// See DESIGN.md "Runs are sandboxed" for the fail-closed policy.
+			self, err := os.Executable()
+			if err != nil {
+				return nil, nil, err
+			}
+			ro, rw := sandbox.Paths(workspace, runTmp, home)
+			cmd = exec.Command(self, "sandbox-exec", "--", "opencode", "run", "--agent", "routine", "-m", model, r.Body)
+			cmd.Env = append(baseEnv,
+				sandbox.EnvRO+"="+sandbox.JoinPaths(ro),
+				sandbox.EnvRW+"="+sandbox.JoinPaths(rw),
+				sandbox.EnvUnsafeOverride+"="+os.Getenv(sandbox.EnvUnsafeOverride),
+			)
+		} else {
+			// OPENROUTINES_NATIVE=1: an explicit, unconfined dev opt-in
+			// (local user runs are confined by the run container instead).
+			cmd = exec.Command("opencode", "run", "--agent", "routine", "-m", model, r.Body)
+			cmd.Env = baseEnv
+		}
+		cmd.Dir = workspace
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	} else {
 		if _, err := exec.LookPath("docker"); err != nil {
