@@ -114,38 +114,55 @@ func leaseContent(instanceID string, now time.Time) string {
 	return fmt.Sprintf("%s %d\n", instanceID, now.Unix())
 }
 
-// ReadLease fetches the current lease from origin. Returns holder id and
-// heartbeat time; ok=false when no lease exists.
-func ReadLease(repoDir string) (holder string, at time.Time, ok bool, err error) {
+// Lease is the current holder's heartbeat, plus the blob SHA used as the
+// compare-and-swap token for atomic takeover.
+type Lease struct {
+	Holder string
+	At     time.Time
+	SHA    string
+}
+
+// ReadLease fetches the current lease from origin; nil when none exists.
+func ReadLease(repoDir string) (*Lease, error) {
 	if _, lerr := git(repoDir, "fetch", "--quiet", "origin", "+"+leaseRef+":"+leaseRef); lerr != nil {
 		if strings.Contains(lerr.Error(), "couldn't find remote ref") {
-			return "", time.Time{}, false, nil
+			return nil, nil
 		}
-		return "", time.Time{}, false, lerr
+		return nil, lerr
+	}
+	sha, err := git(repoDir, "rev-parse", leaseRef)
+	if err != nil {
+		return nil, err
 	}
 	content, cerr := git(repoDir, "cat-file", "blob", leaseRef)
 	if cerr != nil {
-		return "", time.Time{}, false, cerr
+		return nil, cerr
 	}
 	fields := strings.Fields(content)
 	if len(fields) != 2 {
-		return "", time.Time{}, false, fmt.Errorf("malformed lease %q", content)
+		return nil, fmt.Errorf("malformed lease %q", content)
 	}
 	var unix int64
 	if _, serr := fmt.Sscanf(fields[1], "%d", &unix); serr != nil {
-		return "", time.Time{}, false, serr
+		return nil, serr
 	}
-	return fields[0], time.Unix(unix, 0), true, nil
+	return &Lease{Holder: fields[0], At: time.Unix(unix, 0), SHA: sha}, nil
 }
 
-// WriteLease publishes this instance's heartbeat to origin.
-func WriteLease(repoDir, instanceID string, now time.Time) error {
+// WriteLease publishes this instance's heartbeat atomically: the push
+// succeeds only if origin's lease is still exactly expectedSHA (empty means
+// "must not exist"). Two instances racing for the same lease cannot both
+// win. Returns the new lease SHA for the next renewal's expectation.
+func WriteLease(repoDir, instanceID string, now time.Time, expectedSHA string) (string, error) {
 	blob, err := gitStdin(repoDir, leaseContent(instanceID, now), "hash-object", "-w", "--stdin")
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = git(repoDir, "push", "--quiet", "--force", "origin", blob+":"+leaseRef)
-	return err
+	cas := "--force-with-lease=" + leaseRef + ":" + expectedSHA
+	if _, err := git(repoDir, "push", "--quiet", cas, "origin", blob+":"+leaseRef); err != nil {
+		return "", err
+	}
+	return blob, nil
 }
 
 // ReleaseLease removes this instance's lease from origin (best effort).

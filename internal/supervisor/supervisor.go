@@ -41,8 +41,9 @@ type Supervisor struct {
 
 	noOrigin      bool
 	loc           *time.Location
-	syncBlocked   bool // rewritten-history or conflict: stop adopting/pushing
-	syncWarned    bool // blocker already raised for the current sync problem
+	leaseSHA      string // CAS token: the lease blob we last wrote
+	syncBlocked   bool   // rewritten-history or conflict: stop adopting/pushing
+	syncWarned    bool   // blocker already raised for the current sync problem
 	unreachWarned bool
 }
 
@@ -113,10 +114,13 @@ func (s *Supervisor) Run(ctx context.Context) error {
 func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	now = now.In(s.loc)
 
-	// Reconcile memory with origin, defensively.
+	// Reconcile memory with origin, defensively; renew the single-instance
+	// lease and pause dispatch entirely if we no longer hold it.
 	if !s.noOrigin {
 		s.syncOnce()
-		_ = memory.WriteLease(s.Dir, s.InstanceID, now)
+		if !s.renewLease(now) {
+			return
+		}
 	}
 
 	routines, parseErrs := routine.LoadDir(filepath.Join(s.Dir, "routines"))
@@ -385,23 +389,61 @@ func (s *Supervisor) shutdown() {
 
 // acquireLease enforces "exactly one instance": a fresh foreign lease means
 // another supervisor is alive (rolling deploy overlap, accidental replica),
-// so this one waits rather than corrupting memory.
+// so this one waits rather than corrupting memory. The write is atomic
+// (compare-and-swap on the lease ref): two instances racing cannot both win.
 func (s *Supervisor) acquireLease(ctx context.Context) error {
 	for {
-		holder, at, exists, err := memory.ReadLease(s.Dir)
+		lease, err := memory.ReadLease(s.Dir)
 		if err != nil {
 			return fmt.Errorf("lease: %w", err)
 		}
-		if !exists || holder == s.InstanceID || time.Since(at) > memory.LeaseTTL {
-			return memory.WriteLease(s.Dir, s.InstanceID, time.Now())
+		expected := ""
+		eligible := lease == nil
+		if lease != nil {
+			expected = lease.SHA
+			eligible = lease.Holder == s.InstanceID || time.Since(lease.At) > memory.LeaseTTL
 		}
-		s.Log.Printf("another instance holds the lease (%s, heartbeat %s) -- waiting", holder, at.Format(time.RFC3339))
+		if eligible {
+			sha, werr := memory.WriteLease(s.Dir, s.InstanceID, time.Now(), expected)
+			if werr == nil {
+				s.leaseSHA = sha
+				return nil
+			}
+			// CAS lost: someone else moved first. Loop and re-evaluate.
+			s.Log.Printf("lease race lost -- re-evaluating")
+			continue
+		}
+		s.Log.Printf("another instance holds the lease (%s, heartbeat %s) -- waiting", lease.Holder, lease.At.Format(time.RFC3339))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(30 * time.Second):
 		}
 	}
+}
+
+// renewLease heartbeats atomically against the lease we last wrote. Returns
+// false -- pause all dispatch -- when another live instance holds it.
+func (s *Supervisor) renewLease(now time.Time) bool {
+	if sha, err := memory.WriteLease(s.Dir, s.InstanceID, now, s.leaseSHA); err == nil {
+		s.leaseSHA = sha
+		return true
+	}
+	lease, err := memory.ReadLease(s.Dir)
+	if err == nil && lease != nil && lease.Holder != s.InstanceID && time.Since(lease.At) <= memory.LeaseTTL {
+		s.Log.Printf("BLOCKED: lease held by %s (heartbeat %s) -- pausing dispatch", lease.Holder, lease.At.Format(time.RFC3339))
+		return false
+	}
+	expected := ""
+	if lease != nil {
+		expected = lease.SHA
+	}
+	if sha, werr := memory.WriteLease(s.Dir, s.InstanceID, now, expected); werr == nil {
+		s.leaseSHA = sha
+		return true
+	}
+	s.Log.Printf("lease renewal failed -- pausing dispatch this tick")
+	return false
 }
 
 func parseAttempt(attemptID string) int {
