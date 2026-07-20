@@ -198,3 +198,58 @@ func TestBackoffHoldsBetweenAttempts(t *testing.T) {
 		t.Fatalf("backoff violated: %d attempts", st.Pending.Attempts)
 	}
 }
+
+// driveToAbandonment ticks through a full failed logical run (5 attempts
+// with backoff) and returns the time after abandonment.
+func driveToAbandonment(t *testing.T, s *Supervisor, from time.Time) time.Time {
+	t.Helper()
+	ctx := context.Background()
+	now := from.Add(time.Minute)
+	s.Tick(ctx, now) // mint pending + attempt 1
+	for {
+		st := loadState(t, s)
+		if st.Pending == nil {
+			return now
+		}
+		now = schedule.NextRetryAt(st.Pending).Add(time.Second)
+		s.Tick(ctx, now)
+	}
+}
+
+func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
+	dir := fixture(t, "fail")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+	s.Tick(ctx, t0) // register
+
+	now := t0
+	for range 3 {
+		now = driveToAbandonment(t, s, now)
+	}
+	st := loadState(t, s)
+	if st.ConsecutiveAbandons != 3 || !st.CoolingDown(now.Add(time.Minute)) {
+		t.Fatalf("breaker should be tripped after 3 abandonments: %+v", st)
+	}
+	// While cooling down: ticks mint no new pending runs.
+	s.Tick(ctx, now.Add(2*time.Minute))
+	if st = loadState(t, s); st.Pending != nil {
+		t.Fatalf("no runs should start during cool-down: %+v", st.Pending)
+	}
+	blockers := readFile(t, filepath.Join(dir, "memory", "blockers.md"))
+	if !strings.Contains(blockers, "circuit breaker tripped") {
+		t.Fatalf("breaker blocker missing: %q", blockers)
+	}
+
+	// After the cool-down, the model recovers: one success resets everything.
+	os.WriteFile(filepath.Join(dir, "fake-mode"), []byte("ok\n"), 0o644)
+	after := st.CooldownUntil.Add(time.Minute)
+	s.Tick(ctx, after)
+	if st = loadState(t, s); st.Pending != nil || st.ConsecutiveAbandons != 0 || st.CoolingDown(after) {
+		t.Fatalf("success should reset the breaker: %+v", st)
+	}
+	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	if !strings.Contains(ledger, "ran run_") {
+		t.Fatalf("recovery run should have executed: %q", ledger)
+	}
+}

@@ -85,7 +85,7 @@ func EnsureWorktree(repoDir string) error {
 		if err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)
 		}
-		commit, err := git(repoDir, "-c", "user.name=openroutines", "-c", "user.email=agent@openroutines.dev", "commit-tree", tree, "-m", "Initialize memory")
+		commit, err := git(repoDir, "-c", "user.name=openroutines", "-c", "user.email=agent@openroutines.dev", "commit-tree", tree, "-m", "Memory branch root")
 		if err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)
 		}
@@ -112,7 +112,7 @@ func EnsureWorktree(repoDir string) error {
 		return err
 	}
 	if changed, _ := git(wt, "status", "--porcelain"); changed != "" {
-		if _, err := git(wt, "commit", "--quiet", "-m", "Initialize memory"); err != nil {
+		if _, err := git(wt, "commit", "--quiet", "-m", "Seed memory primitives"); err != nil {
 			return err
 		}
 	}

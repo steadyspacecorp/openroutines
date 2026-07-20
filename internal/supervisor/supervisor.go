@@ -152,6 +152,9 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			continue
 		}
 		if st.Pending == nil {
+			if st.CoolingDown(now) {
+				continue // circuit breaker: no new runs until the cool-down ends
+			}
 			first, last, n := schedule.Occurrences(spec, st.Watermark, now)
 			if n == 0 {
 				continue
@@ -231,7 +234,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	res, staging, err := runner.Execute(ctx, s.Dir, agent, r, meta)
 	if err != nil {
 		s.Log.Printf("%s: %s failed to start: %v", r.Name, p.RunID, err)
-		s.settleFailure(r, st, &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}, meta, err.Error())
+		s.settleFailure(r, st, &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}, meta, now, err.Error())
 		return
 	}
 	defer staging.Cleanup()
@@ -239,11 +242,12 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	switch res.Outcome {
 	case runner.Completed:
 		if err := memory.Import(s.Dir, staging.MemoryDir); err != nil {
-			s.settleFailure(r, st, res, meta, "memory rejected: "+err.Error())
+			s.settleFailure(r, st, res, meta, now, "memory rejected: "+err.Error())
 			return
 		}
 		st.Watermark = p.CoveredThrough
 		st.Pending = nil
+		st.RecordSuccess()
 		if err := st.Save(s.stateDir()); err != nil {
 			s.Log.Printf("%s: %v", r.Name, err)
 		}
@@ -262,13 +266,13 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		_ = memory.AppendRunRecord(s.Dir, runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
 		s.Log.Printf("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
 	default:
-		s.settleFailure(r, st, res, meta, fmt.Sprintf("%s after %s (exit %d)", res.Outcome, res.Duration, res.ExitCode))
+		s.settleFailure(r, st, res, meta, now, fmt.Sprintf("%s after %s (exit %d)", res.Outcome, res.Duration, res.ExitCode))
 	}
 }
 
 // settleFailure records a failed attempt: blocker, run record, and -- past
 // the attempt cap -- abandonment (watermark advances, pending clears).
-func (s *Supervisor) settleFailure(r *routine.Routine, st *schedule.State, res *runner.ExecResult, meta runner.Meta, detail string) {
+func (s *Supervisor) settleFailure(r *routine.Routine, st *schedule.State, res *runner.ExecResult, meta runner.Meta, now time.Time, detail string) {
 	p := st.Pending
 	_ = memory.AppendBlocker(s.Dir, fmt.Sprintf("[%s] routine %s (%s %s): %s", time.Now().UTC().Format(time.RFC3339), r.Name, p.RunID, meta.AttemptID, detail))
 	_ = memory.AppendRunRecord(s.Dir, runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
@@ -278,6 +282,10 @@ func (s *Supervisor) settleFailure(r *routine.Routine, st *schedule.State, res *
 		_ = memory.AppendBlocker(s.Dir, fmt.Sprintf("[%s] routine %s (%s): abandoned after %d attempts -- watermark advanced, human attention needed", time.Now().UTC().Format(time.RFC3339), r.Name, p.RunID, p.Attempts))
 		st.Watermark = p.CoveredThrough
 		st.Pending = nil
+		if cooldown := st.RecordAbandonment(now); cooldown > 0 {
+			_ = memory.AppendBlocker(s.Dir, fmt.Sprintf("[%s] routine %s: circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", time.Now().UTC().Format(time.RFC3339), r.Name, st.ConsecutiveAbandons, cooldown))
+			s.Log.Printf("%s: circuit breaker tripped -- cooling down for %s", r.Name, cooldown)
+		}
 	}
 	if err := st.Save(s.stateDir()); err != nil {
 		s.Log.Printf("%s: %v", r.Name, err)

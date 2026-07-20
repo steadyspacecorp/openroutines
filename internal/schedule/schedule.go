@@ -33,6 +33,37 @@ type State struct {
 	RoutineID string    `json:"routine_id"`
 	Watermark time.Time `json:"watermark"`
 	Pending   *Pending  `json:"pending,omitempty"`
+
+	// Circuit breaker: consecutive abandonments trip a cool-down so a
+	// persistently failing routine cannot grind attempts (and spend) forever.
+	ConsecutiveAbandons int       `json:"consecutive_abandons,omitempty"`
+	CooldownUntil       time.Time `json:"cooldown_until,omitzero"`
+}
+
+const breakerThreshold = 3
+
+// RecordAbandonment counts an abandoned run and, past the threshold, trips
+// the breaker: cool-down of 1h doubling per further abandonment, capped at
+// 24h. Returns the cool-down applied (zero when the breaker has not tripped).
+func (s *State) RecordAbandonment(now time.Time) time.Duration {
+	s.ConsecutiveAbandons++
+	if s.ConsecutiveAbandons < breakerThreshold {
+		return 0
+	}
+	cooldown := min(time.Hour<<uint(s.ConsecutiveAbandons-breakerThreshold), 24*time.Hour)
+	s.CooldownUntil = now.Add(cooldown)
+	return cooldown
+}
+
+// RecordSuccess resets the breaker: one good run clears the history.
+func (s *State) RecordSuccess() {
+	s.ConsecutiveAbandons = 0
+	s.CooldownUntil = time.Time{}
+}
+
+// CoolingDown reports whether the breaker currently blocks new runs.
+func (s *State) CoolingDown(now time.Time) bool {
+	return now.Before(s.CooldownUntil)
 }
 
 const runIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
