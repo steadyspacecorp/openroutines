@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/steadyspacecorp/openroutines/internal/memory"
 )
 
 const FileName = "agent.yaml"
@@ -24,6 +26,12 @@ type Defaults struct {
 	Timeout string `yaml:"timeout"`
 }
 
+// Memory holds memory-behavior settings; see DESIGN.md "Memory has three
+// shared primitives" for the retention window semantics.
+type Memory struct {
+	Retention string `yaml:"retention,omitempty"`
+}
+
 // Agent is the parsed agent.yaml. Description is the agent's job description.
 type Agent struct {
 	Name        string   `yaml:"name"`
@@ -31,6 +39,15 @@ type Agent struct {
 	Owner       Owner    `yaml:"owner"`
 	Timezone    string   `yaml:"timezone"`
 	Defaults    Defaults `yaml:"defaults"`
+	Memory      *Memory  `yaml:"memory,omitempty"`
+}
+
+// Retention returns the configured memory retention string ("" = default).
+func (a *Agent) Retention() string {
+	if a.Memory == nil {
+		return ""
+	}
+	return a.Memory.Retention
 }
 
 // Load reads agent.yaml from dir.
@@ -86,6 +103,9 @@ func (a *Agent) Problems() []string {
 		if _, err := time.ParseDuration(a.Defaults.Timeout); err != nil {
 			out = append(out, fmt.Sprintf("defaults.timeout %q is not a valid duration", a.Defaults.Timeout))
 		}
+	}
+	if _, err := memory.ParseRetention(a.Retention()); err != nil {
+		out = append(out, fmt.Sprintf("memory.retention: %v", err))
 	}
 	return out
 }

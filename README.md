@@ -55,7 +55,7 @@ Every agent's memory is born with three shared files -- the primitives any auton
 - **intentions.md** -- what the agent means to do next, and what's waiting on a human
 - **blockers.md** -- what failed or needs help. Routines write their own; the supervisor adds one whenever a run dies, so even failures that never got to explain themselves are on the record
 
-(Each routine also keeps a private ledger in `memory/ledgers/`.) Primitives hold full facts, never polished prose -- compression and voice are a reader's job. The starter check-in routine is the first reader: twice a day it turns them into a teammate-style update -- what I did, what I intend to do, where I'm blocked -- in your logs. Pointing that at Steady, Slack, or anywhere else is a two-line frontmatter change.
+(Each routine also keeps a private ledger in `memory/ledgers/`.) Primitives hold full facts, never polished prose -- compression and voice are a reader's job. The starter check-in routine is the first reader: twice a day it turns them into a teammate-style update -- what I did, what I intend to do, where I'm blocked -- in your logs. Pointing that at Steady, Slack, or anywhere else is a two-line frontmatter change. The working files also stay lean on their own: entries older than the agent's retention window (`memory.retention`, default 30 days) are trimmed daily -- git history keeps everything forever.
 
 ### What it doesn't do
 

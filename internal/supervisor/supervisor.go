@@ -41,6 +41,8 @@ type Supervisor struct {
 
 	noOrigin      bool
 	loc           *time.Location
+	retention     time.Duration
+	lastTrim      time.Time
 	leaseSHA      string // CAS token: the lease blob we last wrote
 	syncBlocked   bool   // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool   // blocker already raised for the current sync problem
@@ -59,11 +61,16 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
+	retention, err := memory.ParseRetention(agent.Retention())
+	if err != nil {
+		return nil, err
+	}
 	return &Supervisor{
 		Dir:        dir,
 		InstanceID: memory.InstanceID(),
 		Log:        log.New(os.Stdout, "", log.LstdFlags|log.LUTC),
 		loc:        loc,
+		retention:  retention,
 		noOrigin:   !memory.HasOrigin(dir),
 	}, nil
 }
@@ -120,6 +127,21 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		s.syncOnce()
 		if !s.renewLease(now) {
 			return
+		}
+	}
+
+	// Once a day, trim the record streams to the retention window. Git
+	// history keeps everything; the working files stay lean.
+	if now.Sub(s.lastTrim) >= 24*time.Hour {
+		s.lastTrim = now
+		if changed, err := memory.Trim(s.Dir, s.retention, now); err != nil {
+			s.Log.Printf("retention trim: %v", err)
+		} else if changed {
+			if _, err := memory.Commit(s.Dir, fmt.Sprintf("Trim memory to retention window (%s)", s.retention)); err != nil {
+				s.Log.Printf("retention trim commit: %v", err)
+			}
+			s.pushBestEffort()
+			s.Log.Printf("memory: trimmed record streams to the %s retention window", s.retention)
 		}
 	}
 
