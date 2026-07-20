@@ -21,7 +21,6 @@ var frameworkOwned = []string{
 	"Dockerfile",
 	".dockerignore",
 	".gitignore",
-	"opencode.json",
 	"AGENTS.md",
 }
 
