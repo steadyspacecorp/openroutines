@@ -77,7 +77,9 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	old := now.Add(-40 * 24 * time.Hour)
 
 	// Old entries in the trimmed streams, plus one in the exempt intentions.
-	appendLine(t, filepath.Join(wt, "worklog.md"), "ancient fact")
+	// The seeded headers (prose + fenced format examples) are committed at
+	// the same old timestamp: documentation must survive trimming at any age.
+	appendLine(t, filepath.Join(wt, "worklog.md"), "- ancient fact")
 	appendLine(t, filepath.Join(wt, "blockers.md"), "- ancient blocker")
 	appendLine(t, filepath.Join(wt, "intentions.md"), "- ancient but still open intention")
 	os.WriteFile(filepath.Join(wt, "runs.jsonl"),
@@ -85,12 +87,12 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	commitAt(t, wt, old, "old entries")
 
 	// Recent entries.
-	appendLine(t, filepath.Join(wt, "worklog.md"), "recent fact")
+	appendLine(t, filepath.Join(wt, "worklog.md"), "- recent fact")
 	appendLine(t, filepath.Join(wt, "runs.jsonl"), `{"run_id":"run_new","recorded_at":"`+now.UTC().Format(time.RFC3339)+`"}`)
 	commitAt(t, wt, now, "recent entries")
 
 	// Uncommitted entry: must always survive.
-	appendLine(t, filepath.Join(wt, "worklog.md"), "uncommitted fact")
+	appendLine(t, filepath.Join(wt, "worklog.md"), "- uncommitted fact")
 
 	changed, err := Trim(dir, 30*24*time.Hour, now)
 	if err != nil {
@@ -104,7 +106,16 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	if strings.Contains(string(worklog), "ancient fact") {
 		t.Fatalf("old entry survived: %q", worklog)
 	}
-	for _, want := range []string{"# Worklog", "recent fact", "uncommitted fact"} {
+	// Documentation survives at any age: heading, prose, and the fenced
+	// format example -- including its "- "-prefixed placeholder lines.
+	for _, want := range []string{
+		"# Worklog",
+		"Raw facts of what runs accomplished",
+		"```markdown",
+		"- YYYY-MM-DD <routine>: <what happened, why it matters, links, people>",
+		"- recent fact",
+		"- uncommitted fact",
+	} {
 		if !strings.Contains(string(worklog), want) {
 			t.Fatalf("trim removed %q: %q", want, worklog)
 		}
@@ -112,6 +123,9 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	blockers, _ := os.ReadFile(filepath.Join(wt, "blockers.md"))
 	if strings.Contains(string(blockers), "ancient blocker") {
 		t.Fatalf("old blocker survived: %q", blockers)
+	}
+	if !strings.Contains(string(blockers), "one ask per entry") {
+		t.Fatalf("trim removed blockers documentation: %q", blockers)
 	}
 	intentions, _ := os.ReadFile(filepath.Join(wt, "intentions.md"))
 	if !strings.Contains(string(intentions), "ancient but still open intention") {
