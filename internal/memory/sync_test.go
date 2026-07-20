@@ -15,7 +15,7 @@ func twoClones(t *testing.T) (a, b string) {
 	t.Helper()
 	base := t.TempDir()
 	bare := filepath.Join(base, "origin.git")
-	gitT(t, base, "init", "-q", "--bare", bare)
+	gitT(t, base, "init", "-q", "-b", "main", "--bare", bare)
 
 	a = filepath.Join(base, "a")
 	gitT(t, base, "clone", "-q", bare, a)
