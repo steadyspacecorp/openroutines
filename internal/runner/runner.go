@@ -165,6 +165,11 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		"OPENROUTINES_RUN_ID=" + meta.RunID,
 		"OPENROUTINES_ATTEMPT_ID=" + meta.AttemptID,
 	}
+	if meta.DryRun {
+		// Skills and prompts can gate on this (e.g. a reporting helper that
+		// would otherwise write to an external system).
+		env = append(env, "OPENROUTINES_DRY_RUN=1")
+	}
 	if meta.ScheduledFor != "" {
 		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor)
 	}
@@ -476,10 +481,10 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 	fmt.Fprintf(&b, "- Your private state for this routine is memory/ledgers/%s.md. Keep it pruned: remove entries you no longer need as part of each run. The shared record files are trimmed to a retention window automatically, but your ledger is yours to tend -- git history preserves anything you remove.\n", r.Name)
 	b.WriteString("- Each memory file opens with a fenced example of its format -- follow it when writing, and give your ledger one when you first create it.\n")
 	if r.FM.LogsWork() {
-		b.WriteString("- When you accomplish something, append the full fact to memory/worklog.md (raw facts, no polish -- e.g. \"reviewed PR #482, no doc update needed\").\n")
+		b.WriteString("- Every run records what it did in memory/worklog.md -- including finding nothing (\"checked 5 PRs, no doc drift\" is a fact the check-in needs). Raw facts, no polish.\n")
 		b.WriteString("- Append new open items to memory/intentions.md, and anything you cannot do to memory/blockers.md.\n")
 	}
-	b.WriteString("- Only write inside memory/. Changes anywhere else are discarded.\n")
+	b.WriteString("- Inside this workspace, only writes under memory/ persist -- file changes elsewhere are discarded. This does NOT limit your real work: acting on external systems (opening PRs, calling APIs, posting messages) is exactly your job when the routine asks for it.\n")
 
 	dir := filepath.Join(workspace, ".opencode", "agents")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
