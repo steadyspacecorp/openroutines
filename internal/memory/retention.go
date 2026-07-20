@@ -43,7 +43,9 @@ func ParseRetention(s string) (time.Duration, error) {
 
 // Trim drops entries older than the window from the record streams. Age is
 // the line's git commit time (via blame) -- no timestamp format is imposed
-// on routines. Headers, blanks, and uncommitted lines always survive.
+// on routines. Records are list items ("- "); everything else is the file's
+// own documentation -- headings, prose, blanks, and fenced format examples --
+// and always survives, as do uncommitted lines.
 // Returns whether anything changed; the caller commits.
 func Trim(repoDir string, keep time.Duration, now time.Time) (bool, error) {
 	wt := WorktreePath(repoDir)
@@ -66,12 +68,18 @@ func Trim(repoDir string, keep time.Duration, now time.Time) (bool, error) {
 		lines := strings.Split(string(raw), "\n")
 		kept := lines[:0:0]
 		dropped := 0
+		inFence := false
 		for i, line := range lines {
+			t := strings.TrimSpace(line)
+			fence := strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
 			keepLine := true
-			if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "#") {
+			if !inFence && !fence && strings.HasPrefix(t, "- ") {
 				if at, known := ages[i+1]; known && at.Before(cutoff) {
 					keepLine = false
 				}
+			}
+			if fence {
+				inFence = !inFence
 			}
 			if keepLine {
 				kept = append(kept, line)
