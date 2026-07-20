@@ -23,6 +23,14 @@ for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
   GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
     go build -trimpath -ldflags "$ldflags" -o "$dist/openroutines_${version}_${os}_${arch}" ./cmd/openroutines
 done
+# Sign the darwin binaries (ad-hoc, deterministic identifier). Developer ID
+# + notarization is the eventual public tier; tracked on the launch checklist.
+if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null; then
+  for f in "$dist"/openroutines_*_darwin_*; do
+    codesign --force -s - -i com.steadyspace.openroutines "$f"
+  done
+fi
+
 (cd "$dist" && shasum -a 256 openroutines_* > checksums.txt)
 
 # Publish the agent base image (multi-arch) to GHCR. Requires a gh token

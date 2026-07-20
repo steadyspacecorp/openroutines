@@ -47,7 +47,7 @@ an agent to the version of the binary you run.
 - **Prompt injection is mitigated, not solved.** Skills and web content are
   instructions the model may follow. Treat every skill and credential grant
   as authority.
-- Release artifacts are checksummed but not yet signed.
+- Release artifacts are checksummed; darwin binaries are ad-hoc signed. Developer ID signing and notarization are pending (launch checklist). When replacing an installed binary on macOS, download to a temp path and `mv` into place -- overwriting in place invalidates the kernel's signature cache and the binary gets killed.
 
 ## Out of scope
 
