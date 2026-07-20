@@ -64,7 +64,7 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 	bare := filepath.Join(base, "origin.git")
-	run(base, "git", "init", "-q", "--bare", bare)
+	run(base, "git", "init", "-q", "-b", "main", "--bare", bare)
 
 	// Generation 1: create memory, write a fact, push.
 	a := filepath.Join(base, "a")
