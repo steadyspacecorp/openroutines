@@ -22,6 +22,7 @@ type Frontmatter struct {
 	Skills      []string `yaml:"skills"`
 	Credentials []string `yaml:"credentials"`
 	Model       string   `yaml:"model,omitempty"`
+	Effort      string   `yaml:"effort,omitempty"` // provider-specific reasoning effort (opencode --variant)
 	Worklog     *bool    `yaml:"worklog,omitempty"`
 }
 

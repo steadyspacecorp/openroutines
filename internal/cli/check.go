@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +16,10 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
+
+// effortPattern loosely constrains reasoning-effort values -- providers
+// define the real vocabulary; this just catches obvious mistakes.
+var effortPattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 // cmdCheck validates the agent repository: agent.yaml, every routine's
 // frontmatter, skill references, credential names, and deploy prerequisites.
@@ -68,6 +73,9 @@ func cmdCheck(args []string) int {
 		}
 		if r.FM.Model != "" && !strings.Contains(r.FM.Model, "/") {
 			errs = append(errs, fmt.Sprintf("model %q must be provider/model", r.FM.Model))
+		}
+		if r.FM.Effort != "" && !effortPattern.MatchString(r.FM.Effort) {
+			errs = append(errs, fmt.Sprintf("effort %q should be a simple token like low, medium, high, or xhigh", r.FM.Effort))
 		}
 		for _, c := range r.FM.Credentials {
 			if !creds.NamePattern.MatchString(c) {

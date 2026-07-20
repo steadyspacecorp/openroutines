@@ -180,6 +180,13 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		env = append(env, strings.ToUpper(k)+"="+v)
 	}
 
+	// The opencode invocation is identical across spawn paths.
+	ocArgs := []string{"run", "--agent", "routine", "-m", model}
+	if r.FM.Effort != "" {
+		ocArgs = append(ocArgs, "--variant", r.FM.Effort)
+	}
+	ocArgs = append(ocArgs, r.Body)
+
 	// Spawn the model process: in the runtime container by default (the
 	// container boundary is the trust boundary), natively inside the
 	// production image or when a contributor opts out.
@@ -204,7 +211,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 				return nil, nil, err
 			}
 			ro, rw := sandbox.Paths(workspace, runTmp, home)
-			cmd = exec.Command(self, "sandbox-exec", "--", "opencode", "run", "--agent", "routine", "-m", model, r.Body)
+			cmd = exec.Command(self, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
 			cmd.Env = append(baseEnv,
 				sandbox.EnvRO+"="+sandbox.JoinPaths(ro),
 				sandbox.EnvRW+"="+sandbox.JoinPaths(rw),
@@ -213,7 +220,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		} else {
 			// OPENROUTINES_NATIVE=1: an explicit, unconfined dev opt-in
 			// (local user runs are confined by the run container instead).
-			cmd = exec.Command("opencode", "run", "--agent", "routine", "-m", model, r.Body)
+			cmd = exec.Command("opencode", ocArgs...)
 			cmd.Env = baseEnv
 		}
 		cmd.Dir = workspace
@@ -226,7 +233,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 			return nil, nil, err
 		}
 		containerName = "openroutines-" + meta.RunID
-		cmd = containerCmd(containerName, workspace, env, model, r.Body)
+		cmd = containerCmd(containerName, workspace, env, ocArgs)
 	}
 	scrubber := scrub.NewWriter(os.Stdout, secrets)
 	cmd.Stdout = scrubber

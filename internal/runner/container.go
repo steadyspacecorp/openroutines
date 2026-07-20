@@ -35,7 +35,7 @@ func ensureRuntimeImage(agentDir string) error {
 // containerCmd builds the docker run invocation for one attempt: the run
 // workspace mounted at /work, the constructed env passed through, nothing
 // else from the host visible.
-func containerCmd(containerName, workspace string, env []string, model, prompt string) *exec.Cmd {
+func containerCmd(containerName, workspace string, env []string, ocArgs []string) *exec.Cmd {
 	args := []string{
 		"run", "--rm", "--init",
 		"--name", containerName,
@@ -47,7 +47,8 @@ func containerCmd(containerName, workspace string, env []string, model, prompt s
 	for _, kv := range env {
 		args = append(args, "-e", kv)
 	}
-	args = append(args, runtimeImageTag, "opencode", "run", "--agent", "routine", "-m", model, prompt)
+	args = append(args, runtimeImageTag, "opencode")
+	args = append(args, ocArgs...)
 	return exec.Command("docker", args...)
 }
 

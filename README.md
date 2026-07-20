@@ -18,7 +18,7 @@ Use openroutines to generate a runnable agent in the form of a git repository wi
 
 You work on an openroutines-generated agent (ORA) the same way you would with any software project: configure and test locally, and then deploy the project via git and Docker. If your git origin is GitHub, GitLab, or the like, you can also wire up standard CI/CD.
 
-The heart of the agent is the markdown files that describe each routine. Using frontmatter, you explicitly scope the schedule, skills, credentials, and the model. The body of the file is the prompt.
+The heart of the agent is the markdown files that describe each routine. Using frontmatter, you explicitly scope the schedule, skills, credentials, the model, and optionally its reasoning effort. The body of the file is the prompt.
 
 ```markdown
 ---
@@ -62,20 +62,6 @@ Every agent's memory is born with three shared files -- the primitives any auton
 - This is not a platform for maintaining a fleet of agents. You can run as many routines as you want, but the idea is that each ORA is fulfilling a job.
 - An ORA doesn't have a "gateway" interface for chatting with it as a way to develop it. You can use a coding agent _locally_ to work on it, and there is an AGENTS.md file to make that easy.
 - There are no open ports or access to a deployed ORA. Individual routines may use skills to reach networked services, but in a deployment environment logs are the only way to introspect the agent.
-
-## Why
-
-We're all familiar with agents as personal assistants, running on your machine, doing stuff for _you_. Coding, writing, summarizing, etc.
-
-But what about _autonomous_ agents doing stuff for your team or company? Like a market research agent, a security monitoring agent, or whatever else the team needs?
-
-Where do these things _run_? How do we maintain them? How can we _trust_ them to work with company knowledge and IP?
-
-These were our questions when we started building agents to help run our own company. There are loads of options, but they all have drawbacks rooted in being too broad or too complex: routines tied to one vendor's harness and a single user, personal-assistant frameworks pressed into server duty, and whole multi-agent _platforms_ when all we wanted was one agent with one job. Both extremes bring the same security, durability, and trust concerns along with them.
-
-What if you could set up and test an agent locally -- skills, routines, credentials, and the model of your choice -- in a few minutes, deploy it with a push, and maintain it like any other git-versioned software project? And rinse and repeat whenever you need a new agent?
-
-Well, now you can.
 
 ## Creating a new agent
 
@@ -192,6 +178,20 @@ openroutines update
 This brings the agent up to the version of the `openroutines` binary you're running (install the newer binary first). It bumps the pin, rewrites the Dockerfile's base-image tag, and offers any other framework-owned file changes interactively with a diff. Review, commit, push -- your next deploy runs the new version. Rolling back an update is `git revert`.
 
 Updates never touch what's yours: routines, skills, memory, and credentials belong to the agent, not the framework.
+
+## Why
+
+We're all familiar with agents as personal assistants, running on your machine, doing stuff for _you_. Coding, writing, summarizing, etc.
+
+But what about _autonomous_ agents doing stuff for your team or company? Like a market research agent, a security monitoring agent, or whatever else the team needs?
+
+Where do these things _run_? How do we maintain them? How can we _trust_ them to work with company knowledge and IP?
+
+These were our questions when we started building agents to help run our own company. There are loads of options, but they all have drawbacks rooted in being too broad or too complex: routines tied to one vendor's harness and a single user, personal-assistant frameworks pressed into server duty, and whole multi-agent _platforms_ when all we wanted was one agent with one job. Both extremes bring the same security, durability, and trust concerns along with them.
+
+What if you could set up and test an agent locally -- skills, routines, credentials, and the model of your choice -- in a few minutes, deploy it with a push, and maintain it like any other git-versioned software project? And rinse and repeat whenever you need a new agent?
+
+Well, now you can.
 
 ## License and contributing
 

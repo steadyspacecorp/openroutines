@@ -15,7 +15,8 @@ deployed container runs whatever routine is due.
 
 - **Routines are markdown**: YAML frontmatter declares the scope --
   `schedule` (cron), `timeout`, `active`, `skills`, `credentials`, `model`,
-  `worklog` -- and the body is the prompt. The filename is the routine's
+  `effort` (reasoning effort, e.g. `high`), `worklog` -- and the body is the
+  prompt. The filename is the routine's
   identity: renaming a routine retires it and starts a new one with fresh
   scheduling state.
 - **Grants are explicit**: a routine gets only the skills and credentials its
