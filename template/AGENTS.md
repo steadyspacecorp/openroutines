@@ -52,3 +52,7 @@ deployed container runs whatever routine is due.
   and become env vars (`slack_webhook` -> `SLACK_WEBHOOK`) only in runs that
   declare them.
 - `master.key` must never be committed or printed.
+- Do not edit `opencode.json`: it is the agent's permission policy, nothing
+  else. Model and provider choice belong in `agent.yaml` defaults and routine
+  frontmatter, where every grant is visible. `openroutines check` warns if
+  extra configuration drifts in.

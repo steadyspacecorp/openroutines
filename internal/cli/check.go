@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -112,6 +113,20 @@ func cmdCheck(args []string) int {
 			for _, c := range r.FM.Credentials {
 				if _, ok := store[c]; !ok {
 					failf("%s declares credential %q, not present in %s", r.Name, c, creds.FileName)
+				}
+			}
+		}
+	}
+
+	// opencode.json should stay a permission policy: model and provider
+	// choice belongs in agent.yaml and routine frontmatter, where grants are
+	// visible. Config drift here has arrived via coding-agent sessions.
+	if raw, err := os.ReadFile(filepath.Join(dir, "opencode.json")); err == nil {
+		var cfg map[string]any
+		if json.Unmarshal(raw, &cfg) == nil {
+			for key := range cfg {
+				if key != "$schema" && key != "permission" {
+					warnf("opencode.json contains %q -- model/provider choice belongs in agent.yaml and frontmatter, not here", key)
 				}
 			}
 		}
