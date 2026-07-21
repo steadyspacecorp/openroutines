@@ -92,7 +92,7 @@ func TestInstructionRendering(t *testing.T) {
 	for _, want := range []string{
 		"You are test-agent",
 		"routine \"sample\" (run run_x)",
-		"DRY RUN:",
+		"DRY RUN",
 		"memory/ledgers/sample.md",
 		"Every run appends at least one event",
 		"Full facts with real links",
@@ -107,7 +107,7 @@ func TestInstructionRendering(t *testing.T) {
 		t.Fatalf("template syntax leaked into instruction:\n%s", full)
 	}
 	plain := render(routine.Frontmatter{Events: &off}, false)
-	for _, banned := range []string{"DRY RUN:", "Every run appends", "Delivery inbox"} {
+	for _, banned := range []string{"DRY RUN", "Every run appends", "Delivery inbox"} {
 		if strings.Contains(plain, banned) {
 			t.Fatalf("conditional block %q rendered when its flag was off:\n%s", banned, plain)
 		}
