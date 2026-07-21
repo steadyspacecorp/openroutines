@@ -445,6 +445,12 @@ func buildWorkspace(dir, workspace string) error {
 		"skills":            true, // only declared skills travel in -- see copyDeclaredSkills
 		creds.KeyFileName:   true,
 		".openroutines-tmp": true,
+		// Development-session rules never reach runs: opencode loads a
+		// project-root AGENTS.md (or CLAUDE.md fallback) into any session's
+		// context, and those files are written for humans' coding agents.
+		// Runtime instructions travel only in the generated definition.
+		"AGENTS.md": true,
+		"CLAUDE.md": true,
 	}
 	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -552,7 +558,9 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 	b.WriteString("- Each memory file opens with a fenced example of its format -- follow it when writing, and give your ledger one when you first create it.\n")
 	if r.FM.RecordsEvents() {
 		b.WriteString("- Every run appends at least one event to memory/events.md -- including finding nothing (\"checked 5 PRs, no doc drift\" is a fact reporting needs). Raw facts, no polish.\n")
+		b.WriteString("- Full facts with real links: the outcome, why it matters, who was involved -- every PR, issue, page, or person linked on its actual title, never a bare \"repo#123\" or naked URL. Over-include; entries whittle down later, but never build back up.\n")
 	}
+	b.WriteString("- Never write a credential value into memory -- name the credential if you must refer to it.\n")
 	b.WriteString("- Inside this workspace, only writes under memory/ persist -- file changes elsewhere are discarded. This does NOT limit your real work: acting on external systems (opening PRs, calling APIs, posting messages) is exactly your job when the routine asks for it.\n")
 	if r.FM.IsConsumer() {
 		b.WriteString("\nDelivery inbox:\n")

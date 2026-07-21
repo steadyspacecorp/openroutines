@@ -45,3 +45,25 @@ func TestRealRunDefinitionAllowsActing(t *testing.T) {
 		t.Fatalf("skill scoping missing:\n%s", def)
 	}
 }
+
+// Dev-session rules files must never reach the run workspace: opencode would
+// load a project-root AGENTS.md into run context, and that file is written
+// for humans' coding agents, not routines.
+func TestWorkspaceExcludesDevRulesFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"AGENTS.md", "CLAUDE.md", "agent.yaml"} {
+		os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644)
+	}
+	workspace := t.TempDir()
+	if err := buildWorkspace(dir, workspace); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"AGENTS.md", "CLAUDE.md"} {
+		if _, err := os.Stat(filepath.Join(workspace, f)); !os.IsNotExist(err) {
+			t.Fatalf("%s leaked into the run workspace", f)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "agent.yaml")); err != nil {
+		t.Fatal("agent.yaml should travel into the workspace")
+	}
+}
