@@ -65,7 +65,9 @@ func cmdUpdate(args []string) int {
 		want := renderer.Replace(string(tmpl))
 		gotRaw, err := os.ReadFile(filepath.Join(dir, name))
 		if err == nil && string(gotRaw) == want {
-			continue // already current
+			// Say so: silence here reads as "this file isn't managed".
+			fmt.Printf("%s: already current\n", name)
+			continue
 		}
 		fmt.Printf("--- %s differs from the %s template ---\n", name, target)
 		printDiff(string(gotRaw), want)
