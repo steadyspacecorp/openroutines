@@ -10,11 +10,11 @@ An autonomous AI agent is software that uses AI models to fulfill a job descript
 
 For example: a product management agent that gathers user research into themes, updates specifications against technical constraints, and checks that documentation hasn't drifted from what shipped. Or an IT ops agent that triages tickets, monitors licenses, and surfaces compliance issues.
 
-openroutines is an opinionated way to build and run one such agent -- one job description, one runtime, a handful of routines -- and to treat it like any other deployed software: versioned, reviewed, secured, rolled back.
+**openroutines** is an opinionated way to build and run one such agent -- one job description, one runtime, a handful of routines -- and to treat it like any other deployed software: versioned, operationalized, and secure.
 
 ## What it does
 
-openroutines generates an agent as a git repository that deploys as a Docker container. The repository holds configuration, skills, structured memory, encrypted credentials, and a set of routines as markdown files. [opencode](https://opencode.ai) talks to the AI models you choose.
+**openroutines** generates an agent as a git repository that deploys as a Docker container. The repository holds configuration, skills, structured memory, encrypted credentials, and a set of routines as markdown files. [opencode](https://opencode.ai) talks to the AI models you choose.
 
 You work on an openroutines-generated agent (ORA) like any software project: build and test locally, deploy with git and Docker, wire up standard CI/CD if your origin is GitHub, GitLab, or the like.
 
@@ -47,7 +47,7 @@ flowchart LR
 
 Every part of this design is deliberate. [DESIGN.md](DESIGN.md) records each decision and the reasoning behind it.
 
-### Special sauce: memory primitives
+### Special sauce: versioned memory primitives
 
 Every agent's memory is born with three shared files -- the primitives any autonomous agent ends up needing, so you never have to invent them:
 
@@ -61,7 +61,7 @@ Each routine also keeps a private ledger in `memory/ledgers/`. Primitives hold f
 
 - No fleets. An ORA can run as many routines as you want, but it holds one job. Two jobs means two agents.
 - No chat gateway for developing the agent by talking to it. Work on it locally with the coding agent of your choice -- AGENTS.md is there to make that easy.
-- No open ports. Routines may reach out to networked services through their skills, but in production, logs are the only way in.
+- No ingress. Routines may reach out to networked services through their skills, but in production, logs are the only way in.
 
 ## Creating a new agent
 
@@ -118,7 +118,7 @@ Day to day:
 ```bash
 openroutines status                   # master key, models, routines and schedules, skills, memory sync state
 openroutines routines list            # also: edit, activate, deactivate, remove
-openroutines routines test <name>     # dry run: no outbound tools, no secrets, actions narrated
+openroutines routines test <name>     # dry run: no outbound calls, no memory saved, actions narrated
 openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove
 openroutines credentials set <name>   # add/replace one encrypted secret; also: list, remove
 openroutines check                    # validate config, frontmatter, and schedules; made for CI
@@ -160,7 +160,7 @@ A few properties fall out of the design (see [DESIGN.md](DESIGN.md) for the reas
 
 - **Run exactly one instance.** One agent, one runtime -- the agent is the sole writer to its memory branch, so there is nothing to scale horizontally. If a platform asks how many replicas, the answer is 1, and the supervisor enforces it with a lease: an accidental second instance waits instead of corrupting memory.
 - **Redeploys are safe.** A routine killed mid-run fires again on the next boot, and a scheduled moment that passes while the container is down runs late instead of never. Missed is recoverable; silently skipped is not.
-- **Memory survives.** Code rolls back with the image; memory lives on its own branch and persists, like a database.
+- **Memory survives.** Code rolls back with the image; memory lives on its own branch and persists, like a database, but versioned.
 - **Logs are the only way in.** The container listens on no ports. Routine output and run records go to stdout -- read them with `docker logs` or your platform's log tooling.
 
 For continuous deployment, wire the usual hooks: run `openroutines check` on every push, rebuild and redeploy on merge to `main`. Pushes to the `memory` branch never trigger a deploy -- that separation is by design.
@@ -187,7 +187,7 @@ But what about _autonomous_ agents doing stuff for your team or company? Like a 
 
 Where do these things _run_? How do we maintain them? How can we _trust_ them to work with company knowledge and IP?
 
-These were our questions when we started building agents to help run our own company. There are loads of options, but they all have drawbacks rooted in being too broad or too complex: routines tied to one vendor's harness and a single user, personal-assistant frameworks pressed into server duty, and whole multi-agent _platforms_ when all we wanted was one agent with one job. Both extremes carry the same security, durability, and trust problems.
+These were our questions when we started building agents to help run our operations at Steady. There are loads of options, but they all have drawbacks rooted in being too broad or too complex: routines tied to one vendor's harness and a single user, personal-assistant frameworks pressed into server duty, and whole multi-agent _platforms_ when all we wanted was one agent with one job. Both extremes carry the same security, durability, and trust problems.
 
 What if you could set up and test an agent locally -- skills, routines, credentials, and the model of your choice -- in a few minutes, deploy it with a push, and maintain it like any other git-versioned software project? And rinse and repeat whenever you need a new agent?
 
