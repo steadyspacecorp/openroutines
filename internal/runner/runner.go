@@ -556,8 +556,8 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 	b.WriteString("- Inside this workspace, only writes under memory/ persist -- file changes elsewhere are discarded. This does NOT limit your real work: acting on external systems (opening PRs, calling APIs, posting messages) is exactly your job when the routine asks for it.\n")
 	if r.FM.IsConsumer() {
 		b.WriteString("\nDelivery inbox:\n")
-		fmt.Fprintf(&b, "- %s in the workspace root lists every memory change since this routine last consumed the feed, fixed at a commit boundary before this run began. It is your input for reporting; read it before the memory files themselves.\n", memory.InboxFileName)
-		fmt.Fprintf(&b, "- When your work has covered everything in the inbox, create an empty file named %s in the workspace root. That consumes the change set: your cursor advances and these changes are not presented again.\n", memory.ConsumeMarker)
+		fmt.Fprintf(&b, "- ./%s -- in your working directory, next to routines/ -- lists every memory change since this routine last consumed the feed, fixed at a commit boundary before this run began. Read it by its relative path (never /%s -- that is outside your workspace and will be denied). It is your input for reporting; read it before the memory files themselves.\n", memory.InboxFileName, memory.InboxFileName)
+		fmt.Fprintf(&b, "- When your work has covered everything in the inbox, create an empty file at ./%s (relative path, in your working directory). That consumes the change set: your cursor advances and these changes are not presented again.\n", memory.ConsumeMarker)
 		fmt.Fprintf(&b, "- Consumption is all-or-nothing and deliberate. If you are not reporting this time (nothing due yet, or you are intentionally holding the changes), do not create %s -- the same inbox returns next run.\n", memory.ConsumeMarker)
 	}
 

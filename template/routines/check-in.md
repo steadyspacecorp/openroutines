@@ -7,7 +7,7 @@ consumes: memory
 Compose this agent's twice-daily check-in and print it as your output -- it
 goes to the container logs.
 
-1. Read inbox.md in the workspace root: every memory change since the last
+1. Read ./inbox.md (relative path, next to routines/): every memory change since the last
    check-in you consumed. If it says there are no pending changes, print a
    one-line check-in saying so and stop -- do not create CONSUMED.
 
@@ -24,4 +24,4 @@ goes to the container logs.
    link or name specifics so a human can follow up.
 
 3. Your check-in now covers everything in the inbox: create the empty file
-   CONSUMED in the workspace root so these changes are not reported twice.
+   ./CONSUMED (relative path) so these changes are not reported twice.
