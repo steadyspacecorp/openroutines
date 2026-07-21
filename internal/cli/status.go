@@ -97,6 +97,18 @@ func cmdStatus(args []string) int {
 		if ms.Unpushed > 0 {
 			fmt.Printf("  %d commit(s) not yet pushed to origin\n", ms.Unpushed)
 		}
+		if cursors, err := memory.Cursors(dir); err == nil && len(cursors) > 0 {
+			head, _ := memory.Head(dir)
+			for name, c := range cursors {
+				lag := ""
+				if head != "" && !strings.HasPrefix(head, c.ConsumedThrough) && head != c.ConsumedThrough {
+					if changes, err := memory.Changes(dir, c.ConsumedThrough, head); err == nil && len(changes) > 0 {
+						lag = fmt.Sprintf(" -- %d change(s) pending", len(changes))
+					}
+				}
+				fmt.Printf("  consumer %s: through %.12s (run %s)%s\n", name, c.ConsumedThrough, c.ByRun, lag)
+			}
+		}
 	}
 	if !memory.HasOrigin(dir) {
 		fmt.Printf("  ! no git origin -- memory is not durable until one is set\n")

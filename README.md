@@ -49,13 +49,14 @@ Every part of this design is deliberate. [DESIGN.md](DESIGN.md) records each dec
 
 ### Special sauce: versioned memory primitives
 
-Every agent's memory is born with three shared files -- the primitives any autonomous agent ends up needing, so you never have to invent them:
+One rule routes every fact an agent produces, into files any autonomous agent ends up needing -- so you never have to invent them:
 
-- **worklog.md** -- what runs accomplished, as raw facts ("reviewed PR #482, no doc update needed")
-- **intentions.md** -- what the agent means to do next, and what's waiting on a human
-- **blockers.md** -- what failed or needs help. Routines write their own; the supervisor adds one whenever a run dies, so even failures that never got to explain themselves are on the record
+- It happened → an event in **events.md** -- raw facts, including NO-OPs ("checked 5 PRs, no doc drift")
+- Someone must do it → a task in **tasks.md**, owned by the agent or a human -- one canonical record with a stable id, from discovery to resolution. The supervisor writes here too: a run it had to give up on becomes a human-owned task, so even failures that never got to explain themselves land on someone's list
+- It may inform future decisions but requires no action → a line in **context.md**
+- Only one routine needs it → that routine's private ledger in `memory/ledgers/`
 
-Each routine also keeps a private ledger in `memory/ledgers/`. Primitives hold facts, never polished prose -- compression and voice are a reader's job. The starter check-in routine is the first reader: twice a day it turns them into a teammate-style update -- what I did, what I intend to do, where I'm blocked -- in your logs. Pointing that at Steady, Slack, or anywhere else is a two-line frontmatter change. The working files stay lean on their own, too: entries older than the retention window (`memory.retention`, default 30 days) are trimmed daily, and git history keeps everything forever.
+Records hold facts, never polished prose -- compression and voice are a reader's job. And because memory is a git branch, its commits are a change feed: a reporting routine declares `consumes: memory`, receives an inbox of everything since it last reported, and marks the batch consumed when its report covers it. Each consumer keeps its own cursor, so pointing a second destination at the same agent -- Steady and Slack, say -- takes no changes to the routines doing the work. The starter check-in routine is the first consumer: twice a day it turns the feed into a teammate-style update in your logs. The working files stay lean, too: entries older than the retention window (`memory.retention`, default 30 days) are trimmed daily, and git history keeps everything forever -- including changes a consumer hasn't seen yet.
 
 ### What it doesn't do
 

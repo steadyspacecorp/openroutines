@@ -5,7 +5,7 @@
 // implementing the durable two-phase model from DESIGN.md: a logical run
 // exists durably (committed, pushed) before it is allowed to act; failed
 // attempts retry under the same run id with backoff; abandonment after a
-// bounded number of attempts raises a blocker and advances the watermark.
+// bounded number of attempts records a human-owned task and advances the watermark.
 package supervisor
 
 import (
@@ -222,7 +222,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		if err := memory.Push(s.Dir); err != nil {
 			// An identity that isn't durable is how duplicates happen: without
 			// a pushed intent, no new logical run starts.
-			s.blockOnce("intent push failed -- runs held until origin is reachable: "+err.Error(), &s.unreachWarned)
+			s.blockOnce("push", "intent push failed -- runs held until origin is reachable: "+err.Error(), &s.unreachWarned)
 			return
 		}
 		s.unreachWarned = false
@@ -276,6 +276,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 			s.settleFailure(r, st, res, meta, now, "memory rejected: "+err.Error())
 			return
 		}
+		runner.AdvanceConsumer(s.Dir, r, staging, p.RunID)
 		st.Watermark = p.CoveredThrough
 		st.Pending = nil
 		st.RecordSuccess()
@@ -301,20 +302,23 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 }
 
-// settleFailure records a failed attempt: blocker, run record, and -- past
-// the attempt cap -- abandonment (watermark advances, pending clears).
+// settleFailure records a failed attempt: an event (it happened), a run
+// record, and -- past the attempt cap -- abandonment, which is a human-owned
+// task (someone must act) alongside the advanced watermark.
 func (s *Supervisor) settleFailure(r *routine.Routine, st *schedule.State, res *runner.ExecResult, meta runner.Meta, now time.Time, detail string) {
 	p := st.Pending
-	_ = memory.AppendBlocker(s.Dir, fmt.Sprintf("[%s] routine %s (%s %s): %s", time.Now().UTC().Format(time.RFC3339), r.Name, p.RunID, meta.AttemptID, detail))
+	date := now.UTC().Format("2006-01-02")
+	_ = memory.AppendEvent(s.Dir, fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", date, r.Name, p.RunID, meta.AttemptID, detail))
 	_ = memory.AppendRunRecord(s.Dir, runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
 	abandoned := false
 	if p.Attempts >= MaxAttempts {
 		abandoned = true
-		_ = memory.AppendBlocker(s.Dir, fmt.Sprintf("[%s] routine %s (%s): abandoned after %d attempts -- watermark advanced, human attention needed", time.Now().UTC().Format(time.RFC3339), r.Name, p.RunID, p.Attempts))
+		_ = memory.AppendHumanTask(s.Dir, "task-"+p.RunID,
+			fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, detail, date))
 		st.Watermark = p.CoveredThrough
 		st.Pending = nil
 		if cooldown := st.RecordAbandonment(now); cooldown > 0 {
-			_ = memory.AppendBlocker(s.Dir, fmt.Sprintf("[%s] routine %s: circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", time.Now().UTC().Format(time.RFC3339), r.Name, st.ConsecutiveAbandons, cooldown))
+			_ = memory.AppendEvent(s.Dir, fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown))
 			s.Log.Printf("%s: circuit breaker tripped -- cooling down for %s", r.Name, cooldown)
 		}
 	}
@@ -337,10 +341,10 @@ func (s *Supervisor) syncOnce() {
 	switch {
 	case rep.Rewritten:
 		s.syncBlocked = true
-		s.blockOnce("memory branch history rewritten on origin -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
+		s.blockOnce("sync", "memory branch history rewritten on origin -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
 	case rep.Conflict:
 		s.syncBlocked = true
-		s.blockOnce("memory sync conflict -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
+		s.blockOnce("sync", "memory sync conflict -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
 	case rep.Unreachable:
 		s.Log.Printf("origin unreachable: %s", rep.Detail)
 	default:
@@ -352,12 +356,18 @@ func (s *Supervisor) syncOnce() {
 	}
 }
 
-// blockOnce raises a blocker for a condition only when it first appears.
-func (s *Supervisor) blockOnce(msg string, warned *bool) {
+// blockOnce records a blocking condition when it first appears: an event for
+// the history, and a human-owned task because only a person can clear it. The
+// task id is date-scoped so a supervisor restart doesn't re-record it --
+// AppendHumanTask skips ids already present.
+func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
 	s.Log.Printf("BLOCKED: %s", msg)
 	if !*warned {
 		*warned = true
-		_ = memory.AppendBlocker(s.Dir, fmt.Sprintf("[%s] supervisor: %s", time.Now().UTC().Format(time.RFC3339), msg))
+		date := time.Now().UTC().Format("2006-01-02")
+		_ = memory.AppendEvent(s.Dir, fmt.Sprintf("%s supervisor: %s", date, msg))
+		_ = memory.AppendHumanTask(s.Dir, "task-"+kind+"-"+time.Now().UTC().Format("20060102"),
+			fmt.Sprintf("%s (source: supervisor; added %s)", msg, date))
 		_, _ = memory.Commit(s.Dir, "Record supervisor blocker")
 		s.pushBestEffort()
 	}

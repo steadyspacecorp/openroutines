@@ -17,9 +17,11 @@ import (
 const DefaultRetention = 30 * 24 * time.Hour
 
 // trimmedStreams are the record streams the retention window applies to.
-// intentions.md is a living list (age doesn't make an intention done) and
-// ledgers are routine-owned -- both exempt.
-var trimmedStreams = []string{"worklog.md", "blockers.md"}
+// tasks.md is a living list (age doesn't make a task done) and ledgers are
+// routine-owned -- both exempt. Pruning removes a line from the working view
+// only; the commit that introduced it stays in history, which is what the
+// delivery feed reads (see delivery.go).
+var trimmedStreams = []string{"events.md", "context.md"}
 
 // ParseRetention accepts "30d" style (days) or any Go duration ("720h").
 // Empty means the default.

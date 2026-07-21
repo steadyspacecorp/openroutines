@@ -76,23 +76,23 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-40 * 24 * time.Hour)
 
-	// Old entries in the trimmed streams, plus one in the exempt intentions.
+	// Old entries in the trimmed streams, plus one in the exempt tasks file.
 	// The seeded headers (prose + fenced format examples) are committed at
 	// the same old timestamp: documentation must survive trimming at any age.
-	appendLine(t, filepath.Join(wt, "worklog.md"), "- ancient fact")
-	appendLine(t, filepath.Join(wt, "blockers.md"), "- ancient blocker")
-	appendLine(t, filepath.Join(wt, "intentions.md"), "- ancient but still open intention")
+	appendLine(t, filepath.Join(wt, "events.md"), "- ancient fact")
+	appendLine(t, filepath.Join(wt, "context.md"), "- ancient context fact")
+	appendLine(t, filepath.Join(wt, "tasks.md"), "- [ ] `task-00000000-1` ancient but still open task")
 	os.WriteFile(filepath.Join(wt, "runs.jsonl"),
 		[]byte(`{"run_id":"run_old","recorded_at":"`+old.UTC().Format(time.RFC3339)+`"}`+"\n"), 0o644)
 	commitAt(t, wt, old, "old entries")
 
 	// Recent entries.
-	appendLine(t, filepath.Join(wt, "worklog.md"), "- recent fact")
+	appendLine(t, filepath.Join(wt, "events.md"), "- recent fact")
 	appendLine(t, filepath.Join(wt, "runs.jsonl"), `{"run_id":"run_new","recorded_at":"`+now.UTC().Format(time.RFC3339)+`"}`)
 	commitAt(t, wt, now, "recent entries")
 
 	// Uncommitted entry: must always survive.
-	appendLine(t, filepath.Join(wt, "worklog.md"), "- uncommitted fact")
+	appendLine(t, filepath.Join(wt, "events.md"), "- uncommitted fact")
 
 	changed, err := Trim(dir, 30*24*time.Hour, now)
 	if err != nil {
@@ -102,34 +102,34 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 		t.Fatal("expected trim to report changes")
 	}
 
-	worklog, _ := os.ReadFile(filepath.Join(wt, "worklog.md"))
-	if strings.Contains(string(worklog), "ancient fact") {
-		t.Fatalf("old entry survived: %q", worklog)
+	events, _ := os.ReadFile(filepath.Join(wt, "events.md"))
+	if strings.Contains(string(events), "ancient fact") {
+		t.Fatalf("old entry survived: %q", events)
 	}
 	// Documentation survives at any age: heading, prose, and the fenced
 	// format example -- including its "- "-prefixed placeholder lines.
 	for _, want := range []string{
-		"# Worklog",
-		"Raw facts of what runs accomplished",
+		"# Events",
+		"append-only outcomes and observations",
 		"```markdown",
 		"- YYYY-MM-DD <routine>: <what happened, why it matters, links, people>",
 		"- recent fact",
 		"- uncommitted fact",
 	} {
-		if !strings.Contains(string(worklog), want) {
-			t.Fatalf("trim removed %q: %q", want, worklog)
+		if !strings.Contains(string(events), want) {
+			t.Fatalf("trim removed %q: %q", want, events)
 		}
 	}
-	blockers, _ := os.ReadFile(filepath.Join(wt, "blockers.md"))
-	if strings.Contains(string(blockers), "ancient blocker") {
-		t.Fatalf("old blocker survived: %q", blockers)
+	contextFile, _ := os.ReadFile(filepath.Join(wt, "context.md"))
+	if strings.Contains(string(contextFile), "ancient context fact") {
+		t.Fatalf("old context entry survived: %q", contextFile)
 	}
-	if !strings.Contains(string(blockers), "one ask per entry") {
-		t.Fatalf("trim removed blockers documentation: %q", blockers)
+	if !strings.Contains(string(contextFile), "Shared situational awareness") {
+		t.Fatalf("trim removed context documentation: %q", contextFile)
 	}
-	intentions, _ := os.ReadFile(filepath.Join(wt, "intentions.md"))
-	if !strings.Contains(string(intentions), "ancient but still open intention") {
-		t.Fatalf("intentions must be exempt from retention: %q", intentions)
+	tasks, _ := os.ReadFile(filepath.Join(wt, "tasks.md"))
+	if !strings.Contains(string(tasks), "ancient but still open task") {
+		t.Fatalf("tasks must be exempt from retention: %q", tasks)
 	}
 	runs, _ := os.ReadFile(filepath.Join(wt, "runs.jsonl"))
 	if strings.Contains(string(runs), "run_old") || !strings.Contains(string(runs), "run_new") {

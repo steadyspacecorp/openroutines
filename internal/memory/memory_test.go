@@ -11,7 +11,7 @@ import (
 func TestValidateAcceptsPlainFiles(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "ledgers"), 0o755)
-	os.WriteFile(filepath.Join(dir, "worklog.md"), []byte("fact\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "events.md"), []byte("fact\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "ledgers", "x.md"), []byte("state\n"), 0o644)
 	if err := Validate(dir); err != nil {
 		t.Fatalf("expected valid, got %v", err)
@@ -76,7 +76,7 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	if err := EnsureWorktree(a); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(a, "memory", "worklog.md"), []byte("generation one fact\n"), 0o644)
+	os.WriteFile(filepath.Join(a, "memory", "events.md"), []byte("generation one fact\n"), 0o644)
 	if _, err := Commit(a, "Fact from generation one"); err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +97,8 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	if got := strings.Count(log, "Memory branch root"); got != 1 {
 		t.Fatalf("expected exactly 1 root commit, got %d: %q", got, log)
 	}
-	worklog, _ := os.ReadFile(filepath.Join(b, "memory", "worklog.md"))
-	if !strings.Contains(string(worklog), "generation one fact") {
-		t.Fatalf("adopted worklog missing: %q", worklog)
+	events, _ := os.ReadFile(filepath.Join(b, "memory", "events.md"))
+	if !strings.Contains(string(events), "generation one fact") {
+		t.Fatalf("adopted events missing: %q", events)
 	}
 }

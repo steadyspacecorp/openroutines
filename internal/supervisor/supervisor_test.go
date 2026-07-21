@@ -19,6 +19,9 @@ const fakeOpencode = `#!/bin/sh
 mode=$(cat fake-mode 2>/dev/null || echo ok)
 case "$mode" in
   fail) echo "boom"; exit 1 ;;
+  consume) cp inbox.md memory/inbox-copy.md
+     : > CONSUMED
+     echo "consumed" ;;
   *) mkdir -p memory/ledgers
      echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
      echo "done" ;;
@@ -173,9 +176,13 @@ func TestRetrySameRunIDThenAbandon(t *testing.T) {
 	if !st.Watermark.After(t0) {
 		t.Fatalf("abandonment should advance the watermark")
 	}
-	blockers := readFile(t, filepath.Join(dir, "memory", "blockers.md"))
-	if !strings.Contains(blockers, runID) || !strings.Contains(blockers, "abandoned after 5 attempts") {
-		t.Fatalf("blockers missing abandonment for %s: %q", runID, blockers)
+	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
+	if !strings.Contains(tasks, "task-"+runID) || !strings.Contains(tasks, "abandoned after 5 attempts") {
+		t.Fatalf("tasks missing human-owned abandonment task for %s: %q", runID, tasks)
+	}
+	events := readFile(t, filepath.Join(dir, "memory", "events.md"))
+	if !strings.Contains(events, runID) {
+		t.Fatalf("events missing failure entries for %s: %q", runID, events)
 	}
 	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
 	if got := strings.Count(records, runID); got != MaxAttempts {
@@ -236,9 +243,9 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	if st = loadState(t, s); st.Pending != nil {
 		t.Fatalf("no runs should start during cool-down: %+v", st.Pending)
 	}
-	blockers := readFile(t, filepath.Join(dir, "memory", "blockers.md"))
-	if !strings.Contains(blockers, "circuit breaker tripped") {
-		t.Fatalf("breaker blocker missing: %q", blockers)
+	events := readFile(t, filepath.Join(dir, "memory", "events.md"))
+	if !strings.Contains(events, "circuit breaker tripped") {
+		t.Fatalf("breaker event missing: %q", events)
 	}
 
 	// After the cool-down, the model recovers: one success resets everything.
@@ -251,5 +258,37 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
 	if !strings.Contains(ledger, "ran run_") {
 		t.Fatalf("recovery run should have executed: %q", ledger)
+	}
+}
+
+// A consumer routine gets an injected inbox, consumes it via the marker, and
+// its cursor advances -- the next inbox starts where the last one ended.
+func TestConsumerCursorAdvances(t *testing.T) {
+	dir := fixture(t, "consume")
+	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
+		"---\nschedule: \"* * * * *\"\nevents: false\nconsumes: memory\n---\nReport the fake thing.\n"), 0o644)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0)                     // register
+	s.Tick(ctx, t0.Add(61*time.Second)) // run 1: first-run inbox, consume
+	inbox := readFile(t, filepath.Join(dir, "memory", "inbox-copy.md"))
+	if !strings.Contains(inbox, "first run") || !strings.Contains(inbox, "No pending changes") {
+		t.Fatalf("first inbox should be empty-at-current-state: %q", inbox)
+	}
+	c1, err := memory.LoadCursor(dir, "every-minute")
+	if err != nil || c1 == nil {
+		t.Fatalf("cursor should exist after consume: %+v, %v", c1, err)
+	}
+
+	s.Tick(ctx, t0.Add(121*time.Second)) // run 2: feed carries run 1's commit
+	inbox = readFile(t, filepath.Join(dir, "memory", "inbox-copy.md"))
+	if !strings.Contains(inbox, "Run every-minute") {
+		t.Fatalf("second inbox should carry run 1's completion commit: %q", inbox)
+	}
+	c2, err := memory.LoadCursor(dir, "every-minute")
+	if err != nil || c2 == nil || c2.ConsumedThrough == c1.ConsumedThrough {
+		t.Fatalf("cursor should have advanced: %+v -> %+v, %v", c1, c2, err)
 	}
 }
