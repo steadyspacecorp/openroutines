@@ -26,22 +26,26 @@ const (
 // that isn't a record. Agents may reshape the headers in their own memory
 // branch -- seeding is create-if-missing and never overwrites.
 var primitives = map[string]string{
-	"worklog.md": "# Worklog\n\nRaw facts of what runs accomplished. Append-only; full facts, no polish.\n\n" +
+	"events.md": "# Events\n\nWhat happened: append-only outcomes and observations, full facts, no polish.\n" +
+		"Includes explicit NO-OPs -- a run that found nothing to change still happened.\n\n" +
 		"Format (one line per entry):\n\n```markdown\n" +
 		"- YYYY-MM-DD <routine>: <what happened, why it matters, links, people>\n" +
 		"- YYYY-MM-DD <routine> NO-OP: <what was checked and found clean>\n```\n",
-	"intentions.md": "# Intentions\n\nOpen items the agent means to act on, and items waiting on a human.\n" +
-		"A waiting item is a handoff: it returns to the open list only when a\n" +
-		"human's answer turns it back into agent work.\n\n" +
+	"tasks.md": "# Tasks\n\nWhat must happen, and who owns the next action. One canonical entry per\n" +
+		"task, from discovery to resolution: update it in place (complete, cancel,\n" +
+		"or move between sections) rather than re-recording it elsewhere. A blocked\n" +
+		"task names what it is waiting on.\n\n" +
 		"Format:\n\n```markdown\n" +
-		"## Open\n\n" +
-		"- [ ] <description> (source: <who or where it came from>, added YYYY-MM-DD)\n" +
-		"- [x] <description> (source: ..., added YYYY-MM-DD, done YYYY-MM-DD)\n\n" +
-		"## Waiting on humans\n\n" +
-		"- <ask> (source: <who or where it came from>, raised YYYY-MM-DD)\n```\n",
-	"blockers.md": "# Blockers\n\nImpediments: failures, expired credentials, things needing help.\n\n" +
-		"Format (one ask per entry):\n\n```markdown\n" +
-		"- YYYY-MM-DD <routine>: <what is stuck or who must act, and why>\n```\n",
+		"## Agent-owned\n\n" +
+		"- [ ] `task-YYYYMMDD-<n>` <description> (routine: <handler>; source: <where it came from>; added YYYY-MM-DD)\n" +
+		"- [x] `task-YYYYMMDD-<n>` <description> (source: ...; added YYYY-MM-DD; done YYYY-MM-DD)\n\n" +
+		"## Human-owned\n\n" +
+		"- [ ] `task-YYYYMMDD-<n>` <ask> (source: <where it came from>; added YYYY-MM-DD)\n```\n",
+	"context.md": "# Context\n\nShared situational awareness: facts that may inform future decisions but\n" +
+		"require no action. Refresh a fact when a run reaffirms it; stale entries\n" +
+		"age out with retention.\n\n" +
+		"Format (one line per entry):\n\n```markdown\n" +
+		"- YYYY-MM-DD <routine>: <the fact, and where it came from>\n```\n",
 }
 
 // supervisorOwned paths never travel into staging and are never touched by
@@ -288,10 +292,10 @@ func Commit(repoDir, message string) (string, error) {
 	return git(wt, "rev-parse", "--short", "HEAD")
 }
 
-// AppendBlocker records a supervisor-written blocker: the mechanism for
-// failures the model never got to narrate.
-func AppendBlocker(repoDir, line string) error {
-	p := filepath.Join(WorktreePath(repoDir), "blockers.md")
+// AppendEvent records a supervisor-written event: the mechanism for outcomes
+// the model never got to narrate (timeouts, crashes, sync trouble).
+func AppendEvent(repoDir, line string) error {
+	p := filepath.Join(WorktreePath(repoDir), "events.md")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -299,6 +303,65 @@ func AppendBlocker(repoDir, line string) error {
 	defer f.Close()
 	_, err = fmt.Fprintf(f, "- %s\n", line)
 	return err
+}
+
+// AppendHumanTask records a supervisor-created human-owned task: the framework
+// giving up on something (abandoned run, tripped breaker, blocked sync) hands
+// it to a person. The entry lands at the end of the real "## Human-owned"
+// section (fenced format examples don't count), created if missing. Idempotent
+// by task id, so restart-prone callers can use deterministic ids.
+func AppendHumanTask(repoDir, taskID, description string) error {
+	p := filepath.Join(WorktreePath(repoDir), "tasks.md")
+	raw, err := os.ReadFile(p)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	text := string(raw)
+	if text == "" {
+		text = "# Tasks\n"
+	}
+	if strings.Contains(text, "`"+taskID+"`") {
+		return nil // one canonical record per task
+	}
+	entry := fmt.Sprintf("- [ ] `%s` %s", taskID, description)
+	lines := strings.Split(text, "\n")
+
+	section := -1
+	inFence := false
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if !inFence && t == "## Human-owned" {
+			section = i
+		}
+	}
+	if section < 0 {
+		text = strings.TrimRight(text, "\n") + "\n\n## Human-owned\n\n" + entry + "\n"
+		return os.WriteFile(p, []byte(text), 0o644)
+	}
+	// End of the section: the next unfenced heading, else EOF; insert before
+	// the section's trailing blank lines.
+	end := len(lines)
+	inFence = false
+	for i := section + 1; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if !inFence && strings.HasPrefix(t, "## ") {
+			end = i
+			break
+		}
+	}
+	for end > section+1 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	out := append(lines[:end:end], append([]string{entry}, lines[end:]...)...)
+	return os.WriteFile(p, []byte(strings.Join(out, "\n")), 0o644)
 }
 
 // AppendRunRecord appends one JSONL run record to the supervisor-owned log.

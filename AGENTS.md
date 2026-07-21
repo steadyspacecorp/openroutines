@@ -32,9 +32,9 @@ Design-first is the workflow here: behavior gets decided in DESIGN.md before it 
 
 Use these terms exactly; the docs and code should agree:
 
-- **routine** (not task, not job) -- a markdown file in `routines/`
+- **routine** (not job) -- a markdown file in `routines/`; a **task** is a memory record in `tasks.md`, never a synonym for routine
 - **ORA** -- an openroutines-generated agent
-- **memory primitives** -- `worklog.md`, `intentions.md`, `blockers.md`; per-routine state is a **ledger** (`memory/ledgers/<routine>.md`)
+- **memory primitives** -- `events.md`, `tasks.md`, `context.md`; per-routine state is a **ledger** (`memory/ledgers/<routine>.md`); per-consumer delivery cursors live under supervisor-owned `state/`
 - **supervisor** -- the long-running process in the container; **run** -- one execution of one routine
 
 ## Conventions

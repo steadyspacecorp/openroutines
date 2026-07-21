@@ -14,6 +14,7 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
@@ -77,6 +78,9 @@ func cmdCheck(args []string) int {
 		if r.FM.Effort != "" && !effortPattern.MatchString(r.FM.Effort) {
 			errs = append(errs, fmt.Sprintf("effort %q should be a simple token like low, medium, high, or xhigh", r.FM.Effort))
 		}
+		if r.FM.Consumes != "" && r.FM.Consumes != "memory" {
+			errs = append(errs, fmt.Sprintf("consumes %q: the only supported feed is \"memory\"", r.FM.Consumes))
+		}
 		for _, c := range r.FM.Credentials {
 			if !creds.NamePattern.MatchString(c) {
 				errs = append(errs, fmt.Sprintf("credential name %q must be lowercase snake_case", c))
@@ -136,6 +140,22 @@ func cmdCheck(args []string) int {
 				if key != "$schema" && key != "permission" {
 					warnf("opencode.json contains %q -- model/provider choice belongs in agent.yaml and frontmatter, not here", key)
 				}
+			}
+		}
+	}
+
+	// Memory hygiene: task discipline is convention, not schema -- warn, never
+	// rewrite. The supervisor does not interpret model-authored memory.
+	if raw, err := os.ReadFile(filepath.Join(memory.WorktreePath(dir), "tasks.md")); err == nil {
+		inFence := false
+		for _, line := range strings.Split(string(raw), "\n") {
+			t := strings.TrimSpace(line)
+			if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+				inFence = !inFence
+				continue
+			}
+			if !inFence && (strings.HasPrefix(t, "- [ ]") || strings.HasPrefix(t, "- [x]")) && !strings.Contains(t, "`task-") {
+				warnf("tasks.md entry without a stable `task-...` id: %.60s", t)
 			}
 		}
 	}

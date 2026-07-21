@@ -15,7 +15,7 @@ type SyncReport struct {
 	Rewritten     bool   // remote history was rewritten -- sync refused
 	Conflict      bool   // rebase conflict -- sync refused
 	Adopted       bool   // remote commits were adopted locally
-	Detail        string // human-readable context for blockers/logs
+	Detail        string // human-readable context for tasks/logs
 }
 
 // HasOrigin reports whether the repo has an origin remote configured.

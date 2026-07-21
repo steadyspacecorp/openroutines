@@ -23,14 +23,18 @@ type Frontmatter struct {
 	Credentials []string `yaml:"credentials"`
 	Model       string   `yaml:"model,omitempty"`
 	Effort      string   `yaml:"effort,omitempty"` // provider-specific reasoning effort (opencode --variant)
-	Worklog     *bool    `yaml:"worklog,omitempty"`
+	Events      *bool    `yaml:"events,omitempty"`
+	Consumes    string   `yaml:"consumes,omitempty"` // "memory": this routine consumes the memory change feed
 }
 
 // IsActive applies the default: routines are active unless explicitly not.
 func (f Frontmatter) IsActive() bool { return f.Active == nil || *f.Active }
 
-// LogsWork applies the default: runs are recorded to the worklog unless opted out.
-func (f Frontmatter) LogsWork() bool { return f.Worklog == nil || *f.Worklog }
+// RecordsEvents applies the default: runs record events unless opted out.
+func (f Frontmatter) RecordsEvents() bool { return f.Events == nil || *f.Events }
+
+// IsConsumer reports whether the routine declared itself a memory consumer.
+func (f Frontmatter) IsConsumer() bool { return f.Consumes == "memory" }
 
 type Routine struct {
 	Name string // filename without .md -- the human-readable name

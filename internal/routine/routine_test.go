@@ -24,8 +24,8 @@ func TestParse(t *testing.T) {
 	if r.FM.Schedule != "0 9 * * 1" || r.Body != "Do the thing." {
 		t.Fatalf("unexpected parse: %+v body=%q", r.FM, r.Body)
 	}
-	if !r.FM.IsActive() || !r.FM.LogsWork() {
-		t.Fatal("defaults should be active=true worklog=true")
+	if !r.FM.IsActive() || !r.FM.RecordsEvents() {
+		t.Fatal("defaults should be active=true events=true")
 	}
 }
 

@@ -58,7 +58,7 @@ func writeMemory(t *testing.T, clone, name, content string) {
 
 func TestSyncFastForwardsWhenBehind(t *testing.T) {
 	a, b := twoClones(t)
-	writeMemory(t, a, "worklog.md", "fact from a\n")
+	writeMemory(t, a, "events.md", "fact from a\n")
 	if _, err := Commit(a, "a fact"); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestSyncFastForwardsWhenBehind(t *testing.T) {
 	if !rep.Adopted || rep.Conflict || rep.Rewritten {
 		t.Fatalf("expected clean adoption, got %+v", rep)
 	}
-	if got, _ := os.ReadFile(filepath.Join(b, "memory", "worklog.md")); !strings.Contains(string(got), "fact from a") {
+	if got, _ := os.ReadFile(filepath.Join(b, "memory", "events.md")); !strings.Contains(string(got), "fact from a") {
 		t.Fatalf("b did not adopt a's fact: %q", got)
 	}
 }
@@ -78,14 +78,14 @@ func TestSyncFastForwardsWhenBehind(t *testing.T) {
 func TestSyncRebasesDivergedHistories(t *testing.T) {
 	a, b := twoClones(t)
 	// Human curation on a, agent commit on b, both from the same tip.
-	writeMemory(t, a, "intentions.md", "curated by human\n")
+	writeMemory(t, a, "tasks.md", "curated by human\n")
 	if _, err := Commit(a, "human curation"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Push(a); err != nil {
 		t.Fatal(err)
 	}
-	writeMemory(t, b, "worklog.md", "agent fact\n")
+	writeMemory(t, b, "events.md", "agent fact\n")
 	if _, err := Commit(b, "agent fact"); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 	wtA := filepath.Join(a, "memory")
 	root := gitT(t, wtA, "rev-list", "--max-parents=0", "HEAD")
 	gitT(t, wtA, "reset", "-q", "--hard", root)
-	writeMemory(t, a, "worklog.md", "history rewritten\n")
+	writeMemory(t, a, "events.md", "history rewritten\n")
 	gitT(t, wtA, "add", "-A")
 	gitT(t, wtA, "commit", "-qm", "rewritten")
 	gitT(t, wtA, "push", "-q", "--force", "origin", "memory")
@@ -122,21 +122,21 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 	if !rep.Rewritten {
 		t.Fatalf("expected rewrite refusal, got %+v", rep)
 	}
-	if got, _ := os.ReadFile(filepath.Join(b, "memory", "worklog.md")); strings.Contains(string(got), "rewritten") {
+	if got, _ := os.ReadFile(filepath.Join(b, "memory", "events.md")); strings.Contains(string(got), "rewritten") {
 		t.Fatalf("b adopted rewritten content: %q", got)
 	}
 }
 
 func TestSyncReportsConflictAndAborts(t *testing.T) {
 	a, b := twoClones(t)
-	writeMemory(t, a, "worklog.md", "line from a\n")
+	writeMemory(t, a, "events.md", "line from a\n")
 	if _, err := Commit(a, "a edit"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Push(a); err != nil {
 		t.Fatal(err)
 	}
-	writeMemory(t, b, "worklog.md", "conflicting line from b\n")
+	writeMemory(t, b, "events.md", "conflicting line from b\n")
 	if _, err := Commit(b, "b edit"); err != nil {
 		t.Fatal(err)
 	}
