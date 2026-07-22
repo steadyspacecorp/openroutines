@@ -49,7 +49,7 @@ Every part of this design is deliberate. [DESIGN.md](DESIGN.md) records each dec
 
 ### Special sauce: versioned memory primitives
 
-One rule routes every fact an agent produces, into files any autonomous agent ends up needing -- so you never have to invent them:
+One rule routes everything an agent wants to remember, into files any autonomous agent ends up needing -- so you never have to invent them:
 
 - It happened → an event in **events.md** -- raw facts, including NO-OPs ("checked 5 PRs, no doc drift")
 - Someone must do it → a task in **tasks.md**, owned by the agent or a human -- one canonical record with a stable id, from discovery to resolution. The supervisor writes here too: a run it had to give up on becomes a human-owned task, so even failures that never got to explain themselves land on someone's list
