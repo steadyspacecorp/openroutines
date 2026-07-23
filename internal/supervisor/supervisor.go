@@ -272,9 +272,13 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 
 	switch res.Outcome {
 	case runner.Completed:
-		if err := memory.Import(s.Dir, staging.MemoryDir); err != nil {
+		discarded, err := runner.ImportMemory(s.Dir, r, staging)
+		if err != nil {
 			s.settleFailure(r, st, res, meta, now, "memory rejected: "+err.Error())
 			return
+		}
+		if discarded {
+			s.Log.Printf("%s: discarded staged events.md change (events: false)", r.Name)
 		}
 		runner.AdvanceConsumer(s.Dir, r, staging, p.RunID)
 		st.Watermark = p.CoveredThrough

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
@@ -108,14 +109,72 @@ func TestInstructionRendering(t *testing.T) {
 	if strings.Contains(full, "{{") {
 		t.Fatalf("template syntax leaked into instruction:\n%s", full)
 	}
+	for _, want := range []string{"it happened -> append an event", "state, not a log"} {
+		if !strings.Contains(full, want) {
+			t.Fatalf("instruction missing %q:\n%s", want, full)
+		}
+	}
+	if strings.Contains(full, "does not record events") {
+		t.Fatalf("no-events rule rendered for an events-recording routine:\n%s", full)
+	}
 	plain := render(routine.Frontmatter{Events: &off}, false)
-	for _, banned := range []string{"DRY RUN", "Every run appends", "Delivery inbox"} {
+	for _, banned := range []string{"DRY RUN", "Every run appends", "Delivery inbox", "append an event to memory/events.md"} {
 		if strings.Contains(plain, banned) {
 			t.Fatalf("conditional block %q rendered when its flag was off:\n%s", banned, plain)
+		}
+	}
+	for _, want := range []string{"does not record events", "never write to memory/events.md"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("events: false instruction missing %q:\n%s", want, plain)
 		}
 	}
 	agent.Variables = nil
 	if got := render(routine.Frontmatter{}, false); strings.Contains(got, "configuration variables") {
 		t.Fatalf("variables block rendered with no variables configured:\n%s", got)
+	}
+}
+
+// events: false is enforced at import, not just instructed: a staged change
+// to events.md is discarded (worktree copy wins) while the rest imports.
+func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
+	setup := func(t *testing.T) (string, *Staging) {
+		t.Helper()
+		dir := t.TempDir()
+		wt := filepath.Join(dir, memory.Dir)
+		if err := os.MkdirAll(wt, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(wt, "events.md"), []byte("base\n"), 0o644)
+		os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("none\n"), 0o644)
+		staging := &Staging{MemoryDir: t.TempDir()}
+		os.WriteFile(filepath.Join(staging.MemoryDir, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
+		os.WriteFile(filepath.Join(staging.MemoryDir, "tasks.md"), []byte("- [ ] real work\n"), 0o644)
+		return dir, staging
+	}
+
+	off := false
+	dir, staging := setup(t)
+	r := &routine.Routine{Name: "quiet", FM: routine.Frontmatter{Events: &off}}
+	discarded, err := ImportMemory(dir, r, staging)
+	if err != nil || !discarded {
+		t.Fatalf("discarded=%v err=%v, want true nil", discarded, err)
+	}
+	wt := filepath.Join(dir, memory.Dir)
+	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "base\n" {
+		t.Fatalf("events.md = %q, want staged change discarded", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(wt, "tasks.md")); string(got) != "- [ ] real work\n" {
+		t.Fatalf("tasks.md = %q, want staged change imported", got)
+	}
+
+	dir, staging = setup(t)
+	r = &routine.Routine{Name: "loud", FM: routine.Frontmatter{}}
+	discarded, err = ImportMemory(dir, r, staging)
+	if err != nil || discarded {
+		t.Fatalf("discarded=%v err=%v, want false nil", discarded, err)
+	}
+	wt = filepath.Join(dir, memory.Dir)
+	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "base\n- sneaky event\n" {
+		t.Fatalf("events.md = %q, want staged change imported for a recording routine", got)
 	}
 }

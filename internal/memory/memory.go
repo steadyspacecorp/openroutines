@@ -4,6 +4,7 @@
 package memory
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/fs"
@@ -275,6 +276,35 @@ func Import(repoDir, stagingDir string) error {
 		}
 		return nil
 	})
+}
+
+// RestoreFile puts the worktree's copy of one memory file back into the
+// staged tree, undoing whatever the run staged there. The enforcement half
+// of `events: false` (DESIGN.md "Memory records events, tasks, and
+// context"): the instruction tells the routine not to write the file, this
+// makes sure. Reports whether a staged change was discarded.
+func RestoreFile(repoDir, stagingDir, name string) (bool, error) {
+	src := filepath.Join(WorktreePath(repoDir), name)
+	dest := filepath.Join(stagingDir, name)
+	want, err := os.ReadFile(src)
+	if os.IsNotExist(err) {
+		// The worktree has no such file: the run must not create it either.
+		if _, serr := os.Stat(dest); os.IsNotExist(serr) {
+			return false, nil
+		}
+		return true, os.Remove(dest)
+	}
+	if err != nil {
+		return false, err
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if err == nil && bytes.Equal(got, want) {
+		return false, nil
+	}
+	return true, os.WriteFile(dest, want, 0o644)
 }
 
 // Commit records the current worktree state on the memory branch.
