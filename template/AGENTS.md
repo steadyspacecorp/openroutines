@@ -65,6 +65,11 @@ counts as delivered.
   instead -- same name mapping (`product_repo` -> `PRODUCT_REPO`), injected
   into every run. If a value is secret it's a credential; otherwise it's a
   variable.
+- A `credentials:` entry in `agent.yaml` may give a stored credential a
+  derived type (`type: github_app` plus `app_id`): the run then receives
+  short-lived material minted by the runner (`GITHUB_TOKEN` and the App's
+  Git identity) instead of the stored root secret. No entry means the value
+  injects verbatim.
 - `master.key` must never be committed or printed.
 - Two config files, two systems -- each belongs to the system that
   interprets it. `opencode.json` is the harness's: the permission policy
