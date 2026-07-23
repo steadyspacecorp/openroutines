@@ -473,39 +473,45 @@ func resolveCredentials(dir string, r *routine.Routine, model string, dryRun boo
 	return out, nil
 }
 
-// buildWorkspace copies the repo working tree into the run workspace,
-// excluding git metadata, the real memory worktree, secrets, and generated
-// definitions. Routine writes outside memory/ die with the workspace.
+// buildWorkspace assembles the run workspace by allow-list: exactly what a
+// run needs -- agent.yaml, opencode.json, and routines/. Everything else a
+// run sees is staged deliberately by the pipeline: declared skills, the
+// memory snapshot, the delivery inbox, the generated definition. A file not
+// on the list -- the encrypted credential store, a stray key, dev rules like
+// AGENTS.md -- does not exist in a run. (This replaced a deny-list that
+// missed exactly one entry, credentials.yml.enc; allow-lists don't have
+// that failure mode.)
 func buildWorkspace(dir, workspace string) error {
-	skip := map[string]bool{
-		".git":              true,
-		memory.Dir:          true,
-		".opencode":         true,
-		"skills":            true, // only declared skills travel in -- see copyDeclaredSkills
-		creds.KeyFileName:   true,
-		".openroutines-tmp": true,
-		// Development-session rules never reach runs: opencode loads a
-		// project-root AGENTS.md (or CLAUDE.md fallback) into any session's
-		// context, and those files are written for humans' coding agents.
-		// Runtime instructions travel only in the generated definition.
-		"AGENTS.md": true,
-		"CLAUDE.md": true,
+	for _, name := range []string{config.FileName, "opencode.json"} {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(workspace, name), raw, 0o644); err != nil {
+			return err
+		}
 	}
-	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	return copyTree(filepath.Join(dir, "routines"), filepath.Join(workspace, "routines"))
+}
+
+// copyTree copies a directory of regular files (no symlinks, no metadata).
+// A missing source is an empty tree, not an error.
+func copyTree(src, dst string) error {
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return nil
+	}
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(dir, path)
+		rel, err := filepath.Rel(src, path)
 		if err != nil || rel == "." {
 			return err
 		}
-		if skip[strings.Split(rel, string(filepath.Separator))[0]] {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		dest := filepath.Join(workspace, rel)
+		dest := filepath.Join(dst, rel)
 		if d.IsDir() {
 			return os.MkdirAll(dest, 0o755)
 		}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
@@ -47,25 +48,107 @@ func TestRealRunDefinitionAllowsActing(t *testing.T) {
 	}
 }
 
-// Dev-session rules files must never reach the run workspace: opencode would
-// load a project-root AGENTS.md into run context, and that file is written
-// for humans' coding agents, not routines.
-func TestWorkspaceExcludesDevRulesFiles(t *testing.T) {
+// The workspace is built by allow-list: exactly agent.yaml, opencode.json,
+// and routines/ travel in. This is the audit's headline test -- no
+// secret-shaped file (the encrypted store, keys) and no dev-session rules
+// file (AGENTS.md/CLAUDE.md, which opencode would load into run context)
+// may ever reach a run.
+func TestBuildWorkspaceAllowList(t *testing.T) {
 	dir := t.TempDir()
-	for _, f := range []string{"AGENTS.md", "CLAUDE.md", "agent.yaml"} {
-		os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644)
+	files := map[string]string{
+		"agent.yaml":            "name: t\n",
+		"opencode.json":         "{}",
+		"routines/daily.md":     "---\nschedule: \"0 9 * * *\"\n---\nwork",
+		"credentials.yml.enc":   "ORV1:ciphertext",
+		"master.key":            "hex",
+		"agent_deploy_key":      "PRIVATE KEY",
+		"AGENTS.md":             "dev rules",
+		"CLAUDE.md":             "dev rules",
+		"README.md":             "docs",
+		"Dockerfile":            "FROM x",
+		".openroutines-version": "v0",
+		"skills/s1/SKILL.md":    "skill",
+		"memory/events.md":      "events",
+		".git/config":           "git",
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	workspace := t.TempDir()
 	if err := buildWorkspace(dir, workspace); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"AGENTS.md", "CLAUDE.md"} {
-		if _, err := os.Stat(filepath.Join(workspace, f)); !os.IsNotExist(err) {
-			t.Fatalf("%s leaked into the run workspace", f)
+	for _, f := range []string{"agent.yaml", "opencode.json", "routines/daily.md"} {
+		if _, err := os.Stat(filepath.Join(workspace, f)); err != nil {
+			t.Errorf("%s should travel into the workspace: %v", f, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "agent.yaml")); err != nil {
-		t.Fatal("agent.yaml should travel into the workspace")
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"agent.yaml": true, "opencode.json": true, "routines": true}
+	for _, e := range entries {
+		if !allowed[e.Name()] {
+			t.Errorf("%s leaked into the run workspace", e.Name())
+		}
+	}
+}
+
+// The constructed environment holds exactly the declared credentials plus
+// the model's provider key -- the audit's second headline claim.
+func TestResolveCredentialsScope(t *testing.T) {
+	dir := t.TempDir()
+	key := creds.GenerateKey()
+	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := map[string]string{
+		"slack_webhook":     "hook-value",
+		"deploy_token":      "token-value",
+		"anthropic_api_key": "sk-ant-x",
+		"openai_api_key":    "sk-oai-x",
+	}
+	if err := creds.Write(dir, loaded, store); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"slack_webhook"}}}
+	got, err := resolveCredentials(dir, r, "anthropic/claude-sonnet-5", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"slack_webhook": "hook-value", "anthropic_api_key": "sk-ant-x"}
+	if len(got) != len(want) {
+		t.Fatalf("resolved %v, want exactly %v -- undeclared secrets must not exist in the run", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("resolved %v, want %v", got, want)
+		}
+	}
+
+	dry, err := resolveCredentials(dir, r, "anthropic/claude-sonnet-5", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dry) != 1 || dry["anthropic_api_key"] == "" {
+		t.Fatalf("dry run resolved %v, want only the provider key", dry)
+	}
+
+	r.FM.Credentials = []string{"missing_cred"}
+	if _, err := resolveCredentials(dir, r, "anthropic/claude-sonnet-5", false); err == nil {
+		t.Fatal("declaring an absent credential must fail the run, not proceed without it")
 	}
 }
 

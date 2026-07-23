@@ -13,10 +13,11 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
 
-// fakeOpencode is a stand-in for the real binary: it reads ./fake-mode from
-// the run workspace to decide whether to succeed (writing memory) or fail.
+// fakeOpencode is a stand-in for the real binary: it reads fake-mode from
+// its own directory (the workspace is allow-list built and carries no test
+// scaffolding) to decide whether to succeed (writing memory) or fail.
 const fakeOpencode = `#!/bin/sh
-mode=$(cat fake-mode 2>/dev/null || echo ok)
+mode=$(cat "$(dirname "$0")/fake-mode" 2>/dev/null || echo ok)
 case "$mode" in
   fail) echo "boom"; exit 1 ;;
   consume) cp inbox.md memory/inbox-copy.md
@@ -56,10 +57,9 @@ func fixture(t *testing.T, mode string) string {
 	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
 		"---\nschedule: \"* * * * *\"\n---\nDo the fake thing.\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "fake-mode"), []byte(mode+"\n"), 0o644)
-
 	binDir := t.TempDir()
 	os.WriteFile(filepath.Join(binDir, "opencode"), []byte(fakeOpencode), 0o755)
+	os.WriteFile(filepath.Join(binDir, "fake-mode"), []byte(mode+"\n"), 0o644)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("OPENROUTINES_NATIVE", "1") // tests use the fake opencode, not the container
 	return dir
@@ -249,7 +249,8 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	}
 
 	// After the cool-down, the model recovers: one success resets everything.
-	os.WriteFile(filepath.Join(dir, "fake-mode"), []byte("ok\n"), 0o644)
+	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(binDir, "fake-mode"), []byte("ok\n"), 0o644)
 	after := st.CooldownUntil.Add(time.Minute)
 	s.Tick(ctx, after)
 	if st = loadState(t, s); st.Pending != nil || st.ConsecutiveAbandons != 0 || st.CoolingDown(after) {

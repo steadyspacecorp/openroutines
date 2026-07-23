@@ -34,7 +34,10 @@ func ensureRuntimeImage(agentDir string) error {
 
 // containerCmd builds the docker run invocation for one attempt: the run
 // workspace mounted at /work, the constructed env passed through, nothing
-// else from the host visible.
+// else from the host visible. Env vars are passed by NAME only -- docker
+// resolves the values from the client process's environment -- so secret
+// values never appear on the command line (argv is world-readable via ps
+// for the duration of the run).
 func containerCmd(containerName, workspace string, env []string, ocArgs []string) *exec.Cmd {
 	args := []string{
 		"run", "--rm", "--init",
@@ -45,11 +48,16 @@ func containerCmd(containerName, workspace string, env []string, ocArgs []string
 		"-e", "TMPDIR=/work/.runtmp",
 	}
 	for _, kv := range env {
-		args = append(args, "-e", kv)
+		name, _, _ := strings.Cut(kv, "=")
+		args = append(args, "-e", name)
 	}
 	args = append(args, runtimeImageTag, "opencode")
 	args = append(args, ocArgs...)
-	return exec.Command("docker", args...)
+	cmd := exec.Command("docker", args...)
+	// The docker client needs its own environment (daemon socket, config)
+	// plus the values it will forward by name.
+	cmd.Env = append(os.Environ(), env...)
+	return cmd
 }
 
 // stopContainer terminates a run's container with the same semantics as a

@@ -2,9 +2,17 @@
 # never in main's history.
 memory/
 
-# The master key unlocks credentials.yml.enc. Local only; production gets it
-# as OPENROUTINES_MASTER_KEY.
+# The master key unlocks credentials.yml.enc. Local only; production reads
+# it from a mounted file (OPENROUTINES_MASTER_KEY_FILE) or env var.
 master.key
+
+# Belt and suspenders: no key material of any kind belongs in this repo.
+# Generate deploy keys outside it (see the README) -- these patterns catch
+# the accident anyway.
+*.key
+*.pem
+id_*
+*deploy_key*
 
 # Generated opencode agent definitions -- derived from routine frontmatter.
 .opencode/

@@ -1,6 +1,10 @@
-# Never bake these into an image: memory belongs to its branch, the master
-# key must arrive by environment variable, and generated/dev files are local.
+# Never bake these into an image: memory belongs to its branch, keys arrive
+# at boot (mounted file or env var), and generated/dev files are local.
 memory/
 master.key
+*.key
+*.pem
+id_*
+*deploy_key*
 .opencode/
 .openroutines-tmp/

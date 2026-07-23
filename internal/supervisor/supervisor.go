@@ -10,6 +10,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -22,11 +23,13 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 const (
@@ -47,6 +50,7 @@ type Supervisor struct {
 	syncBlocked   bool   // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool   // blocker already raised for the current sync problem
 	unreachWarned bool
+	secrets       map[string]string // the supervisor's own secrets, for redacting its output
 }
 
 func New(dir string) (*Supervisor, error) {
@@ -65,14 +69,43 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
+	secrets := supervisorSecrets(dir)
 	return &Supervisor{
 		Dir:        dir,
 		InstanceID: memory.InstanceID(),
-		Log:        log.New(os.Stdout, "", log.LstdFlags|log.LUTC),
+		Log:        log.New(scrub.NewWriter(os.Stdout, secrets), "", log.LstdFlags|log.LUTC),
 		loc:        loc,
 		retention:  retention,
 		noOrigin:   !memory.HasOrigin(dir),
+		secrets:    secrets,
 	}, nil
+}
+
+// supervisorSecrets collects the secret values the supervisor itself holds
+// -- the master key and the deploy key -- so its own log lines and memory
+// events can be redacted. (The model's output stream has its own scrubber,
+// seeded with the run's credentials.) A git error quoting an origin URL or
+// key material would otherwise be logged verbatim and committed to memory.
+// The deploy key is multi-line, and logs are scrubbed line by line, so each
+// substantial line registers as its own value.
+func supervisorSecrets(dir string) map[string]string {
+	out := map[string]string{}
+	if key, err := creds.LoadKey(dir); err == nil {
+		out["master_key"] = hex.EncodeToString(key)
+	}
+	deployKey := os.Getenv(memory.EnvDeployKey)
+	if path := os.Getenv(memory.EnvDeployKeyFile); deployKey == "" && path != "" {
+		if raw, err := os.ReadFile(path); err == nil {
+			deployKey = string(raw)
+		}
+	}
+	for i, line := range strings.Split(deployKey, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) >= 16 && !strings.HasPrefix(line, "-----") {
+			out[fmt.Sprintf("deploy_key_%d", i)] = line
+		}
+	}
+	return out
 }
 
 func (s *Supervisor) stateDir() string {
@@ -316,6 +349,9 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 // record, and -- past the attempt cap -- abandonment, which is a human-owned
 // task (someone must act) alongside the advanced watermark.
 func (s *Supervisor) settleFailure(r *routine.Routine, st *schedule.State, res *runner.ExecResult, meta runner.Meta, now time.Time, detail string) {
+	// Failure detail often quotes raw errors (git, provider); memory events
+	// are committed and pushed, so redact before recording.
+	detail = scrub.Redact(detail, s.secrets)
 	p := st.Pending
 	date := now.UTC().Format("2006-01-02")
 	_ = memory.AppendEvent(s.Dir, fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", date, r.Name, p.RunID, meta.AttemptID, detail))
@@ -371,6 +407,9 @@ func (s *Supervisor) syncOnce() {
 // task id is date-scoped so a supervisor restart doesn't re-record it --
 // AppendHumanTask skips ids already present.
 func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
+	// Sync/push failure text quotes raw git errors, which can carry a
+	// tokened origin URL -- and the message below is committed to memory.
+	msg = scrub.Redact(msg, s.secrets)
 	s.Log.Printf("BLOCKED: %s", msg)
 	if !*warned {
 		*warned = true
