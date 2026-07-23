@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
+	"golang.org/x/sys/unix"
 )
 
 // Apply restricts this process (and all its descendants) to read access on
@@ -30,6 +31,16 @@ func Apply(ro, rw []string) (string, error) {
 		return "", err
 	}
 	return "landlock v1", nil
+}
+
+// ProtectProcess marks this process non-dumpable: a same-UID process can no
+// longer read its /proc/<pid>/environ or mem, nor ptrace-attach, without
+// CAP_SYS_PTRACE. The supervisor calls this at boot, before any model
+// process exists -- its environment may carry the master and deploy keys,
+// and Landlock cannot help (it is a filesystem sandbox; procfs access
+// checks are ptrace-mode checks, and dumpable is what fails them).
+func ProtectProcess() error {
+	return unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
 }
 
 func existing(paths []string) []string {

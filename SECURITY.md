@@ -20,11 +20,18 @@ an agent to the version of the binary you run.
 
 - **Credential scoping**: a routine's process receives only the secrets its
   frontmatter declares, in an environment constructed from scratch. The
-  master key and deploy key never reach a model process.
+  master and deploy keys are delivered to the supervisor by file
+  (`OPENROUTINES_*_KEY_FILE`, preferred) or environment variable; the file
+  paths sit outside the model sandbox's rule set, and the supervisor marks
+  itself non-dumpable at boot, so same-UID model processes can read neither
+  its environment nor its memory. Running the model process under its own
+  UID is the remaining hardening step (tracked in the backlog).
 - **Filesystem confinement**: model processes run in a per-run container
   locally and under a Landlock sandbox in production -- read access to their
-  run workspace and the OS, write access to staged memory and tmp, nothing
-  else. Fails closed at boot.
+  run workspace, the OS, and the opencode installation; write access to
+  staged memory, the run tmp, and a disposable per-attempt HOME, nothing
+  else. Fails closed at boot, and a Linux-gated integration test asserts
+  each boundary on a real kernel.
 - **No ingress**: a deployed agent listens on nothing. Logs are the only way
   in.
 - **Git isolation**: model processes never touch a git worktree or metadata;

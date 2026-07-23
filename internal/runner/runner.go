@@ -227,22 +227,29 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 			return nil, nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
 		}
 		home := os.Getenv("HOME")
-		baseEnv := append(env,
-			"PATH="+os.Getenv("PATH"),
-			"HOME="+home, // opencode auth/config lives under HOME
-			"TMPDIR="+runTmp,
-		)
 		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 			// Production: the model process runs behind the Landlock shim --
 			// our own binary applies the rules to itself, then execs opencode.
 			// See DESIGN.md "Runs are sandboxed" for the fail-closed policy.
+			//
+			// HOME is a disposable per-attempt directory inside the workspace:
+			// a shared writable opencode home let one routine persist state --
+			// plugins included -- into a later routine's session. Provider
+			// auth arrives by env var, so opencode needs no durable home.
 			self, err := os.Executable()
 			if err != nil {
 				return nil, nil, err
 			}
-			ro, rw := sandbox.Paths(workspace, runTmp, home)
+			attemptHome := filepath.Join(workspace, ".home")
+			ro, rw := sandbox.Paths(workspace, runTmp, home, attemptHome)
 			cmd = exec.Command(self, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
-			cmd.Env = append(baseEnv,
+			cmd.Env = append(env,
+				"PATH="+os.Getenv("PATH"),
+				"HOME="+attemptHome,
+				"XDG_DATA_HOME="+filepath.Join(attemptHome, ".local", "share"),
+				"XDG_CONFIG_HOME="+filepath.Join(attemptHome, ".config"),
+				"XDG_CACHE_HOME="+filepath.Join(attemptHome, ".cache"),
+				"TMPDIR="+runTmp,
 				sandbox.EnvRO+"="+sandbox.JoinPaths(ro),
 				sandbox.EnvRW+"="+sandbox.JoinPaths(rw),
 				sandbox.EnvUnsafeOverride+"="+os.Getenv(sandbox.EnvUnsafeOverride),
@@ -250,8 +257,13 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		} else {
 			// OPENROUTINES_NATIVE=1: an explicit, unconfined dev opt-in
 			// (local user runs are confined by the run container instead).
+			// The developer's real HOME stays: their opencode auth lives there.
 			cmd = exec.Command("opencode", ocArgs...)
-			cmd.Env = baseEnv
+			cmd.Env = append(env,
+				"PATH="+os.Getenv("PATH"),
+				"HOME="+home,
+				"TMPDIR="+runTmp,
+			)
 		}
 		cmd.Dir = workspace
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

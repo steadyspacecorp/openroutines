@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	KeyFileName  = "master.key"
-	FileName     = "credentials.yml.enc"
-	EnvMasterKey = "OPENROUTINES_MASTER_KEY"
-	header       = "ORV1:" // versioned format header
+	KeyFileName      = "master.key"
+	FileName         = "credentials.yml.enc"
+	EnvMasterKey     = "OPENROUTINES_MASTER_KEY"
+	EnvMasterKeyFile = "OPENROUTINES_MASTER_KEY_FILE"
+	header           = "ORV1:" // versioned format header
 )
 
 // NamePattern constrains credential names: lowercase snake_case, so the
@@ -42,10 +43,22 @@ func GenerateKey() string {
 	return hex.EncodeToString(buf)
 }
 
-// LoadKey resolves the master key: the OPENROUTINES_MASTER_KEY environment
-// variable wins (production); otherwise the gitignored master.key file (local).
+// LoadKey resolves the master key, in order: the OPENROUTINES_MASTER_KEY_FILE
+// path (preferred in production -- a file never appears in /proc/pid/environ),
+// the OPENROUTINES_MASTER_KEY environment variable, then the gitignored
+// master.key file (local).
 func LoadKey(dir string) ([]byte, error) {
-	keyHex := strings.TrimSpace(os.Getenv(EnvMasterKey))
+	keyHex := ""
+	if path := os.Getenv(EnvMasterKeyFile); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", EnvMasterKeyFile, err)
+		}
+		keyHex = strings.TrimSpace(string(raw))
+	}
+	if keyHex == "" {
+		keyHex = strings.TrimSpace(os.Getenv(EnvMasterKey))
+	}
 	if keyHex == "" {
 		raw, err := os.ReadFile(filepath.Join(dir, KeyFileName))
 		if err != nil {

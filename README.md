@@ -137,11 +137,11 @@ An ORA deploys as a plain Docker container. Anything that runs a container runs 
 
 The one prerequisite is a git origin the agent can push to -- GitHub, GitLab, Gitea, even a bare repo on a VPS -- since that's where memory durably lives. (Local development needs no origin, and `openroutines check` verifies one before you deploy.)
 
-First, give the agent its own identity for pushing memory -- a deploy key scoped to this one repository:
+First, give the agent its own identity for pushing memory -- a deploy key scoped to this one repository. Generate it *outside* the agent repo (a private key must never sit in the repo or its image):
 
 ```bash
-ssh-keygen -t ed25519 -f agent_deploy_key -N "" -C "my-agent deploy key"
-gh repo deploy-key add agent_deploy_key.pub --allow-write --title "my-agent"
+ssh-keygen -t ed25519 -f ~/.keys/my-agent_deploy_key -N "" -C "my-agent deploy key"
+gh repo deploy-key add ~/.keys/my-agent_deploy_key.pub --allow-write --title "my-agent"
 ```
 
 Then build and run (the agent image builds `FROM` the openroutines base image on GHCR, which carries the supervisor and opencode; while that registry is private, `docker login ghcr.io` first):
@@ -149,15 +149,19 @@ Then build and run (the agent image builds `FROM` the openroutines base image on
 ```bash
 docker build -t my-agent .
 docker run -d --name my-agent --restart unless-stopped --stop-timeout 30 \
-  -e OPENROUTINES_MASTER_KEY=<contents of master.key> \
-  -e OPENROUTINES_DEPLOY_KEY="$(cat agent_deploy_key)" \
+  -v ~/.keys/my-agent-master.key:/run/secrets/master.key:ro \
+  -v ~/.keys/my-agent_deploy_key:/run/secrets/deploy_key:ro \
+  -e OPENROUTINES_MASTER_KEY_FILE=/run/secrets/master.key \
+  -e OPENROUTINES_DEPLOY_KEY_FILE=/run/secrets/deploy_key \
   my-agent
 ```
 
-The image contains the pinned `openroutines` binary, opencode, git, and your repo's `main` branch. The entrypoint is the supervisor: every minute it re-reads your routines' frontmatter and runs whatever is due. Two secrets arrive by environment variable, and neither is ever in the image:
+The image contains the pinned `openroutines` binary, opencode, git, and your repo's `main` branch. The entrypoint is the supervisor: every minute it re-reads your routines' frontmatter and runs whatever is due. Two secrets arrive at boot, and neither is ever in the image:
 
-- **`OPENROUTINES_MASTER_KEY`** decrypts the credentials file. Routines receive only the credentials their frontmatter declares.
-- **`OPENROUTINES_DEPLOY_KEY`** lets the agent push its memory. On boot the supervisor fetches the `memory` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
+- **The master key** (a copy of `master.key`) decrypts the credentials file. Routines receive only the credentials their frontmatter declares.
+- **The deploy key** lets the agent push its memory. On boot the supervisor fetches the `memory` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
+
+Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEPLOY_KEY_FILE` at the paths, as above -- file delivery keeps key material out of the process environment entirely. (On platforms where mounting a file is awkward, the values can arrive directly in `OPENROUTINES_MASTER_KEY` / `OPENROUTINES_DEPLOY_KEY` instead; the supervisor shields its environment from model processes either way.)
 
 A few properties fall out of the design (see [DESIGN.md](DESIGN.md) for the reasoning):
 

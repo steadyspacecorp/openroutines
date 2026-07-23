@@ -82,6 +82,12 @@ func (s *Supervisor) stateDir() string {
 // Run is the supervise loop: startup, then one Tick per minute until ctx is
 // cancelled, then shutdown (final commit and push, lease release).
 func (s *Supervisor) Run(ctx context.Context) error {
+	// The supervisor's environment may carry the master and deploy keys.
+	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
+	// same-UID model processes -- set before any child ever exists.
+	if err := sandbox.ProtectProcess(); err != nil {
+		s.Log.Printf("WARNING: could not mark supervisor non-dumpable: %v", err)
+	}
 	if configured, err := memory.ConfigureDeployKey(); err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	} else if configured {
