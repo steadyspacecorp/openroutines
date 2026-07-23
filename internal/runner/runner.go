@@ -332,7 +332,7 @@ func Run(dir, name string, keep bool) (*Result, error) {
 	}
 
 	if res.Outcome == Completed {
-		if err := memory.Import(dir, staging.MemoryDir); err != nil {
+		if _, err := ImportMemory(dir, r, staging); err != nil {
 			res.Outcome = Crashed
 			_ = memory.AppendEvent(dir, fmt.Sprintf("%s supervisor: routine %s (%s) memory rejected: %v", datestamp(), r.Name, runID, err))
 		} else {
@@ -350,6 +350,21 @@ func Run(dir, name string, keep bool) (*Result, error) {
 	}
 	res.Commit = commit
 	return res, nil
+}
+
+// ImportMemory applies routine-level memory policy, then imports the staged
+// tree. A routine with events: false cannot record events: a staged change
+// to events.md is discarded -- the worktree copy wins, the rest of the tree
+// imports normally. Reports whether such a change was discarded.
+func ImportMemory(dir string, r *routine.Routine, staging *Staging) (bool, error) {
+	discarded := false
+	if !r.FM.RecordsEvents() {
+		var err error
+		if discarded, err = memory.RestoreFile(dir, staging.MemoryDir, "events.md"); err != nil {
+			return false, err
+		}
+	}
+	return discarded, memory.Import(dir, staging.MemoryDir)
 }
 
 // prepareInbox fixes the delivery boundary at the memory branch's current

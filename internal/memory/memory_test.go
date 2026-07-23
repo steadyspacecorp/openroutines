@@ -49,6 +49,50 @@ func TestValidateRejectsOversizedFile(t *testing.T) {
 	}
 }
 
+func TestRestoreFileDiscardsStagedChange(t *testing.T) {
+	repo := t.TempDir()
+	wt := WorktreePath(repo)
+	os.MkdirAll(wt, 0o755)
+	os.WriteFile(filepath.Join(wt, "events.md"), []byte("base\n"), 0o644)
+	staging := t.TempDir()
+
+	// A staged edit is undone: the worktree copy wins.
+	os.WriteFile(filepath.Join(staging, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
+	changed, err := RestoreFile(repo, staging, "events.md")
+	if err != nil || !changed {
+		t.Fatalf("edited file: changed=%v err=%v, want true nil", changed, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(staging, "events.md")); string(got) != "base\n" {
+		t.Fatalf("staged events.md = %q, want worktree copy restored", got)
+	}
+
+	// An untouched file reports no change.
+	changed, err = RestoreFile(repo, staging, "events.md")
+	if err != nil || changed {
+		t.Fatalf("untouched file: changed=%v err=%v, want false nil", changed, err)
+	}
+
+	// A staged deletion is undone too -- import would otherwise delete it.
+	os.Remove(filepath.Join(staging, "events.md"))
+	changed, err = RestoreFile(repo, staging, "events.md")
+	if err != nil || !changed {
+		t.Fatalf("deleted file: changed=%v err=%v, want true nil", changed, err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "events.md")); err != nil {
+		t.Fatal("staged events.md not restored after deletion")
+	}
+
+	// A file the worktree never had must not be created through staging.
+	os.WriteFile(filepath.Join(staging, "novel.md"), []byte("x\n"), 0o644)
+	changed, err = RestoreFile(repo, staging, "novel.md")
+	if err != nil || !changed {
+		t.Fatalf("created file: changed=%v err=%v, want true nil", changed, err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "novel.md")); !os.IsNotExist(err) {
+		t.Fatal("staged novel.md should have been removed")
+	}
+}
+
 // A second clone (a new container generation) must adopt the existing memory
 // branch from origin instead of minting a fresh root.
 func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
