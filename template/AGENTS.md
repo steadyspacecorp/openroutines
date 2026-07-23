@@ -61,6 +61,10 @@ counts as delivered.
   `credentials.yml.enc` by hand). Credential names are lowercase snake_case
   and become env vars (`slack_webhook` -> `SLACK_WEBHOOK`) only in runs that
   declare them.
+- Non-secret configuration goes in the `variables:` map in `agent.yaml`
+  instead -- same name mapping (`product_repo` -> `PRODUCT_REPO`), injected
+  into every run. If a value is secret it's a credential; otherwise it's a
+  variable.
 - `master.key` must never be committed or printed.
 - Do not edit `opencode.json`: it is the agent's permission policy, nothing
   else. Model and provider choice belong in `agent.yaml` defaults and routine

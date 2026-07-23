@@ -2,8 +2,10 @@ package cli
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,6 +33,10 @@ func cmdStatus(args []string) int {
 	fmt.Printf("owner      %s <%s>\n", orUnset(agent.Owner.Name), orUnset(agent.Owner.Email))
 	fmt.Printf("timezone   %s\n", orUnset(agent.Timezone))
 	fmt.Printf("model      %s (default)\n", orUnset(agent.Defaults.Model))
+	if len(agent.Variables) > 0 {
+		names := slices.Sorted(maps.Keys(agent.Variables))
+		fmt.Printf("variables  %s\n", strings.Join(names, ", "))
+	}
 	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines-version")); err == nil {
 		fmt.Printf("framework  %s (pinned; this binary is %s)\n", strings.TrimSpace(string(pin)), version.Version)
 	}

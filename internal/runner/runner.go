@@ -16,9 +16,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"text/template"
@@ -198,6 +200,14 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	}
 	for k, v := range secrets {
 		env = append(env, strings.ToUpper(k)+"="+v)
+	}
+	// Non-secret variables from agent.yaml, injected into every run (dry runs
+	// included). On a name collision the credential wins; check flags it.
+	for _, k := range slices.Sorted(maps.Keys(agent.Variables)) {
+		if _, taken := secrets[k]; taken {
+			continue
+		}
+		env = append(env, strings.ToUpper(k)+"="+agent.Variables[k])
 	}
 
 	// The opencode invocation is identical across spawn paths.
@@ -545,6 +555,7 @@ type instructionData struct {
 	IsConsumer    bool
 	Inbox         string
 	Marker        string
+	Variables     string // "$PRODUCT_REPO, $DOCS_URL" -- empty when none configured
 }
 
 // writeAgentDefinition generates the opencode agent for this run: default-deny
@@ -580,6 +591,7 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 		IsConsumer:    r.FM.IsConsumer(),
 		Inbox:         memory.InboxFileName,
 		Marker:        memory.ConsumeMarker,
+		Variables:     variablesLine(agent),
 	}); err != nil {
 		return err
 	}
@@ -589,6 +601,17 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "routine.md"), []byte(b.String()), 0o644)
+}
+
+// variablesLine renders the agent's variable names for the standing
+// instruction ("$PRODUCT_REPO, $DOCS_URL"), so the model knows they exist
+// without probing the environment.
+func variablesLine(agent *config.Agent) string {
+	names := slices.Sorted(maps.Keys(agent.Variables))
+	for i, n := range names {
+		names[i] = "$" + strings.ToUpper(n)
+	}
+	return strings.Join(names, ", ")
 }
 
 // killGroup terminates the run's whole process group: SIGTERM, grace, SIGKILL.

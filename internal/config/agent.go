@@ -4,13 +4,16 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 )
 
@@ -33,13 +36,16 @@ type Memory struct {
 }
 
 // Agent is the parsed agent.yaml. Description is the agent's job description.
+// Variables are non-secret configuration values, injected into every run's
+// environment (product_repo -> PRODUCT_REPO); secrets belong in credentials.
 type Agent struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Owner       Owner    `yaml:"owner"`
-	Timezone    string   `yaml:"timezone"`
-	Defaults    Defaults `yaml:"defaults"`
-	Memory      *Memory  `yaml:"memory,omitempty"`
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	Owner       Owner             `yaml:"owner"`
+	Timezone    string            `yaml:"timezone"`
+	Defaults    Defaults          `yaml:"defaults"`
+	Memory      *Memory           `yaml:"memory,omitempty"`
+	Variables   map[string]string `yaml:"variables,omitempty"`
 }
 
 // Retention returns the configured memory retention string ("" = default).
@@ -107,5 +113,19 @@ func (a *Agent) Problems() []string {
 	if _, err := memory.ParseRetention(a.Retention()); err != nil {
 		out = append(out, fmt.Sprintf("memory.retention: %v", err))
 	}
+	for _, name := range slices.Sorted(maps.Keys(a.Variables)) {
+		switch {
+		case !creds.NamePattern.MatchString(name):
+			out = append(out, fmt.Sprintf("variable name %q must be lowercase snake_case", name))
+		case strings.HasPrefix(name, creds.ReservedPrefix):
+			out = append(out, fmt.Sprintf("variable name %q collides with the reserved %s_* prefix", name, strings.ToUpper(creds.ReservedPrefix)))
+		case reservedEnvNames[name]:
+			out = append(out, fmt.Sprintf("variable name %q collides with the %s environment variable", name, strings.ToUpper(name)))
+		}
+	}
 	return out
 }
+
+// reservedEnvNames are env vars the framework itself constructs for a run --
+// a variable must not shadow them.
+var reservedEnvNames = map[string]bool{"tz": true, "path": true, "home": true, "tmpdir": true}

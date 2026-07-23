@@ -87,6 +87,7 @@ func TestInstructionRendering(t *testing.T) {
 		return string(raw)
 	}
 
+	agent.Variables = map[string]string{"product_repo": "acme/widgets", "docs_url": "https://docs.example.com"}
 	off := false
 	full := render(routine.Frontmatter{Consumes: "memory"}, true)
 	for _, want := range []string{
@@ -98,6 +99,7 @@ func TestInstructionRendering(t *testing.T) {
 		"Full facts with real links",
 		"./inbox.md",
 		"./CONSUMED",
+		"$DOCS_URL, $PRODUCT_REPO",
 	} {
 		if !strings.Contains(full, want) {
 			t.Fatalf("instruction missing %q:\n%s", want, full)
@@ -111,5 +113,9 @@ func TestInstructionRendering(t *testing.T) {
 		if strings.Contains(plain, banned) {
 			t.Fatalf("conditional block %q rendered when its flag was off:\n%s", banned, plain)
 		}
+	}
+	agent.Variables = nil
+	if got := render(routine.Frontmatter{}, false); strings.Contains(got, "configuration variables") {
+		t.Fatalf("variables block rendered with no variables configured:\n%s", got)
 	}
 }

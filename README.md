@@ -125,6 +125,8 @@ openroutines credentials set <name>   # add/replace one encrypted secret; also: 
 openroutines check                    # validate config, frontmatter, and schedules; made for CI
 ```
 
+Non-secret configuration -- a repo name, a docs URL -- goes in a `variables:` map in `agent.yaml`, and every run receives each one as an environment variable (`product_repo` becomes `$PRODUCT_REPO`). Secrets go in encrypted credentials instead; inside a routine the interface is the same either way, so the only question a value raises is whether it's secret.
+
 Skills follow the open [Agent Skills](https://agentskills.io/) standard, so any skill written for Claude Code, Cursor, opencode, or the rest of the ecosystem works in your agent's `skills/` directory unchanged. A routine only gets the skills its frontmatter declares. And treat a skill like the dependency it is: instructions -- sometimes code -- that your agent will follow unattended. Review what you vendor in.
 
 To contribute to openroutines itself, clone this repo -- see [License and contributing](#license-and-contributing).

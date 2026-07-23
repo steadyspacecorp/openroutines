@@ -128,6 +128,15 @@ func cmdCheck(args []string) int {
 				}
 			}
 		}
+		// A variable sharing a credential's name would be shadowed in the
+		// run environment (the credential wins) -- rename one of them.
+		if agent != nil {
+			for name := range agent.Variables {
+				if _, ok := store[name]; ok {
+					failf("variable %q collides with a stored credential -- the credential wins in the run environment", name)
+				}
+			}
+		}
 	}
 
 	// opencode.json should stay a permission policy: model and provider
