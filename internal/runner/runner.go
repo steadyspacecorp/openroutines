@@ -616,11 +616,16 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 	b.WriteString("mode: primary\n")
 	b.WriteString("permission:\n")
 	if meta.DryRun {
-		// Dry run: the acting tools are denied at the permission layer --
-		// the model cannot reach out even if it tries.
-		b.WriteString("  bash: deny\n")
-		b.WriteString("  webfetch: deny\n")
-		b.WriteString("  websearch: deny\n")
+		// Dry run: deny-all first, then allow only what reading memory and
+		// writing the (discarded) staged copy requires. Permission keys are
+		// wildcard patterns over the underlying tool name -- built-ins,
+		// custom tools, and MCP tools alike -- so "*" closes the whole
+		// space, not just the three acting tools we can name. Order
+		// matters: last matching rule wins.
+		b.WriteString("  \"*\": deny\n")
+		for _, tool := range []string{"read", "grep", "glob", "list", "edit", "write", "patch", "todowrite", "todoread"} {
+			fmt.Fprintf(&b, "  %s: allow\n", tool)
+		}
 	}
 	b.WriteString("  skill:\n")
 	b.WriteString("    \"*\": deny\n") // order matters: last matching rule wins

@@ -27,11 +27,23 @@ func genDef(t *testing.T, meta Meta) string {
 	return string(raw)
 }
 
-func TestDryRunDefinitionDeniesActingTools(t *testing.T) {
+// A dry run's permission block is deny-all-first: "*" matches every tool
+// name -- built-ins, custom tools, MCP tools -- so nothing outside the
+// explicit read/write-memory set can start, not just the three acting tools
+// we can name. The wildcard must precede the allows (last match wins).
+func TestDryRunDefinitionDeniesAllToolsFirst(t *testing.T) {
 	def := genDef(t, Meta{RunID: "run_t", DryRun: true})
-	for _, want := range []string{"bash: deny", "webfetch: deny", "websearch: deny", "DRY RUN", `"s1": allow`} {
+	for _, want := range []string{`"*": deny`, "read: allow", "write: allow", "DRY RUN", `"s1": allow`} {
 		if !strings.Contains(def, want) {
 			t.Fatalf("dry-run definition missing %q:\n%s", want, def)
+		}
+	}
+	if strings.Index(def, `"*": deny`) > strings.Index(def, "read: allow") {
+		t.Fatalf("wildcard deny must precede the allows (last match wins):\n%s", def)
+	}
+	for _, banned := range []string{"bash: allow", "webfetch: allow", "task: allow"} {
+		if strings.Contains(def, banned) {
+			t.Fatalf("dry-run definition wrongly allows %q:\n%s", banned, def)
 		}
 	}
 }
