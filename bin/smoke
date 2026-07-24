@@ -47,13 +47,45 @@ fi
 rm routines/broken.md
 step "check fails on a broken routine"
 
+# opencode.json is the harness's config: the permission policy plus custom
+# provider endpoint definitions. A provider block is legitimate content --
+# check accepts it without a drift warning, flags the id when no model
+# string references it (usually a typo on one side), and update must leave
+# the whole file byte for byte alone.
+cat > opencode.json <<'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "skill": {
+      "*": "deny"
+    },
+    "question": "deny"
+  },
+  "provider": {
+    "smoke_gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "https://gateway.example.invalid/compat" }
+    }
+  }
+}
+EOF
+run check || die "check with a provider block in opencode.json"
+if grep -q 'opencode.json contains' "$work/out"; then
+  die "check flagged a provider block as drift"
+fi
+grep -q 'provider "smoke_gateway" in opencode.json is not referenced' "$work/out" || die "check did not flag the unreferenced provider"
+step "check accepts provider config and flags unreferenced ids"
+
 # update: brings an agent to the running binary's version, rewriting
 # framework-owned files (non-interactive stdin applies automatically).
+# opencode.json is user config: update must never rewrite it.
+cp opencode.json "$work/opencode.json.seeded"
 echo "v0.0.0-old" > .openroutines-version
 sed -i.bak 's/openroutines:v[^ ]* AS agent/openroutines:v0.0.0-old AS agent/' Dockerfile && rm -f Dockerfile.bak
 "$bin" update </dev/null >"$work/out" 2>&1 || die "update"
 grep -q "$("$bin" version)" .openroutines-version || die "update did not bump the pin"
 grep -q "openroutines:$("$bin" version) AS agent" Dockerfile || die "update did not rewrite the FROM tag"
-step "update bumps the pin and rewrites the base-image tag"
+cmp -s opencode.json "$work/opencode.json.seeded" || die "update rewrote opencode.json"
+step "update bumps the pin, rewrites the base-image tag, leaves opencode.json alone"
 
 echo "smoke: OK"
