@@ -87,9 +87,16 @@ func cmdConfigure(args []string) int {
 	}
 	fmt.Printf("Wrote %s (%d credential(s))\n", creds.FileName, len(store))
 
-	// Report what's still missing rather than failing.
-	if problems := agent.Problems(); len(problems) > 0 {
-		fmt.Println("\nStill needed:")
+	// Report what's still missing rather than failing -- and never call the
+	// agent configured while its model has no way to authenticate: the
+	// first-run failure that causes is opaque (an opencode server error),
+	// and in production it burns retry attempts before anyone learns why.
+	problems := agent.Problems()
+	if _, ok := store[providerKey]; !ok {
+		problems = append(problems, fmt.Sprintf("provider authentication: the default model needs %s (openroutines credentials set %s)", providerKey, providerKey))
+	}
+	if len(problems) > 0 {
+		fmt.Println("\nConfiguration saved. Still needed:")
 		for _, p := range problems {
 			fmt.Printf("  - %s\n", p)
 		}

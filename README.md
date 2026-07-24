@@ -74,7 +74,19 @@ Prerequisites:
 
 That's the whole list. You don't install opencode or any language runtime -- everything the agent runs on ships inside the container.
 
-Install the `openroutines` CLI:
+Install the `openroutines` CLI. **While this repo is private**, brew and the install script are not live yet -- install from [Releases](../../releases) instead:
+
+```bash
+# pick your platform: darwin|linux, arm64|amd64
+gh release download --repo steadyspacecorp/openroutines --pattern "openroutines_*_darwin_arm64" --pattern "checksums.txt" -D /tmp/or
+(cd /tmp/or && shasum -a 256 -c --ignore-missing checksums.txt)
+chmod +x /tmp/or/openroutines_* && mv /tmp/or/openroutines_* ~/bin/openroutines   # any dir on your PATH
+openroutines --version
+```
+
+(On macOS, always install by moving the file into place as above -- overwriting a running binary in place invalidates the kernel's signature cache. The darwin binaries are ad-hoc signed; Gatekeeper does not quarantine files downloaded via `gh`.)
+
+Once public, installation becomes:
 
 ```bash
 brew install openroutines

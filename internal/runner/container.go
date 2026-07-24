@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -12,7 +13,18 @@ import (
 // supervisor side (staging, validation, git) is trusted code, while opencode
 // and everything it spawns sees only the mounted, git-free run workspace.
 
-const runtimeImageTag = "openroutines-runtime:local"
+// runtimeImageTag derives the local runtime image tag from the agent's
+// version pin, so two agent repos with different pins can't retag each
+// other's image between build and run (a shared :local tag could).
+func runtimeImageTag(agentDir string) string {
+	pin := "local"
+	if raw, err := os.ReadFile(filepath.Join(agentDir, ".openroutines-version")); err == nil {
+		if v := strings.TrimSpace(string(raw)); v != "" {
+			pin = v
+		}
+	}
+	return "openroutines-runtime:" + pin
+}
 
 // nativeMode reports whether to spawn opencode directly instead of in a
 // container: inside the production image (which ships opencode), or when a
@@ -22,9 +34,14 @@ func nativeMode() bool {
 }
 
 // ensureRuntimeImage builds the Dockerfile's runtime stage (debian + git +
-// pinned opencode). Layer caching makes every build after the first fast.
-func ensureRuntimeImage(agentDir string) error {
-	cmd := exec.Command("docker", "build", "--quiet", "--target", "runtime", "-t", runtimeImageTag, agentDir)
+// pinned opencode). Layer caching makes every build after the first fast --
+// but the first build downloads a Debian base and opencode, so say so: a
+// silent multi-minute wait reads as a hang and gets Ctrl-C'd.
+func ensureRuntimeImage(agentDir, tag string) error {
+	if err := exec.Command("docker", "image", "inspect", tag).Run(); err != nil {
+		fmt.Printf("building the local runtime image (first build downloads the base image and opencode -- this can take a few minutes)...\n")
+	}
+	cmd := exec.Command("docker", "build", "--quiet", "--target", "runtime", "-t", tag, agentDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("building runtime image failed (is Docker running?): %v\n%s", err, strings.TrimSpace(string(out)))
@@ -38,7 +55,7 @@ func ensureRuntimeImage(agentDir string) error {
 // resolves the values from the client process's environment -- so secret
 // values never appear on the command line (argv is world-readable via ps
 // for the duration of the run).
-func containerCmd(containerName, workspace string, env []string, ocArgs []string) *exec.Cmd {
+func containerCmd(containerName, workspace, image string, env []string, ocArgs []string) *exec.Cmd {
 	args := []string{
 		"run", "--rm", "--init",
 		"--name", containerName,
@@ -51,7 +68,7 @@ func containerCmd(containerName, workspace string, env []string, ocArgs []string
 		name, _, _ := strings.Cut(kv, "=")
 		args = append(args, "-e", name)
 	}
-	args = append(args, runtimeImageTag, "opencode")
+	args = append(args, image, "opencode")
 	args = append(args, ocArgs...)
 	cmd := exec.Command("docker", args...)
 	// The docker client needs its own environment (daemon socket, config)

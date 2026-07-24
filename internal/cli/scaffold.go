@@ -63,9 +63,25 @@ func cmdScaffold(args []string) int {
 		return fail(err)
 	}
 
-	// A fresh agent is a fresh git repository.
+	// A fresh agent is a fresh git repository, with the scaffold as its
+	// initial commit -- so configure's changes land as a reviewable diff
+	// and git log works from minute one.
 	if out, err := exec.Command("git", "init", "--quiet", "--initial-branch=main", target).CombinedOutput(); err != nil {
 		return fail(fmt.Errorf("git init: %v: %s", err, out))
+	}
+	git := func(args ...string) error {
+		cmd := exec.Command("git", append([]string{"-C", target}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+		return nil
+	}
+	if err := git("add", "-A"); err != nil {
+		return fail(err)
+	}
+	if err := git("-c", "user.name=openroutines", "-c", "user.email=agent@openroutines.dev", "commit", "--quiet", "-m", "Scaffold agent "+name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not create the initial commit: %v\n", err)
 	}
 
 	fmt.Printf("Created agent %q at %s\n\nNext steps:\n  cd %s\n  openroutines configure\n", name, target, target)

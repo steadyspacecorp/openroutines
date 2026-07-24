@@ -16,11 +16,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -55,12 +57,36 @@ type Meta struct {
 	DryRun         bool   // routines test: acting tools denied, credentials withheld
 }
 
-// ExecResult is one attempt's outcome.
+// ExecResult is one attempt's outcome. Hint, when set, classifies a common
+// failure (currently: provider authentication) so it surfaces as a
+// configuration problem instead of an opaque crash.
 type ExecResult struct {
 	Outcome  Outcome
 	ExitCode int
 	Duration time.Duration
+	Hint     string
 }
+
+// tailBuffer keeps the last max bytes written -- enough to classify a
+// failure from the end of the run's output without holding all of it.
+type tailBuffer struct {
+	buf []byte
+	max int
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		t.buf = t.buf[len(t.buf)-t.max:]
+	}
+	return len(p), nil
+}
+
+// authFailurePattern matches provider authentication errors in run output.
+// A bad or missing API key otherwise reports as a bare "crashed" -- and in
+// production burns five attempts and trips the circuit breaker before a
+// human learns the cause was configuration.
+var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key`)
 
 // Staging is the attempt's staged memory, awaiting import or discard.
 type Staging struct {
@@ -89,6 +115,7 @@ type Result struct {
 	ExitCode int
 	Duration time.Duration
 	Commit   string // memory commit hash, when one was made
+	Hint     string // classified failure cause, when one was recognized
 }
 
 const runIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -273,13 +300,15 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		if _, err := exec.LookPath("docker"); err != nil {
 			return nil, nil, fmt.Errorf("docker is required to run routines -- the model process executes in a container (see README prerequisites); contributors with opencode installed locally can set OPENROUTINES_NATIVE=1")
 		}
-		if err := ensureRuntimeImage(dir); err != nil {
+		image := runtimeImageTag(dir)
+		if err := ensureRuntimeImage(dir, image); err != nil {
 			return nil, nil, err
 		}
 		containerName = "openroutines-" + meta.RunID
-		cmd = containerCmd(containerName, workspace, env, ocArgs)
+		cmd = containerCmd(containerName, workspace, image, env, ocArgs)
 	}
-	scrubber := scrub.NewWriter(os.Stdout, secrets)
+	tail := &tailBuffer{max: 4096}
+	scrubber := scrub.NewWriter(io.MultiWriter(os.Stdout, tail), secrets)
 	cmd.Stdout = scrubber
 	cmd.Stderr = scrubber
 
@@ -317,6 +346,10 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	}
 	res.Duration = time.Since(started).Round(time.Millisecond)
 	scrubber.Flush()
+	if res.Outcome == Crashed && authFailurePattern.Match(tail.buf) {
+		provider := strings.SplitN(model, "/", 2)[0]
+		res.Hint = fmt.Sprintf("provider authentication failed -- the %s key looks missing or invalid (openroutines credentials set %s)", provider, creds.ProviderKeyName(provider))
+	}
 
 	ok = true
 	return res, staging, nil
@@ -348,7 +381,7 @@ func Run(dir, name string, keep bool) (*Result, error) {
 	}
 	defer staging.Cleanup()
 
-	res := &Result{RunID: runID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration}
+	res := &Result{RunID: runID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
 	if !keep {
 		return res, nil // test: discard staging, record nothing
 	}
@@ -654,6 +687,23 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "routine.md"), []byte(b.String()), 0o644)
+}
+
+// RenderDefinition generates a routine's opencode agent definition exactly
+// as a run would, without running anything. check uses it to validate
+// routine wiring -- frontmatter through generated definition -- offline,
+// with no provider key and no Docker.
+func RenderDefinition(agent *config.Agent, r *routine.Routine, dryRun bool) (string, error) {
+	ws, err := os.MkdirTemp("", "openroutines-render-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(ws)
+	if err := writeAgentDefinition(ws, agent, r, Meta{RunID: "run_check", AttemptID: "attempt_00", DryRun: dryRun}); err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(filepath.Join(ws, ".opencode", "agents", "routine.md"))
+	return string(raw), err
 }
 
 // variablesLine renders the agent's variable names for the standing

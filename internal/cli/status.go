@@ -51,7 +51,11 @@ func cmdStatus(args []string) int {
 		for k := range store {
 			names = append(names, k)
 		}
-		fmt.Printf("master key present -- %d credential(s): %s\n", len(store), strings.Join(names, ", "))
+		if len(names) == 0 {
+			fmt.Printf("master key present -- no credentials stored yet\n")
+		} else {
+			fmt.Printf("master key present -- %d credential(s): %s\n", len(store), strings.Join(names, ", "))
+		}
 	}
 
 	// Routines.

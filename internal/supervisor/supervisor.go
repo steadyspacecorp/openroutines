@@ -364,7 +364,11 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		_ = memory.AppendRunRecord(s.Dir, runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
 		s.Log.Printf("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
 	default:
-		s.settleFailure(r, st, res, meta, now, fmt.Sprintf("%s after %s (exit %d)", res.Outcome, res.Duration, res.ExitCode))
+		detail := fmt.Sprintf("%s after %s (exit %d)", res.Outcome, res.Duration, res.ExitCode)
+		if res.Hint != "" {
+			detail += " -- " + res.Hint
+		}
+		s.settleFailure(r, st, res, meta, now, detail)
 	}
 }
 

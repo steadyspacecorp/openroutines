@@ -16,6 +16,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
@@ -108,6 +109,16 @@ func cmdCheck(args []string) int {
 		if r.Body == "" {
 			errs = append(errs, "empty prompt body")
 		}
+		// Offline wiring validation: render the generated agent definition
+		// (both modes) exactly as a run would -- no provider key, no Docker.
+		if agent != nil {
+			for _, dry := range []bool{false, true} {
+				if _, rerr := runner.RenderDefinition(agent, r, dry); rerr != nil {
+					errs = append(errs, fmt.Sprintf("generated definition: %v", rerr))
+					break
+				}
+			}
+		}
 		if len(errs) == 0 {
 			state := "active"
 			if !r.FM.IsActive() {
@@ -124,14 +135,43 @@ func cmdCheck(args []string) int {
 		warnf("no routines defined")
 	}
 
+	// Provider-auth readiness: every active routine's effective model needs
+	// its provider key. Runs construct a clean environment, so there is no
+	// ambient fallback in the container -- without the key, the first run
+	// fails inside opencode with an opaque error, and production burns
+	// retry attempts before anyone learns why.
+	providerNeeds := map[string][]string{}
+	if agent != nil {
+		for _, r := range routines {
+			if !r.FM.IsActive() {
+				continue
+			}
+			model, merr := runner.EffectiveModel(agent, r)
+			if merr != nil {
+				continue // already reported against agent.yaml/frontmatter
+			}
+			keyName := creds.ProviderKeyName(strings.SplitN(model, "/", 2)[0])
+			providerNeeds[keyName] = append(providerNeeds[keyName], r.Name)
+		}
+	}
+
 	// Credentials store
 	fmt.Println("credentials")
 	if key, err := creds.LoadKey(dir); err != nil {
-		warnf("%v", err)
+		if len(providerNeeds) > 0 {
+			failf("%v -- active routines cannot authenticate to their model provider without it", err)
+		} else {
+			warnf("%v", err)
+		}
 	} else if store, err := creds.Read(dir, key); err != nil {
 		failf("%v", err)
 	} else {
 		okf("credentials decrypt (%d stored)", len(store))
+		for keyName, users := range providerNeeds {
+			if _, ok := store[keyName]; !ok {
+				failf("%s not set -- %s cannot authenticate (openroutines credentials set %s)", keyName, strings.Join(users, ", "), keyName)
+			}
+		}
 		// Every declared credential must exist in the store.
 		for _, r := range routines {
 			for _, c := range r.FM.Credentials {
@@ -187,6 +227,11 @@ func cmdCheck(args []string) int {
 		warnf("no git origin -- required before deploy (memory needs a durable home)")
 	} else {
 		okf("origin %s", strings.TrimSpace(string(out)))
+	}
+	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines-version")); err == nil {
+		if v := strings.TrimSpace(string(pin)); strings.Contains(v, "-dev") {
+			warnf("pinned %s -- a source-build version; the base image tag for it does not exist, so this agent cannot deploy until the pin points at a release", v)
+		}
 	}
 
 	fmt.Println()

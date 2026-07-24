@@ -56,7 +56,7 @@ const routinesUsage = `Manage this agent's routines (markdown files in routines/
 
 Usage:
   openroutines routines new <name>         create a routine (inactive until you activate it)
-  openroutines routines list               names, ids, schedules, grants
+  openroutines routines list               names, schedules, grants
   openroutines routines run <name>         run once now; memory writes are kept
   openroutines routines test <name>        dry run: outbound tools disabled, credentials withheld,
                                            intended actions narrated, memory writes discarded
@@ -83,8 +83,11 @@ func routinesRun(args []string, keep bool) int {
 		return fail(err)
 	}
 	fmt.Printf("\n%s: %s in %s (run %s)\n", name, res.Outcome, res.Duration, res.RunID)
+	if res.Hint != "" {
+		fmt.Println(res.Hint)
+	}
 	if !keep {
-		fmt.Println("dry run: outbound tools were disabled and credentials withheld; memory writes discarded, nothing recorded")
+		fmt.Println("dry run: outbound tools were disabled and credentials withheld; routine memory writes discarded (first runs may still have initialized the memory worktree)")
 	} else if res.Commit != "" {
 		fmt.Printf("memory updated: commit %s on the %s branch\n", res.Commit, "memory")
 	}
