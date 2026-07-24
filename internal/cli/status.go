@@ -78,7 +78,7 @@ func cmdStatus(args []string) int {
 		if n := len(r.FM.Skills) + len(r.FM.Credentials); n > 0 {
 			grants = fmt.Sprintf(" (%d grant(s))", n)
 		}
-		fmt.Printf("  %-20s %-14s %s%s%s\n", r.Name, r.FM.Schedule, state, next, grants)
+		fmt.Printf("  %-20s %-14s %s%s%s\n", r.Name, scheduleSummary(r), state, next, grants)
 	}
 	for _, e := range parseErrs {
 		fmt.Printf("  ! %v\n", e)

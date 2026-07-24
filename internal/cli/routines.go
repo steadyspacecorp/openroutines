@@ -234,7 +234,20 @@ func routinesList() int {
 		if len(r.FM.Credentials) > 0 {
 			grants = append(grants, fmt.Sprintf("creds:%d", len(r.FM.Credentials)))
 		}
-		fmt.Printf("%-20s %-16s %-8v %s\n", r.Name, r.FM.Schedule, r.FM.IsActive(), strings.Join(grants, " "))
+		fmt.Printf("%-20s %-16s %-8v %s\n", r.Name, scheduleSummary(r), r.FM.IsActive(), strings.Join(grants, " "))
 	}
 	return 0
+}
+
+// scheduleSummary describes when a routine runs: its cron schedule, its
+// trigger, or both.
+func scheduleSummary(r *routine.Routine) string {
+	switch {
+	case r.FM.Schedule != "" && r.FM.Trigger != nil:
+		return r.FM.Schedule + " +trigger"
+	case r.FM.Trigger != nil:
+		return "trigger"
+	default:
+		return r.FM.Schedule
+	}
 }

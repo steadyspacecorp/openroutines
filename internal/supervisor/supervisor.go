@@ -52,6 +52,12 @@ type Supervisor struct {
 	syncWarned    bool   // blocker already raised for the current sync problem
 	unreachWarned bool
 	secrets       map[string]string // the supervisor's own secrets, for redacting its output
+
+	// Trigger bookkeeping that is deliberately not durable: last-poll times
+	// (persisting them would dirty the memory worktree every tick) and
+	// poll-error dedup (log on transition, not per tick).
+	lastPolled map[string]time.Time
+	pollFailed map[string]bool
 }
 
 func New(dir string) (*Supervisor, error) {
@@ -79,6 +85,8 @@ func New(dir string) (*Supervisor, error) {
 		retention:  retention,
 		noOrigin:   !memory.HasOrigin(dir),
 		secrets:    secrets,
+		lastPolled: map[string]time.Time{},
+		pollFailed: map[string]bool{},
 	}, nil
 }
 
@@ -205,13 +213,23 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	var due []dispatch
 	stateChanged := false
 	for _, r := range routines {
-		if !r.FM.IsActive() || r.FM.Schedule == "" {
+		if !r.FM.IsActive() || (r.FM.Schedule == "" && r.FM.Trigger == nil) {
 			continue
 		}
-		spec, err := cron.ParseStandard(r.FM.Schedule)
-		if err != nil {
-			s.Log.Printf("%s: bad schedule %q: %v", r.Name, r.FM.Schedule, err)
-			continue
+		var spec cron.Schedule
+		if r.FM.Schedule != "" {
+			var err error
+			spec, err = cron.ParseStandard(r.FM.Schedule)
+			if err != nil {
+				s.Log.Printf("%s: bad schedule %q: %v", r.Name, r.FM.Schedule, err)
+				continue
+			}
+		}
+		if r.FM.Trigger != nil {
+			if err := r.FM.Trigger.Validate(); err != nil {
+				s.Log.Printf("%s: %v", r.Name, err)
+				continue
+			}
 		}
 		st, err := schedule.Load(s.stateDir(), r.Name)
 		if err != nil {
@@ -233,24 +251,52 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			if st.CoolingDown(now) {
 				continue // circuit breaker: no new runs until the cool-down ends
 			}
-			first, last, n := schedule.Occurrences(spec, st.Watermark, now)
-			if n == 0 {
-				continue
+			minted := false
+			if spec != nil {
+				first, last, n := schedule.Occurrences(spec, st.Watermark, now)
+				if n > 0 {
+					st.Pending = &schedule.Pending{
+						RunID:          schedule.NewRunID(),
+						ScheduledFor:   first,
+						CoveredThrough: last,
+						CreatedAt:      now,
+					}
+					minted = true
+					if n > 1 {
+						s.Log.Printf("%s: %d missed firings collapse into run %s", r.Name, n, st.Pending.RunID)
+					}
+					// The scheduled run will pull whatever the trigger would
+					// have announced; refresh the baseline so the same news
+					// doesn't double-fire right after it.
+					if r.FM.Trigger != nil && s.refreshTriggerBaseline(r, now) {
+						stateChanged = true
+					}
+				}
 			}
-			st.Pending = &schedule.Pending{
-				RunID:          schedule.NewRunID(),
-				ScheduledFor:   first,
-				CoveredThrough: last,
-				CreatedAt:      now,
+			if !minted && r.FM.Trigger != nil {
+				fired, dirty := s.evaluateTrigger(r, now)
+				if dirty {
+					stateChanged = true
+				}
+				if fired {
+					st.Pending = &schedule.Pending{
+						RunID:          schedule.NewRunID(),
+						ScheduledFor:   now,
+						CoveredThrough: now,
+						CreatedAt:      now,
+					}
+					minted = true
+					s.Log.Printf("%s: trigger fired -- run %s", r.Name, st.Pending.RunID)
+				}
+			}
+			if !minted {
+				continue
 			}
 			if err := st.Save(s.stateDir()); err != nil {
 				s.Log.Printf("%s: %v", r.Name, err)
 				continue
 			}
 			stateChanged = true
-			if n > 1 {
-				s.Log.Printf("%s: %d missed firings collapse into run %s", r.Name, n, st.Pending.RunID)
-			}
 		}
 		if now.Before(schedule.NextRetryAt(st.Pending)) {
 			continue // backing off after a failed attempt
