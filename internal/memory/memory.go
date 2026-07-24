@@ -285,6 +285,9 @@ func Import(repoDir, stagingDir string) error {
 		if rel == "." {
 			return nil
 		}
+		if rel == ConsumeMarker {
+			return nil // consume receipt for the runtime, never memory content
+		}
 		dest := filepath.Join(wt, rel)
 		if d.IsDir() {
 			return os.MkdirAll(dest, 0o755)
@@ -363,6 +366,13 @@ func Commit(repoDir, message string) (string, error) {
 	return git(wt, "rev-parse", "--short", "HEAD")
 }
 
+// flatten collapses any whitespace runs -- including the newlines raw git
+// and tool errors carry -- into single spaces, so supervisor-written entries
+// always honor the one-line-per-entry format of events.md and tasks.md.
+func flatten(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // AppendEvent records a supervisor-written event: the mechanism for outcomes
 // the model never got to narrate (timeouts, crashes, sync trouble).
 func AppendEvent(repoDir, line string) error {
@@ -372,7 +382,7 @@ func AppendEvent(repoDir, line string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = fmt.Fprintf(f, "- %s\n", line)
+	_, err = fmt.Fprintf(f, "- %s\n", flatten(line))
 	return err
 }
 
@@ -394,7 +404,7 @@ func AppendHumanTask(repoDir, taskID, description string) error {
 	if strings.Contains(text, "`"+taskID+"`") {
 		return nil // one canonical record per task
 	}
-	entry := fmt.Sprintf("- [ ] `%s` %s", taskID, description)
+	entry := fmt.Sprintf("- [ ] `%s` %s", taskID, flatten(description))
 	lines := strings.Split(text, "\n")
 
 	section := -1
@@ -433,6 +443,42 @@ func AppendHumanTask(repoDir, taskID, description string) error {
 	}
 	out := append(lines[:end:end], append([]string{entry}, lines[end:]...)...)
 	return os.WriteFile(p, []byte(strings.Join(out, "\n")), 0o644)
+}
+
+// ResolveHumanTasks completes every open human-owned task whose id starts
+// with idPrefix -- the supervisor clearing its own stale blockers once the
+// condition they reported has recovered. Prefix matching (not an exact id)
+// makes recovery restart-proof: the supervisor need not remember which day's
+// blocker it raised. Reports whether anything changed.
+func ResolveHumanTasks(repoDir, idPrefix, resolution string) (bool, error) {
+	p := filepath.Join(WorktreePath(repoDir), "tasks.md")
+	raw, err := os.ReadFile(p)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	lines := strings.Split(string(raw), "\n")
+	changed := false
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "- [ ] `"+idPrefix) {
+			continue
+		}
+		line = strings.Replace(line, "- [ ]", "- [x]", 1)
+		if trimmed := strings.TrimRight(line, " "); strings.HasSuffix(trimmed, ")") {
+			at := strings.LastIndex(line, ")")
+			line = line[:at] + "; " + resolution + ")"
+		} else {
+			line += " (" + resolution + ")"
+		}
+		lines[i] = line
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	return true, os.WriteFile(p, []byte(strings.Join(lines, "\n")), 0o644)
 }
 
 // AppendRunRecord appends one JSONL run record to the supervisor-owned log.

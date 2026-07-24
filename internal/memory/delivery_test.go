@@ -207,3 +207,38 @@ func TestLoadCursorRejectsNonSHA(t *testing.T) {
 		t.Fatalf("full SHA should load: %v", err)
 	}
 }
+
+func TestSupervisorEntriesFlattenAndResolve(t *testing.T) {
+	dir := deliveryFixture(t)
+	raw := "intent push failed: exit status 128: Permission denied (publickey).\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights"
+	if err := AppendEvent(dir, "2026-07-24 supervisor: "+raw); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := os.ReadFile(filepath.Join(WorktreePath(dir), "events.md"))
+	if strings.Contains(string(events), "\nfatal:") {
+		t.Fatalf("multi-line error not flattened in events.md: %s", events)
+	}
+	if err := AppendHumanTask(dir, "task-push-20260724", raw+" (source: supervisor; added 2026-07-24)"); err != nil {
+		t.Fatal(err)
+	}
+	tasks, _ := os.ReadFile(filepath.Join(WorktreePath(dir), "tasks.md"))
+	if strings.Contains(string(tasks), "\nfatal:") {
+		t.Fatalf("multi-line error not flattened in tasks.md: %s", tasks)
+	}
+
+	changed, err := ResolveHumanTasks(dir, "task-push-", "done 2026-07-25 -- push to origin recovered")
+	if err != nil || !changed {
+		t.Fatalf("resolve: changed=%v err=%v, want true nil", changed, err)
+	}
+	tasks, _ = os.ReadFile(filepath.Join(WorktreePath(dir), "tasks.md"))
+	text := string(tasks)
+	if strings.Contains(text, "- [ ] `task-push-") || !strings.Contains(text, "- [x] `task-push-20260724`") {
+		t.Fatalf("task not resolved in place: %s", text)
+	}
+	if !strings.Contains(text, "; done 2026-07-25 -- push to origin recovered)") {
+		t.Fatalf("resolution not folded into the trailing parens: %s", text)
+	}
+	if changed, err = ResolveHumanTasks(dir, "task-push-", "done again"); err != nil || changed {
+		t.Fatalf("second resolve: changed=%v err=%v, want false nil", changed, err)
+	}
+}

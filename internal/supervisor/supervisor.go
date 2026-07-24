@@ -272,7 +272,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			s.blockOnce("push", "intent push failed -- runs held until origin is reachable: "+err.Error(), &s.unreachWarned)
 			return
 		}
-		s.unreachWarned = false
+		s.recover("push", "push to origin recovered -- runs resumed", &s.unreachWarned)
 	}
 
 	// Phase 2: execute serially, in due order.
@@ -422,17 +422,18 @@ func (s *Supervisor) syncOnce() {
 		s.Log.Printf("origin unreachable: %s", rep.Detail)
 	default:
 		s.syncBlocked = false
-		s.syncWarned = false
+		s.recover("sync", "memory sync with origin recovered", &s.syncWarned)
 		if rep.Adopted {
 			s.Log.Printf("memory: adopted remote commits")
 		}
 	}
 }
 
-// blockOnce records a blocking condition when it first appears: an event for
-// the history, and a human-owned task because only a person can clear it. The
-// task id is date-scoped so a supervisor restart doesn't re-record it --
-// AppendHumanTask skips ids already present.
+// blockOnce records a blocking condition when it first appears -- as a
+// human-owned task only, because only a person can clear it and the task's
+// creation is itself an observable change: a companion event would
+// double-record the same fact. The task id is date-scoped so a supervisor
+// restart doesn't re-record it -- AppendHumanTask skips ids already present.
 func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
 	// Sync/push failure text quotes raw git errors, which can carry a
 	// tokened origin URL -- and the message below is committed to memory.
@@ -441,12 +442,28 @@ func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
 	if !*warned {
 		*warned = true
 		date := time.Now().UTC().Format("2006-01-02")
-		_ = memory.AppendEvent(s.Dir, fmt.Sprintf("%s supervisor: %s", date, msg))
 		_ = memory.AppendHumanTask(s.Dir, "task-"+kind+"-"+time.Now().UTC().Format("20060102"),
 			fmt.Sprintf("%s (source: supervisor; added %s)", msg, date))
 		_, _ = memory.Commit(s.Dir, "Record supervisor blocker")
 		s.pushBestEffort()
 	}
+}
+
+// recover clears a blocker whose condition has healed: any open task-<kind>-*
+// the supervisor previously recorded is completed in place -- the transition
+// is the record, no companion event. It runs on every healthy tick and
+// matches by id prefix, so it also heals blockers raised before a restart --
+// a blocker that outlives its outage is noise a person has to chase.
+func (s *Supervisor) recover(kind, msg string, warned *bool) {
+	*warned = false
+	changed, err := memory.ResolveHumanTasks(s.Dir, "task-"+kind+"-",
+		"done "+time.Now().UTC().Format("2006-01-02")+" -- "+msg)
+	if err != nil || !changed {
+		return
+	}
+	s.Log.Printf("RECOVERED: %s", msg)
+	_, _ = memory.Commit(s.Dir, "Resolve supervisor blocker")
+	s.pushBestEffort()
 }
 
 func (s *Supervisor) pushBestEffort() {

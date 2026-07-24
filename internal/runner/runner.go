@@ -102,8 +102,14 @@ type Staging struct {
 func (s *Staging) Cleanup() { os.RemoveAll(s.workspace) }
 
 // Consumed reports whether the routine created the consume marker: its
-// explicit claim to have covered the whole injected inbox.
+// explicit claim to have covered the whole injected inbox. The canonical
+// location is the staged memory directory -- the one workspace path the
+// filesystem sandbox leaves writable; the workspace root is still accepted
+// for unsandboxed runs.
 func (s *Staging) Consumed() bool {
+	if _, err := os.Stat(filepath.Join(s.MemoryDir, memory.ConsumeMarker)); err == nil {
+		return true
+	}
 	_, err := os.Stat(filepath.Join(s.workspace, memory.ConsumeMarker))
 	return err == nil
 }
