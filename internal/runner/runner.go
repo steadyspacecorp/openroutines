@@ -33,6 +33,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
+	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
 type Outcome string
@@ -543,6 +544,11 @@ func copyTree(src, dst string) error {
 // skills are not merely permission-denied -- they are not present at all.
 func copyDeclaredSkills(dir, workspace string, names []string) error {
 	for _, name := range names {
+		// Grammar before path use: a frontmatter name like "../../x" would
+		// otherwise read outside skills/ and write outside the workspace.
+		if !skill.NamePattern.MatchString(name) {
+			return fmt.Errorf("declared skill %q is not a valid Agent Skills name", name)
+		}
 		src := filepath.Join(dir, "skills", name)
 		if _, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil {
 			return fmt.Errorf("declared skill %q not found in skills/", name)

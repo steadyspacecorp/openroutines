@@ -189,3 +189,21 @@ func TestAppendHumanTaskSectionsAndDedup(t *testing.T) {
 		t.Fatalf("task not under Human-owned: %s", text)
 	}
 }
+
+// Cursor values become git rev-range argv, and cursor files ride the
+// untrusted memory branch: anything but a commit SHA is rejected on load.
+func TestLoadCursorRejectsNonSHA(t *testing.T) {
+	dir := t.TempDir()
+	for _, bad := range []string{"--output=/tmp/evil", "HEAD", "refs/heads/main", "abc", ""} {
+		path := cursorPath(dir, "c")
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte(`{"consumed_through":"`+bad+`"}`), 0o644)
+		if _, err := LoadCursor(dir, "c"); err == nil {
+			t.Errorf("cursor value %q should be rejected", bad)
+		}
+	}
+	os.WriteFile(cursorPath(dir, "c"), []byte(`{"consumed_through":"0123456789abcdef0123456789abcdef01234567"}`), 0o644)
+	if _, err := LoadCursor(dir, "c"); err != nil {
+		t.Fatalf("full SHA should load: %v", err)
+	}
+}

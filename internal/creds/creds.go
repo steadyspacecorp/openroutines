@@ -34,6 +34,19 @@ var NamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // vars are framework metadata, never secrets.
 const ReservedPrefix = "openroutines"
 
+// ReservedEnvName reports whether a credential or variable name would shadow
+// an environment variable the framework itself constructs for a run (TZ,
+// PATH, HOME, TMPDIR, XDG_*) or the dynamic-linker LD_* family -- a
+// credential named `ld_preload` would otherwise become LD_PRELOAD in the
+// model process.
+func ReservedEnvName(name string) bool {
+	switch name {
+	case "tz", "path", "home", "tmpdir":
+		return true
+	}
+	return strings.HasPrefix(name, "ld_") || strings.HasPrefix(name, "xdg_")
+}
+
 // GenerateKey mints a 32-byte master key, hex-encoded.
 func GenerateKey() string {
 	buf := make([]byte, 32)

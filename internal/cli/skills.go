@@ -115,7 +115,15 @@ func skillsRemove(args []string) int {
 		return fail(fmt.Errorf("usage: openroutines skills remove <name>"))
 	}
 	name := args[0]
+	// Grammar first, then containment -- this path ends in os.RemoveAll,
+	// and an unvalidated name like "../.." would resolve outside skills/.
+	if !skill.NamePattern.MatchString(name) {
+		return fail(fmt.Errorf("skill name %q is not a valid Agent Skills name", name))
+	}
 	dir := filepath.Join("skills", name)
+	if rel, err := filepath.Rel("skills", dir); err != nil || rel != name {
+		return fail(fmt.Errorf("skill name %q escapes skills/", name))
+	}
 	if _, err := os.Stat(dir); err != nil {
 		return fail(fmt.Errorf("no skill %q", name))
 	}

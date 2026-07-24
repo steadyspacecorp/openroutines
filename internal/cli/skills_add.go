@@ -42,8 +42,10 @@ func skillsAdd(args []string) int {
 	defer os.RemoveAll(tmp)
 
 	// Ambient git on purpose: vendoring happens on a dev machine and may
-	// need the user's own auth for private sources.
-	clone := exec.Command("git", "clone", "--quiet", "--depth", "1", cloneURL, tmp)
+	// need the user's own auth for private sources. But the URL is pasted
+	// input: disable the ext:: command-execution transport and terminate
+	// option parsing so a leading-dash "URL" can't become a flag.
+	clone := exec.Command("git", "-c", "protocol.ext.allow=never", "clone", "--quiet", "--depth", "1", "--", cloneURL, tmp)
 	clone.Stderr = os.Stderr
 	if err := clone.Run(); err != nil {
 		return fail(fmt.Errorf("clone %s: %w", cloneURL, err))

@@ -261,3 +261,18 @@ func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 		t.Fatalf("events.md = %q, want staged change imported for a recording routine", got)
 	}
 }
+
+// A frontmatter skill name is attacker-influencable repo content and becomes
+// a filesystem path in the run pipeline: traversal names must be rejected
+// before any path construction.
+func TestCopyDeclaredSkillsRejectsTraversal(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "victim")
+	os.MkdirAll(outside, 0o755)
+	os.WriteFile(filepath.Join(outside, "SKILL.md"), []byte("x"), 0o644)
+	for _, bad := range []string{"../victim", "../../x", "/abs", "a/b", ".."} {
+		if err := copyDeclaredSkills(filepath.Join(dir, "agent"), t.TempDir(), []string{bad}); err == nil {
+			t.Errorf("skill name %q should be rejected", bad)
+		}
+	}
+}

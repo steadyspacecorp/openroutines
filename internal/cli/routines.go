@@ -74,7 +74,10 @@ func routinesRun(args []string, keep bool) int {
 		}
 		return fail(fmt.Errorf("usage: openroutines routines %s <name>", verb))
 	}
-	name := strings.TrimSuffix(args[0], ".md")
+	name, err := routineName(args[0])
+	if err != nil {
+		return fail(err)
+	}
 	res, err := runner.Run(".", name, keep)
 	if err != nil {
 		return fail(err)
@@ -95,8 +98,11 @@ func routinesNew(args []string) int {
 	if len(args) != 1 {
 		return fail(fmt.Errorf("usage: openroutines routines new <name>"))
 	}
-	name := strings.TrimSuffix(args[0], ".md")
-	path := filepath.Join("routines", name+".md")
+	name, err := routineName(args[0])
+	if err != nil {
+		return fail(err)
+	}
+	path := routinePath(name)
 	if _, err := os.Stat(path); err == nil {
 		return fail(fmt.Errorf("%s already exists", path))
 	}
@@ -111,17 +117,32 @@ func routinesNew(args []string) int {
 	return 0
 }
 
-func routinePath(arg string) string {
-	return filepath.Join("routines", strings.TrimSuffix(arg, ".md")+".md")
+// routineName validates a CLI routine argument against the name grammar.
+// Names become paths (routines/<name>.md, lock files, ledgers), so this
+// runs before any path construction.
+func routineName(arg string) (string, error) {
+	name := strings.TrimSuffix(arg, ".md")
+	if !routine.NamePattern.MatchString(name) {
+		return "", fmt.Errorf("routine name %q must be lowercase alphanumerics with hyphens/underscores", name)
+	}
+	return name, nil
+}
+
+func routinePath(name string) string {
+	return filepath.Join("routines", name+".md")
 }
 
 func routinesEdit(args []string) int {
 	if len(args) != 1 {
 		return fail(fmt.Errorf("usage: openroutines routines edit <name>"))
 	}
-	path := routinePath(args[0])
+	name, err := routineName(args[0])
+	if err != nil {
+		return fail(err)
+	}
+	path := routinePath(name)
 	if _, err := os.Stat(path); err != nil {
-		return fail(fmt.Errorf("no routine %q", args[0]))
+		return fail(fmt.Errorf("no routine %q", name))
 	}
 	editor := os.Getenv("VISUAL")
 	if editor == "" {
@@ -151,9 +172,13 @@ func routinesSetActive(args []string, active bool) int {
 	if len(args) != 1 {
 		return fail(fmt.Errorf("usage: openroutines routines %s <name>", verb))
 	}
-	path := routinePath(args[0])
+	name, err := routineName(args[0])
+	if err != nil {
+		return fail(err)
+	}
+	path := routinePath(name)
 	if _, err := os.Stat(path); err != nil {
-		return fail(fmt.Errorf("no routine %q", args[0]))
+		return fail(fmt.Errorf("no routine %q", name))
 	}
 	if err := routine.SetActive(path, active); err != nil {
 		return fail(err)
@@ -166,10 +191,14 @@ func routinesRemove(args []string) int {
 	if len(args) != 1 {
 		return fail(fmt.Errorf("usage: openroutines routines remove <name>"))
 	}
-	path := routinePath(args[0])
+	name, err := routineName(args[0])
+	if err != nil {
+		return fail(err)
+	}
+	path := routinePath(name)
 	r, err := routine.Parse(path)
 	if err != nil {
-		return fail(fmt.Errorf("no routine %q: %v", args[0], err))
+		return fail(fmt.Errorf("no routine %q: %v", name, err))
 	}
 	if err := os.Remove(path); err != nil {
 		return fail(err)

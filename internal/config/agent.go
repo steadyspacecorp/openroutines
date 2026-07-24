@@ -3,7 +3,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -56,14 +58,17 @@ func (a *Agent) Retention() string {
 	return a.Memory.Retention
 }
 
-// Load reads agent.yaml from dir.
+// Load reads agent.yaml from dir. Decoding is strict: a misspelled key is
+// an error, not silently ignored configuration.
 func Load(dir string) (*Agent, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, FileName))
 	if err != nil {
 		return nil, err
 	}
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
 	var a Agent
-	if err := yaml.Unmarshal(raw, &a); err != nil {
+	if err := dec.Decode(&a); err != nil && err != io.EOF {
 		return nil, fmt.Errorf("%s: %w", FileName, err)
 	}
 	return &a, nil
@@ -119,13 +124,9 @@ func (a *Agent) Problems() []string {
 			out = append(out, fmt.Sprintf("variable name %q must be lowercase snake_case", name))
 		case strings.HasPrefix(name, creds.ReservedPrefix):
 			out = append(out, fmt.Sprintf("variable name %q collides with the reserved %s_* prefix", name, strings.ToUpper(creds.ReservedPrefix)))
-		case reservedEnvNames[name]:
+		case creds.ReservedEnvName(name):
 			out = append(out, fmt.Sprintf("variable name %q collides with the %s environment variable", name, strings.ToUpper(name)))
 		}
 	}
 	return out
 }
-
-// reservedEnvNames are env vars the framework itself constructs for a run --
-// a variable must not shadow them.
-var reservedEnvNames = map[string]bool{"tz": true, "path": true, "home": true, "tmpdir": true}

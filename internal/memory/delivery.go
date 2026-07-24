@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -41,8 +42,17 @@ func LoadCursor(repoDir, consumer string) (*Cursor, error) {
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("cursor %s: %w", consumer, err)
 	}
+	// The cursor value becomes a git rev-range argv element, and cursor
+	// files live on the memory branch -- an untrusted, human-writable
+	// channel. Only a commit SHA is acceptable.
+	if !shaPattern.MatchString(c.ConsumedThrough) {
+		return nil, fmt.Errorf("cursor %s: consumed_through %q is not a commit SHA", consumer, c.ConsumedThrough)
+	}
 	return &c, nil
 }
+
+// shaPattern matches an abbreviated or full hex commit SHA.
+var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
 // SaveCursor writes the cursor into the worktree; the caller's next Commit
 // carries it, so consumption is recorded in the run's completion commit.

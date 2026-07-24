@@ -97,6 +97,9 @@ func credentialsSet(args []string) int {
 	if strings.HasPrefix(name, creds.ReservedPrefix) {
 		return fail(fmt.Errorf("the %s* prefix is reserved for framework metadata", creds.ReservedPrefix))
 	}
+	if creds.ReservedEnvName(name) {
+		return fail(fmt.Errorf("credential name %q would shadow the %s environment variable in every run that declares it", name, strings.ToUpper(name)))
+	}
 	key, store, err := openStore()
 	if err != nil {
 		return fail(err)

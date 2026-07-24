@@ -4,6 +4,7 @@ package routine
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// NamePattern constrains routine names: the filename is the routine's
+// identity, and names become filesystem paths (routines/<name>.md, lock
+// files, ledgers) -- so the grammar is closed under path construction:
+// no separators, no dots, no way to spell an escape.
+var NamePattern = regexp.MustCompile(`^[a-z0-9]+([_-][a-z0-9]+)*$`)
 
 // Frontmatter is a routine's declared scope. Every field but Schedule
 // is optional; see DESIGN.md "Routines are markdown files" for defaults.
@@ -64,8 +71,12 @@ func Parse(path string) (*Routine, error) {
 			return nil, fmt.Errorf("%s: unterminated frontmatter (no closing ---)", filepath.Base(path))
 		}
 	}
+	// Strict decoding: a typo like `actve: false` must be an error, not a
+	// silent fall-through to active-by-default.
+	dec := yaml.NewDecoder(strings.NewReader(rest[:end]))
+	dec.KnownFields(true)
 	var fm Frontmatter
-	if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err != nil {
+	if err := dec.Decode(&fm); err != nil && err != io.EOF {
 		return nil, fmt.Errorf("%s: frontmatter: %w", filepath.Base(path), err)
 	}
 	body := ""

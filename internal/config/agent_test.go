@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,5 +34,15 @@ func TestVariableNameValidation(t *testing.T) {
 		if len(p) != 1 || !strings.Contains(p[0], wantErr) {
 			t.Fatalf("variable %q: want one problem containing %q, got %v", name, wantErr, p)
 		}
+	}
+}
+
+// agent.yaml decodes strictly: a misspelled key is an error, not silently
+// ignored configuration.
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte("name: a\ndescriptoin: typo\n"), 0o644)
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "descriptoin") {
+		t.Fatalf("expected unknown-field error naming the typo, got %v", err)
 	}
 }

@@ -61,3 +61,30 @@ func TestSetActiveTogglesInPlace(t *testing.T) {
 		t.Fatal("expected active again")
 	}
 }
+
+// Names become filesystem paths; the grammar must be closed under path
+// construction.
+func TestNamePattern(t *testing.T) {
+	for _, ok := range []string{"daily", "steady-check-in", "a11y_sweep", "r2"} {
+		if !NamePattern.MatchString(ok) {
+			t.Errorf("%q should be a valid routine name", ok)
+		}
+	}
+	for _, bad := range []string{"..", ".", "../x", "a/b", "a\\b", "/abs", "Daily", "a b", "-lead", "trail-", "a..b", ""} {
+		if NamePattern.MatchString(bad) {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+}
+
+// A typo'd frontmatter key must be an error, not a silent fall-through to
+// the field's default (actve: false -> active-by-default was the audit's
+// example).
+func TestParseRejectsUnknownFrontmatterKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.md")
+	os.WriteFile(path, []byte("---\nschedule: \"* * * * *\"\nactve: false\n---\nbody\n"), 0o644)
+	if _, err := Parse(path); err == nil || !strings.Contains(err.Error(), "actve") {
+		t.Fatalf("expected unknown-field error naming the typo, got %v", err)
+	}
+}

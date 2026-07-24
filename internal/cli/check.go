@@ -16,6 +16,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
 // effortPattern loosely constrains reasoning-effort values -- providers
@@ -86,12 +87,23 @@ func cmdCheck(args []string) int {
 				errs = append(errs, fmt.Sprintf("credential name %q must be lowercase snake_case", c))
 			} else if strings.HasPrefix(c, creds.ReservedPrefix) {
 				errs = append(errs, fmt.Sprintf("credential name %q collides with the reserved %s_* prefix", c, strings.ToUpper(creds.ReservedPrefix)))
+			} else if creds.ReservedEnvName(c) {
+				errs = append(errs, fmt.Sprintf("credential name %q would shadow the %s environment variable in the run", c, strings.ToUpper(c)))
 			}
 		}
 		for _, s := range r.FM.Skills {
+			// Grammar before path use: a declared name becomes a filesystem
+			// path in the run pipeline.
+			if !skill.NamePattern.MatchString(s) {
+				errs = append(errs, fmt.Sprintf("skill name %q is not a valid Agent Skills name", s))
+				continue
+			}
 			if _, err := os.Stat(filepath.Join(dir, "skills", s, "SKILL.md")); err != nil {
 				errs = append(errs, fmt.Sprintf("skill %q not found in skills/", s))
 			}
+		}
+		if !routine.NamePattern.MatchString(r.Name) {
+			errs = append(errs, fmt.Sprintf("routine filename %q: names must be lowercase alphanumerics with hyphens/underscores (the filename is the routine's identity and becomes paths)", r.Name))
 		}
 		if r.Body == "" {
 			errs = append(errs, "empty prompt body")
