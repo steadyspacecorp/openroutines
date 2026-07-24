@@ -293,3 +293,50 @@ func TestConsumerCursorAdvances(t *testing.T) {
 		t.Fatalf("cursor should have advanced: %+v -> %+v, %v", c1, c2, err)
 	}
 }
+
+// A rewritten origin must halt dispatch -- and stay halted on every later
+// tick. Runs taken while blocked would act under identities that exist only
+// in this container: lost on replacement, duplicated on recovery.
+func TestRewrittenOriginHaltsDispatch(t *testing.T) {
+	dir := fixture(t, "ok")
+	base := t.TempDir()
+	bare := filepath.Join(base, "origin.git")
+	run := func(cwd string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v: %s", args, err, out)
+		}
+	}
+	run(base, "git", "init", "-q", "-b", "main", "--bare", bare)
+	run(dir, "git", "remote", "add", "origin", bare)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0)                     // register
+	s.Tick(ctx, t0.Add(61*time.Second)) // one run completes, memory pushed
+	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	if got := strings.Count(ledger, "ran run_"); got != 1 {
+		t.Fatalf("expected 1 run before the rewrite, got %d: %q", got, ledger)
+	}
+
+	// Rewrite the memory branch on origin out from under the supervisor.
+	c := filepath.Join(base, "c")
+	run(base, "git", "clone", "-q", "-b", "memory", bare, c)
+	run(c, "git", "-c", "user.name=x", "-c", "user.email=x@x", "commit", "--amend", "-q", "--no-edit", "-m", "rewritten")
+	run(c, "git", "push", "-q", "--force", "origin", "memory")
+
+	// Every subsequent tick refuses to dispatch.
+	for i := 0; i < 3; i++ {
+		s.Tick(ctx, t0.Add(time.Duration(2+i)*time.Minute))
+	}
+	ledger = readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	if got := strings.Count(ledger, "ran run_"); got != 1 {
+		t.Fatalf("dispatch continued after rewrite: %d runs, %q", got, ledger)
+	}
+	if !s.syncBlocked {
+		t.Fatal("supervisor should be sync-blocked after a rewrite")
+	}
+}

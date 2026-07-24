@@ -11,6 +11,7 @@ package supervisor
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -135,7 +136,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		if err := s.acquireLease(ctx); err != nil {
 			return err
 		}
-		defer memory.ReleaseLease(s.Dir)
+		defer func() { memory.ReleaseLease(s.Dir, s.leaseSHA) }()
 	}
 	s.Log.Printf("supervising %s (instance %s, tick %s)", s.Dir, s.InstanceID, TickInterval)
 	if err := s.verifySandbox(); err != nil {
@@ -164,6 +165,13 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	// lease and pause dispatch entirely if we no longer hold it.
 	if !s.noOrigin {
 		s.syncOnce()
+		if s.syncBlocked {
+			// Rewritten history or a conflict needs a human. Dispatching
+			// anyway would take external actions under identities that exist
+			// only in this container -- lost on replacement, then re-run as
+			// duplicates. Same rule as an unreachable origin: hold.
+			return
+		}
 		if !s.renewLease(now) {
 			return
 		}
@@ -281,6 +289,21 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 
 // execute runs one attempt of a pending logical run and settles the outcome.
 func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time) {
+	// The per-routine kernel lock covers the whole attempt, snapshot through
+	// settlement. Held means a manual `routines run` is mid-flight in this
+	// checkout: skip and log, per DESIGN.md "Overlap" -- the pending run
+	// retries on a later tick.
+	release, lockErr := runner.LockRoutine(s.Dir, r.Name)
+	if lockErr != nil {
+		if errors.Is(lockErr, runner.ErrRoutineLocked) {
+			s.Log.Printf("%s: attempt already in flight elsewhere (lock held) -- skipping this tick", r.Name)
+		} else {
+			s.Log.Printf("%s: routine lock: %v", r.Name, lockErr)
+		}
+		return
+	}
+	defer release()
+
 	agent, err := config.Load(s.Dir)
 	if err != nil {
 		s.Log.Printf("%s: %v", r.Name, err)

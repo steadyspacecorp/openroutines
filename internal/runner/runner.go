@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -331,6 +332,14 @@ func Run(dir, name string, keep bool) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	release, err := LockRoutine(dir, name)
+	if errors.Is(err, ErrRoutineLocked) {
+		return nil, fmt.Errorf("routine %s already has an attempt in flight (the supervisor or another terminal holds its lock) -- skipped", name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	runID := newRunID()
 	exec, staging, err := Execute(context.Background(), dir, agent, r, Meta{RunID: runID, AttemptID: "attempt_01", DryRun: !keep})
 	if err != nil {

@@ -24,10 +24,43 @@ func HasOrigin(repoDir string) bool {
 	return err == nil
 }
 
+// acceptedRef records, on origin, the last memory tip this agent accepted.
+// It is what makes rewrite refusal durable: the remote-tracking ref is
+// overwritten by every fetch (so the rewritten tip would become the next
+// comparison's baseline) and dies with the container (so a redeploy would
+// adopt anything). An attacker force-pushing the memory branch must now also
+// know to move this ref -- and the refusal survives both the next sync call
+// and a container replacement.
+const acceptedRef = "refs/openroutines/accepted"
+
+// AcceptedTip returns the last accepted memory tip recorded on origin, ""
+// when none has been recorded yet (pre-upgrade repos, first boot).
+func AcceptedTip(repoDir string) string {
+	if _, err := git(repoDir, "fetch", "--quiet", "origin", "+"+acceptedRef+":"+acceptedRef); err != nil {
+		return ""
+	}
+	tip, _ := git(repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
+	return tip
+}
+
+// recordAccepted publishes tip as the new accepted baseline (best effort --
+// the next sync simply re-verifies from the previous baseline).
+func recordAccepted(repoDir, tip string) {
+	current, _ := git(repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
+	if current == tip {
+		return
+	}
+	if _, err := git(repoDir, "push", "--quiet", "origin", "+"+tip+":"+acceptedRef); err == nil {
+		_, _ = git(repoDir, "update-ref", acceptedRef, tip)
+	}
+}
+
 // Sync reconciles the local memory branch with origin, defensively
 // (DESIGN.md "Memory"): fast-forward when behind; rebase local commits when
 // diverged (append-only files rebase cleanly); refuse rewritten remote
-// history and conflicts -- never resolve silently.
+// history and conflicts -- never resolve silently. The rewrite baseline is
+// the durable accepted ref, so refusal holds across repeated syncs and
+// process restarts alike.
 func Sync(repoDir string) SyncReport {
 	wt := WorktreePath(repoDir)
 	if !HasOrigin(repoDir) {
@@ -40,9 +73,12 @@ func Sync(repoDir string) SyncReport {
 		return SyncReport{Unreachable: true, Detail: err.Error()}
 	}
 
-	// Remember the last-known remote tip before fetching: if the new tip does
-	// not descend from it, someone rewrote history out from under us.
-	oldTip, _ := git(repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch)
+	// The baseline for rewrite detection: the durably recorded accepted tip,
+	// falling back to the remote-tracking ref for repos that predate it.
+	oldTip := AcceptedTip(repoDir)
+	if oldTip == "" {
+		oldTip, _ = git(repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch)
+	}
 	if _, err := git(repoDir, "fetch", "--quiet", "origin", Branch); err != nil {
 		return SyncReport{Unreachable: true, Detail: err.Error()}
 	}
@@ -60,12 +96,14 @@ func Sync(repoDir string) SyncReport {
 	}
 	switch {
 	case local == newTip:
+		recordAccepted(repoDir, newTip)
 		return SyncReport{}
 	case isAncestor(repoDir, local, newTip):
 		// Behind: fast-forward only.
 		if _, err := git(wt, "merge", "--ff-only", "--quiet", newTip); err != nil {
 			return SyncReport{Conflict: true, Detail: err.Error()}
 		}
+		recordAccepted(repoDir, newTip)
 		return SyncReport{Adopted: true}
 	case isAncestor(repoDir, newTip, local):
 		return SyncReport{} // ahead: the next push carries it
@@ -75,18 +113,26 @@ func Sync(repoDir string) SyncReport {
 			_, _ = git(wt, "rebase", "--abort")
 			return SyncReport{Conflict: true, Detail: err.Error()}
 		}
+		recordAccepted(repoDir, newTip)
 		return SyncReport{Adopted: true}
 	}
 }
 
 // Push publishes the memory branch. Fast-forward only: rejections are
-// reported, never forced.
+// reported, never forced. A successful push advances the accepted baseline:
+// origin's tip is now our own history.
 func Push(repoDir string) error {
 	if !HasOrigin(repoDir) {
 		return nil
 	}
-	_, err := git(WorktreePath(repoDir), "push", "--quiet", "origin", Branch)
-	return err
+	wt := WorktreePath(repoDir)
+	if _, err := git(wt, "push", "--quiet", "origin", Branch); err != nil {
+		return err
+	}
+	if tip, err := git(wt, "rev-parse", "HEAD"); err == nil {
+		recordAccepted(repoDir, tip)
+	}
+	return nil
 }
 
 func isAncestor(repoDir, a, b string) bool {
@@ -165,9 +211,16 @@ func WriteLease(repoDir, instanceID string, now time.Time, expectedSHA string) (
 	return blob, nil
 }
 
-// ReleaseLease removes this instance's lease from origin (best effort).
-func ReleaseLease(repoDir string) {
-	_, _ = git(repoDir, "push", "--quiet", "origin", ":"+leaseRef)
+// ReleaseLease removes this instance's lease from origin (best effort) --
+// but only if origin's lease is still the one this instance last wrote.
+// Unconditional deletion let a stale instance, shutting down after losing
+// the lease, delete the new holder's live lease. ownedSHA "" means this
+// instance never held the lease; there is nothing to release.
+func ReleaseLease(repoDir, ownedSHA string) {
+	if ownedSHA == "" {
+		return
+	}
+	_, _ = git(repoDir, "push", "--quiet", "--force-with-lease="+leaseRef+":"+ownedSHA, "origin", ":"+leaseRef)
 }
 
 func gitStdin(dir, stdin string, args ...string) (string, error) {

@@ -16,3 +16,6 @@ id_*
 
 # Generated opencode agent definitions -- derived from routine frontmatter.
 .opencode/
+
+# Local framework scratch: per-routine lock files and staging.
+.openroutines-tmp/

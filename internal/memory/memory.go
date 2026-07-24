@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -109,6 +110,18 @@ func EnsureWorktree(repoDir string) error {
 			if _, lerr := git(repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); lerr == nil {
 				if _, ferr := git(repoDir, "fetch", "--quiet", "origin", "+refs/heads/"+Branch+":refs/heads/"+Branch); ferr != nil {
 					return fmt.Errorf("adopting memory branch from origin: %w", ferr)
+				}
+				// Adoption is where a restart used to launder a rewritten
+				// history: a fresh container has no local baseline, so it
+				// would take origin's branch wholesale. The accepted ref is
+				// the baseline that survives container replacement -- refuse
+				// to adopt a tip that does not descend from it. Fail closed,
+				// like the sandbox probe: a human repairs and moves the ref.
+				if accepted := AcceptedTip(repoDir); accepted != "" {
+					tip, terr := git(repoDir, "rev-parse", "refs/heads/"+Branch)
+					if terr == nil && tip != accepted && !isAncestor(repoDir, accepted, tip) {
+						return fmt.Errorf("origin/%s does not descend from the last accepted tip %s -- memory history was rewritten while this agent was down; refusing to adopt it. Inspect origin/%s, then either restore the branch or move %s to the new tip to accept the rewrite deliberately", Branch, short(accepted), Branch, acceptedRef)
+					}
 				}
 			}
 		}
@@ -221,8 +234,16 @@ func Validate(stagingDir string) error {
 		if entries > maxEntries {
 			return fmt.Errorf("staged memory exceeds %d files -- rejected", maxEntries)
 		}
-		if info, err := d.Info(); err == nil && info.Size() > maxFile {
-			return fmt.Errorf("staged memory file %q exceeds %d bytes -- rejected", rel, maxFile)
+		if info, err := d.Info(); err == nil {
+			if info.Size() > maxFile {
+				return fmt.Errorf("staged memory file %q exceeds %d bytes -- rejected", rel, maxFile)
+			}
+			// A hard link is a regular file that aliases another inode --
+			// e.g. a file outside the staging tree, whose content would then
+			// travel into the import.
+			if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+				return fmt.Errorf("staged memory file %q is a hard link -- rejected", rel)
+			}
 		}
 		return nil
 	})
@@ -235,6 +256,26 @@ func Import(repoDir, stagingDir string) error {
 		return err
 	}
 	wt := WorktreePath(repoDir)
+	// Refuse to import over uncommitted human curation: Import overwrites and
+	// deletes, and uncommitted edits have no reflog to recover from. Only the
+	// human-curated files gate -- supervisor-owned paths (state/, runs.jsonl)
+	// legitimately carry this attempt's own in-flight bookkeeping.
+	if out, err := git(wt, "status", "--porcelain"); err == nil && out != "" {
+		for _, line := range strings.Split(out, "\n") {
+			// Field-based parse: git() trims the output, which eats the first
+			// line's leading status column. The path is the last field (a
+			// rename's "old -> new" resolves to new); a path containing
+			// spaces degrades toward refusal, never toward a silent import.
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			path := fields[len(fields)-1]
+			if !supervisorOwned[topSegment(path)] {
+				return fmt.Errorf("memory worktree has uncommitted changes (%s) -- refusing to import over them; commit or discard (git -C %s ...) and re-run", path, Dir)
+			}
+		}
+	}
 	// Copy staged files over the worktree.
 	err := filepath.WalkDir(stagingDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

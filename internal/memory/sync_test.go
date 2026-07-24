@@ -125,6 +125,50 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(b, "memory", "events.md")); strings.Contains(string(got), "rewritten") {
 		t.Fatalf("b adopted rewritten content: %q", got)
 	}
+
+	// The refusal must be durable, not one-shot: the first refusal's fetch
+	// updated the remote-tracking ref, and an implementation keyed on it
+	// would adopt the rewrite on the very next call. The accepted-ref
+	// baseline keeps refusing.
+	for i := 0; i < 3; i++ {
+		if rep := Sync(b); !rep.Rewritten {
+			t.Fatalf("sync call %d after rewrite: expected continued refusal, got %+v", i+2, rep)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(b, "memory", "events.md")); strings.Contains(string(got), "rewritten") {
+		t.Fatalf("b adopted rewritten content on a repeat sync: %q", got)
+	}
+}
+
+// A container replacement used to launder a rewrite: the fresh clone has no
+// local baseline, so adoption took origin's branch wholesale. The accepted
+// ref survives the replacement and must block adoption.
+func TestEnsureWorktreeRefusesRewrittenHistoryAfterReplacement(t *testing.T) {
+	a, b := twoClones(t)
+	if rep := Sync(b); rep.Rewritten || rep.Conflict {
+		t.Fatalf("baseline sync failed: %+v", rep)
+	}
+	// Rewrite origin's memory branch while "the container is down".
+	wtA := filepath.Join(a, "memory")
+	root := gitT(t, wtA, "rev-list", "--max-parents=0", "HEAD")
+	gitT(t, wtA, "reset", "-q", "--hard", root)
+	writeMemory(t, a, "events.md", "history rewritten\n")
+	gitT(t, wtA, "add", "-A")
+	gitT(t, wtA, "commit", "-qm", "rewritten")
+	gitT(t, wtA, "push", "-q", "--force", "origin", "memory")
+
+	// "Redeploy": a fresh clone with no local memory branch, like a new
+	// container generation.
+	base := filepath.Dir(a)
+	c := filepath.Join(base, "c")
+	gitT(t, base, "clone", "-q", filepath.Join(base, "origin.git"), c)
+	err := EnsureWorktree(c)
+	if err == nil {
+		t.Fatal("fresh clone adopted a rewritten memory branch")
+	}
+	if !strings.Contains(err.Error(), "does not descend") {
+		t.Fatalf("unexpected refusal error: %v", err)
+	}
 }
 
 func TestSyncReportsConflictAndAborts(t *testing.T) {
@@ -172,8 +216,16 @@ func TestLeaseCASPreventsRaces(t *testing.T) {
 	if lease, _ = ReadLease(a); lease == nil || lease.Holder != "instance-b" {
 		t.Fatalf("takeover not visible: %+v", lease)
 	}
-	ReleaseLease(a)
+	// Release is ownership-checked: the stale instance a (whose last-written
+	// SHA has been superseded by b's takeover) must NOT delete b's live lease.
+	ReleaseLease(a, shaA)
+	current, _ := ReadLease(a)
+	if current == nil || current.Holder != "instance-b" {
+		t.Fatalf("stale release deleted the live lease: %+v", current)
+	}
+	// The rightful holder releases with its own SHA: lease gone.
+	ReleaseLease(b, current.SHA)
 	if lease, _ = ReadLease(b); lease != nil {
-		t.Fatalf("release should remove the lease: %+v", lease)
+		t.Fatalf("owned release should remove the lease: %+v", lease)
 	}
 }

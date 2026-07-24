@@ -49,6 +49,69 @@ func TestValidateRejectsOversizedFile(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsHardLinks(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	os.WriteFile(outside, []byte("secret"), 0o644)
+	if err := os.Link(outside, filepath.Join(dir, "alias.md")); err != nil {
+		t.Skip("hard links unavailable")
+	}
+	if err := Validate(dir); err == nil || !strings.Contains(err.Error(), "hard link") {
+		t.Fatalf("expected hard-link rejection, got %v", err)
+	}
+}
+
+// Import must refuse to overwrite uncommitted human curation -- there is no
+// reflog for edits that were never committed. Supervisor-owned paths are the
+// attempt's own in-flight bookkeeping and do not gate.
+func TestImportRefusesDirtyWorktree(t *testing.T) {
+	repo := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v: %s", args, err, out)
+		}
+	}
+	run("git", "init", "-q", "-b", "main", ".")
+	if err := EnsureWorktree(repo); err != nil {
+		t.Fatal(err)
+	}
+	staging := t.TempDir()
+	os.WriteFile(filepath.Join(staging, "events.md"), []byte("- staged fact\n"), 0o644)
+
+	// A human edit, uncommitted: refuse.
+	wt := WorktreePath(repo)
+	os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("- [ ] mid-edit\n"), 0o644)
+	if err := Import(repo, staging); err == nil || !strings.Contains(err.Error(), "uncommitted") {
+		t.Fatalf("expected dirty-worktree refusal, got %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(wt, "tasks.md")); string(got) != "- [ ] mid-edit\n" {
+		t.Fatalf("refused import still modified the worktree: %q", got)
+	}
+
+	// Committed: import proceeds.
+	if _, err := Commit(repo, "human curation"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Import(repo, staging); err != nil {
+		t.Fatalf("clean worktree should import: %v", err)
+	}
+
+	// The pipeline commits right after a successful import; mirror that.
+	if _, err := Commit(repo, "import"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Supervisor-owned dirt (this attempt's own bookkeeping) does not gate.
+	os.MkdirAll(filepath.Join(wt, "state"), 0o755)
+	os.WriteFile(filepath.Join(wt, "state", "r.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(staging, "events.md"), []byte("- staged fact\n- another\n"), 0o644)
+	if err := Import(repo, staging); err != nil {
+		t.Fatalf("supervisor-owned dirt must not block import: %v", err)
+	}
+}
+
 func TestRestoreFileDiscardsStagedChange(t *testing.T) {
 	repo := t.TempDir()
 	wt := WorktreePath(repo)
