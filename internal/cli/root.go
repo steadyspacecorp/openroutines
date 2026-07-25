@@ -17,6 +17,7 @@ Usage:
   openroutines status               show what the agent has and still needs
   openroutines routines <command>   new, list, run, test, edit, activate, deactivate, remove
   openroutines skills <command>     new, list, remove
+  openroutines plugin add <source>  install a plugin: routines + skills + credential names
   openroutines credentials <cmd>    set, list, remove
   openroutines supervise            run the scheduler (container entrypoint)
   openroutines update               bump the pinned framework version
@@ -47,6 +48,8 @@ func Run(args []string) int {
 		return cmdStatus(rest)
 	case "skills", "skill":
 		return cmdSkills(rest)
+	case "plugin", "plugins":
+		return cmdPlugin(rest)
 	case "credentials", "credential":
 		return cmdCredentials(rest)
 	case "update":

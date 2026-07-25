@@ -76,6 +76,41 @@ fi
 grep -q 'provider "smoke_gateway" in opencode.json is not referenced' "$work/out" || die "check did not flag the unreferenced provider"
 step "check accepts provider config and flags unreferenced ids"
 
+# Plugins install from local paths too (the fixture and development path).
+# All three reference plugins go in: the grant summary must state what each
+# asks for, nothing lands outside routines/ and skills/, ledger stubs wait
+# for the memory worktree, and a reinstall is refused, not overwritten.
+for p in steady slack github-docs; do
+  run plugin add "$repo/examples/plugins/$p" || die "plugin add $p"
+done
+grep -q 'trigger: polls' "$work/out" && die "github-docs declares no active trigger, summary invented one"
+[[ -f routines/steady-check-in.md && -d skills/slack-webhook && -f routines/doc-watch.md ]] || die "plugin files missing"
+[[ -e memory/ledgers/doc-watch.md ]] && die "ledger stub installed with no memory worktree"
+grep -q 'seed memory/ledgers/doc-watch.md' "$work/out" || die "pending stub not surfaced as a next step"
+grep -q 'credentials set github_app_private_key' "$work/out" || die "credential next-step missing"
+grep -q 'type: github_app' "$work/out" || die "typed-credential agent.yaml step missing"
+if run plugin add "$repo/examples/plugins/steady"; then
+  die "reinstalling over existing files should be refused"
+fi
+grep -q 'refusing to replace' "$work/out" || die "collision refusal message missing"
+step "plugin add installs all three reference plugins, refuses reinstall"
+
+# The installed routines must satisfy check once their credentials exist and
+# the typed entry is declared (values are fake; check only wires names).
+printf 'fake\n' | run credentials set steady_token || die "credentials set steady_token"
+printf 'fake\n' | run credentials set slack_webhook_url || die "credentials set slack_webhook_url"
+printf 'fake\n' | run credentials set github_app_private_key || die "credentials set github_app_private_key"
+cat >> agent.yaml <<'EOF'
+credentials:
+  github_app_private_key:
+    type: github_app
+    app_id: "12345"
+variables:
+  docs_repos: "acme/docs"
+EOF
+run check || die "check after plugin installs"
+step "check passes with the installed plugins wired up"
+
 # update: brings an agent to the running binary's version, rewriting
 # framework-owned files (non-interactive stdin applies automatically).
 # opencode.json is user config: update must never rewrite it.
