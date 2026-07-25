@@ -34,12 +34,12 @@ The repository is the agent. Someone who can change trusted repository content c
 
 When deployed as documented:
 
-- **Credential scoping:** a model process receives only the routine credentials declared in frontmatter, plus the credential needed for its selected model provider. Its environment is constructed rather than inherited.
+- **Credential scoping:** a model process receives only the routine credentials declared in frontmatter, plus the credential needed for its selected model provider. Its environment is constructed rather than inherited. A typed credential is derived by the supervisor at spawn: the run receives short-lived, revoked-at-attempt-end material (for example a GitHub App installation token) and never the stored root secret.
 - **Supervisor-key isolation:** with `OPENROUTINES_MASTER_KEY_FILE` and `OPENROUTINES_DEPLOY_KEY_FILE`, master and deploy key values do not enter the model process environment. Their files are outside the model filesystem sandbox.
 - **Filesystem confinement:** local model execution occurs in a disposable container. Production model execution is confined with Landlock to the run workspace and required runtime paths. Writable paths are staged memory, the run temporary directory, a disposable per-attempt home, and `/dev`.
 - **Git isolation:** model-directed processes do not receive the supervisor's Git worktree or Git metadata. They write to a disposable staging tree that the supervisor validates before importing.
 - **Workspace minimization:** a run workspace is assembled from an allow-list of required repository content. Files such as the encrypted credential store and deploy keys are not copied merely because they exist in the repository.
-- **No application ingress:** the shipped agent runtime does not listen on a network port. This does not prevent outbound connections or host-level access configured by an operator.
+- **No application ingress:** the shipped agent runtime does not listen on a network port. This does not prevent outbound connections or host-level access configured by an operator. Routine triggers stay outbound: the supervisor polls a frontmatter-declared URL (no redirects, bounded reads, raw credentials only) and treats the response as an opaque comparison value that is never logged raw and never enters model context.
 - **Rewrite detection:** memory synchronization rejects a remote history that no longer descends from the last accepted tip, while the accepted reference remains available and trustworthy.
 
 These controls are layered. Production model processes currently share the supervisor's UID; isolation between them relies on Landlock, a constructed environment, file-based key delivery, and a non-dumpable supervisor.
