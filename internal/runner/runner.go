@@ -38,8 +38,10 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
+// Outcome classifies how an attempt ended.
 type Outcome string
 
+// The terminal outcomes an attempt reports.
 const (
 	Completed Outcome = "completed"
 	Timeout   Outcome = "timeout"

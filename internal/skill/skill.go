@@ -17,6 +17,7 @@ import (
 // and hyphens, matching the directory name.
 var NamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
+// Skill is one parsed SKILL.md: name, description, directory.
 type Skill struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`

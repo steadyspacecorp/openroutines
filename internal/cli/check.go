@@ -29,7 +29,7 @@ var effortPattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 // cmdCheck validates the agent repository: agent.yaml, every routine's
 // frontmatter, skill references, credential names, and deploy prerequisites.
 // Exit code 1 on any failure -- made for CI.
-func cmdCheck(args []string) int {
+func cmdCheck(_ []string) int {
 	dir := "."
 	failures := 0
 	warnings := 0

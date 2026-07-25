@@ -21,7 +21,7 @@ import (
 
 // cmdStatus shows what the agent has and still needs: identity, key, model,
 // routines with their next firing, skills, and memory sync state.
-func cmdStatus(args []string) int {
+func cmdStatus(_ []string) int {
 	dir := "."
 	agent, err := config.Load(dir)
 	if err != nil {

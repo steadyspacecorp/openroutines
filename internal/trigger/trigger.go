@@ -127,7 +127,7 @@ func (t Spec) Validate() error {
 // declared URL is the reviewed grant, and a redirect is a different URL.
 var Client = &http.Client{
 	Timeout: RequestTimeout,
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("redirects are not followed")
 	},
 }

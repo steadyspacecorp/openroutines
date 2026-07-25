@@ -1,3 +1,5 @@
+// Package sandbox confines model processes to declared filesystem paths
+// with Landlock on Linux; other platforms report ErrUnsupported.
 package sandbox
 
 import (

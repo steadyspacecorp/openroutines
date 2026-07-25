@@ -86,7 +86,7 @@ func loadState(t *testing.T, s *Supervisor) *schedule.State {
 	return st
 }
 
-func readFile(t *testing.T, path string) string {
+func readFile(_ *testing.T, path string) string {
 	raw, _ := os.ReadFile(path)
 	return string(raw)
 }

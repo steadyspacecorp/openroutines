@@ -43,8 +43,8 @@ func TestVariableNameValidation(t *testing.T) {
 // ignored configuration.
 func TestLoadRejectsUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte("name: a\ndescriptoin: typo\n"), 0o644)
-	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "descriptoin") {
+	os.WriteFile(filepath.Join(dir, FileName), []byte("name: a\ndescriptoin: typo\n"), 0o644) //nolint:misspell // deliberate: strict decoding must name the typo
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "descriptoin") {     //nolint:misspell // deliberate: asserts the typo is named
 		t.Fatalf("expected unknown-field error naming the typo, got %v", err)
 	}
 }

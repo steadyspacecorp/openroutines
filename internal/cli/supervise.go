@@ -10,7 +10,7 @@ import (
 
 // cmdSupervise runs the scheduler until SIGTERM/SIGINT: the container
 // entrypoint.
-func cmdSupervise(args []string) int {
+func cmdSupervise(_ []string) int {
 	s, err := supervisor.New(".")
 	if err != nil {
 		return fail(err)

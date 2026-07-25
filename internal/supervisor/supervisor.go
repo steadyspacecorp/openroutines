@@ -33,11 +33,14 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
+// Scheduling constants: the tick cadence and the per-run attempt cap.
 const (
 	TickInterval = time.Minute
 	MaxAttempts  = 5
 )
 
+// Supervisor is the tick loop: it re-reads routines, mints and dispatches
+// runs, and syncs memory with origin.
 type Supervisor struct {
 	Dir        string
 	InstanceID string
@@ -60,6 +63,7 @@ type Supervisor struct {
 	pollFailed map[string]bool
 }
 
+// New builds a supervisor for the agent repository at dir.
 func New(dir string) (*Supervisor, error) {
 	agent, err := config.Load(dir)
 	if err != nil {
@@ -619,6 +623,6 @@ func (s *Supervisor) renewLease(now time.Time) bool {
 
 func parseAttempt(attemptID string) int {
 	var n int
-	fmt.Sscanf(attemptID, "attempt_%d", &n)
+	_, _ = fmt.Sscanf(attemptID, "attempt_%d", &n)
 	return n
 }

@@ -31,7 +31,7 @@ var frameworkOwned = []string{
 // cmdUpdate brings the agent up to the version of the running binary: bumps
 // the pin and offers each framework-owned file's changes interactively
 // (rails app:update style). It stages nothing -- review, commit, push.
-func cmdUpdate(args []string) int {
+func cmdUpdate(_ []string) int {
 	dir := "."
 	agent, err := config.Load(dir)
 	if err != nil {
@@ -103,7 +103,7 @@ func cmdUpdate(args []string) int {
 		return fail(fmt.Errorf("cannot verify Dockerfile framework version: %w", err))
 	}
 	if !dockerfileUsesVersion(dockerfile, target) {
-		return fail(fmt.Errorf("Dockerfile still uses a different openroutines base image -- .openroutines-version was left at %s; update the FROM tag to %s and rerun", current, target))
+		return fail(fmt.Errorf("the Dockerfile still uses a different openroutines base image -- .openroutines-version was left at %s; update the FROM tag to %s and rerun", current, target))
 	}
 	if err := os.WriteFile(pinPath, []byte(target+"\n"), 0o644); err != nil {
 		return fail(err)

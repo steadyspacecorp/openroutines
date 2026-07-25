@@ -63,7 +63,7 @@ func cmdSandboxExec(args []string) int {
 // cmdSandboxProbe applies a throwaway ruleset to a child-less scratch scope
 // and reports whether confinement is available. Used by supervise at boot
 // (fail closed before the first run, not during it).
-func cmdSandboxProbe(args []string) int {
+func cmdSandboxProbe(_ []string) int {
 	desc, err := sandbox.Apply([]string{os.TempDir()}, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

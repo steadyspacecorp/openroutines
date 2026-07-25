@@ -15,6 +15,7 @@ import (
 	"syscall"
 )
 
+// Memory is a dedicated directory backed by its own branch.
 const (
 	Dir        = "memory"
 	Branch     = "memory"
@@ -516,7 +517,7 @@ func Status(repoDir string) WorktreeStatus {
 		st.LastCommit = out
 	}
 	if out, err := git(wt, "rev-list", "--count", "refs/remotes/origin/"+Branch+"..HEAD"); err == nil {
-		fmt.Sscanf(out, "%d", &st.Unpushed)
+		_, _ = fmt.Sscanf(out, "%d", &st.Unpushed)
 	}
 	return st
 }

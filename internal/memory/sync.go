@@ -150,6 +150,7 @@ func short(sha string) string {
 
 // --- Lease: "one writer" enforced, not assumed -------------------------------
 
+// The lease: a single-writer heartbeat ref with a bounded TTL.
 const (
 	leaseRef = "refs/openroutines/lease"
 	LeaseTTL = 5 * time.Minute

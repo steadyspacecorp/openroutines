@@ -47,6 +47,7 @@ func (f Frontmatter) RecordsEvents() bool { return f.Events == nil || *f.Events 
 // IsConsumer reports whether the routine declared itself a memory consumer.
 func (f Frontmatter) IsConsumer() bool { return f.Consumes == "memory" }
 
+// Routine is one parsed routine file: identity, declared scope, prompt.
 type Routine struct {
 	Name string // filename without .md -- the human-readable name
 	Path string

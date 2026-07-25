@@ -25,7 +25,7 @@ type triggerServer struct {
 
 func newTriggerServer(value string) *triggerServer {
 	ts := &triggerServer{value: value}
-	ts.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		ts.mu.Lock()
 		defer ts.mu.Unlock()
 		ts.polls++
@@ -155,7 +155,7 @@ func TestTriggerIntervalThrottlesPolls(t *testing.T) {
 }
 
 func TestTriggerPollErrorsDoNotFire(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()

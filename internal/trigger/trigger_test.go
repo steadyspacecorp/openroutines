@@ -152,7 +152,7 @@ func TestPollRawBodyHashAndETag(t *testing.T) {
 }
 
 func TestPollRefuses304BeforeBaseline(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 	}))
 	defer srv.Close()
@@ -180,7 +180,7 @@ func TestPollRefusesRedirectsAndErrors(t *testing.T) {
 
 func TestPollSelectBodyCap(t *testing.T) {
 	big := `{"pad":"` + strings.Repeat("x", selectBodyCap) + `"}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(big))
 	}))
 	defer srv.Close()
@@ -191,7 +191,7 @@ func TestPollSelectBodyCap(t *testing.T) {
 
 func TestPollRawBodyCap(t *testing.T) {
 	big := strings.Repeat("x", hashBodyCap+1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(big))
 	}))
 	defer srv.Close()

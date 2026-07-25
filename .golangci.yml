@@ -1,0 +1,29 @@
+# Lean by intent: the standard set plus a few high-signal linters. Add a
+# linter when it catches a real bug class, not because it exists.
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - misspell
+    - revive
+    - unconvert
+  settings:
+    errcheck:
+      # Close on read paths and RemoveAll cleanup are ignore-by-design;
+      # anywhere the error matters, it is checked explicitly.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - os.RemoveAll
+  exclusions:
+    rules:
+      # Test scaffolding writes fixtures without ceremony; the assertions
+      # that follow fail loudly if a write didn't happen.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

@@ -19,13 +19,16 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 )
 
+// FileName is the agent configuration file at the repository root.
 const FileName = "agent.yaml"
 
+// Owner identifies the human accountable for the agent.
 type Owner struct {
 	Name  string `yaml:"name"`
 	Email string `yaml:"email"`
 }
 
+// Defaults are agent-wide fallbacks that routine frontmatter overrides.
 type Defaults struct {
 	Model   string `yaml:"model"`
 	Timeout string `yaml:"timeout"`

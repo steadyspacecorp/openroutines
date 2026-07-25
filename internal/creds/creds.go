@@ -18,6 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Store layout and key-delivery environment variables.
 const (
 	KeyFileName      = "master.key"
 	FileName         = "credentials.yml.enc"

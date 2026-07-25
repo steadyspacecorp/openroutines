@@ -17,6 +17,7 @@ type Writer struct {
 	buf     bytes.Buffer
 }
 
+// NewWriter wraps dst, redacting secret values line by line.
 func NewWriter(dst io.Writer, secrets map[string]string) *Writer {
 	return &Writer{dst: dst, secrets: secrets}
 }
@@ -49,7 +50,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 // Flush writes any buffered partial line, redacted.
 func (w *Writer) Flush() {
 	if w.buf.Len() > 0 {
-		io.WriteString(w.dst, Redact(w.buf.String(), w.secrets))
+		_, _ = io.WriteString(w.dst, Redact(w.buf.String(), w.secrets))
 		w.buf.Reset()
 	}
 }

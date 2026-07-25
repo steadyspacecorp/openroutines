@@ -13,7 +13,7 @@ import (
 
 // cmdConfigure interactively fills in agent.yaml, generates the master key,
 // and seeds encrypted credentials. Idempotent: existing values are defaults.
-func cmdConfigure(args []string) int {
+func cmdConfigure(_ []string) int {
 	dir := "."
 	agent, err := config.Load(dir)
 	if err != nil {

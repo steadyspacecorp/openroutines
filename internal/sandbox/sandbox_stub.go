@@ -2,6 +2,7 @@
 
 package sandbox
 
+// Apply is the non-Linux stub: the filesystem sandbox is Linux-only.
 func Apply(ro, rw []string) (string, error) {
 	_ = ro
 	_ = rw
