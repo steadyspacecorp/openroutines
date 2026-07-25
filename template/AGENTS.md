@@ -27,6 +27,10 @@ deployed container runs whatever routine is due.
 - **Grants are explicit**: a routine gets only the skills and credentials its
   frontmatter declares. When adding a capability, add the grant in the same
   change so the diff shows what the routine can now touch.
+- A whole capability can arrive as a plugin (`openroutines plugin add
+  <repo>`): routines and skills copied in behind a grant summary, installed
+  inactive. After install the files are ordinary repo content -- review and
+  edit them like anything else here.
 - **Validate after every change**: `openroutines check`. Run a routine once
   with `openroutines routines test <name>` (discards memory writes) or
   `openroutines routines run <name>` (keeps them).

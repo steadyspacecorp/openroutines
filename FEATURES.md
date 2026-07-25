@@ -15,6 +15,7 @@ Most agent platforms want to be your runtime, your editor, and your vendor. An O
 | **`openroutines check`** -- validates config, frontmatter, schedules, credential wiring, and config drift; made for CI | The repo is the agent, so repo review is agent review. Machine-checkable mistakes should be caught by a machine, on every push, before deploy. |
 | **Deploys anywhere a container runs** -- a VPS, Fly, Render, a homelab; the only prerequisite is a git origin to push memory to | One agent, one container, nothing else to provision. If your platform can run Docker, it can run your agent. |
 | **One small Go supervisor binary, versioned out of the agent repo** -- the agent pins a release; `openroutines update` bumps the pin and applies template changes as one reviewable commit | Laptop, CI, and production always agree on the framework version, and updating is a diff you review -- never a mystery. What's yours (routines, skills, memory, credentials, `opencode.json`) is never touched. |
+| **Plugins** -- `openroutines plugin add` installs a copy-in bundle of routines, skills, and credential names behind a grant summary; installed routines land inactive, and the payload is allow-listed (no config files, no key material, no install hooks) | The capabilities worth sharing are exactly what you'd otherwise copy-paste between agents. Copy-first keeps the trust story one sentence: a plugin has zero special authority -- installing one produces the same files you'd have written by hand, reviewed in the same diff. |
 
 ## It remembers, reports, and improves
 
