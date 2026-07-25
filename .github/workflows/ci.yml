@@ -28,3 +28,21 @@ jobs:
 
       - name: smoke
         run: bin/smoke
+
+  # Same pattern as the org's other repos: the rtCamp default card into the
+  # CI channel. Skips silently until SLACK_CI_WEBHOOK is set in repo secrets.
+  notify:
+    needs: ci
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_CI_WEBHOOK }}
+    steps:
+      - name: Notify via Slack
+        if: env.SLACK_WEBHOOK != ''
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_USERNAME: "${{ github.repository }}: ${{ needs.ci.result }}"
+          SLACK_ICON: https://app.steady.space/alt/iconx-256.dev.png
+          SLACK_COLOR: ${{ needs.ci.result }}
+          SLACK_FOOTER: ""

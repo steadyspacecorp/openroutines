@@ -1,0 +1,26 @@
+name: release-notify
+
+# Releases are cut from a dev machine by bin/release; this fires on the
+# published release however it was created. Minimal deploy-style message
+# into the deploys channel. Skips silently until SLACK_DEPLOYS_WEBHOOK is
+# set in repo secrets.
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_DEPLOYS_WEBHOOK }}
+    steps:
+      - name: Notify via Slack
+        if: env.SLACK_WEBHOOK != ''
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          MSG_MINIMAL: true
+          SLACK_USERNAME: "${{ github.repository }}: release"
+          SLACK_ICON: https://app.steady.space/alt/iconx-256.dev.png
+          SLACK_COLOR: good
+          SLACK_MESSAGE: "Released <${{ github.event.release.html_url }}|${{ github.event.release.tag_name }}> -- base image ghcr.io/${{ github.repository }}:${{ github.event.release.tag_name }}"
+          SLACK_FOOTER: ""
