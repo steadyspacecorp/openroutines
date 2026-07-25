@@ -1,12 +1,12 @@
 ---
-name: steady-pack
+name: steady
 description: File daily Steady check-ins from agent memory and keep up with comments -- the two routines every Steady-connected agent otherwise reinvents.
 credentials:
   steady_token:
     description: A Steady personal access token (steady_pat_...) for the agent's own Steady account
 ---
 
-# Steady pack
+# steady
 
 Connects an agent to [Steady](https://runsteady.com) the way a teammate is connected: it files a daily check-in composed from the agent's memory, and it reads and answers comments addressed to the agent.
 

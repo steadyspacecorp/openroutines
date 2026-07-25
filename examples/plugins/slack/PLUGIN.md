@@ -1,12 +1,12 @@
 ---
-name: slack-pack
+name: slack
 description: Post the agent's memory change feed to a Slack channel as a teammate-style update, via an incoming webhook.
 credentials:
   slack_webhook_url:
     description: A Slack incoming-webhook URL (https://hooks.slack.com/services/...) -- it both authenticates and addresses the channel, so treat it as a secret
 ---
 
-# Slack pack
+# slack
 
 Points an agent's reporting at a Slack channel. The routine is a memory-feed consumer: twice a workday it turns everything the agent recorded since its last report into one short, human update and posts it through an incoming webhook.
 

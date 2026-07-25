@@ -1,5 +1,5 @@
 ---
-name: github-docs-pack
+name: github-docs
 description: Watch documentation repositories for changes and keep a running account of what changed and what it affects -- the base of a knowledgebot.
 credentials:
   github_app_private_key:
@@ -10,9 +10,9 @@ variables:
     description: Space-separated owner/repo list to watch, e.g. "acme/docs acme/runbooks"
 ---
 
-# GitHub docs pack
+# github-docs
 
-The watching half of a knowledgebot: a routine that sweeps configured documentation repositories, records what changed since its last look, and keeps memory current on what those changes affect. What your agent *does* with that awareness -- updating a knowledge base, answering questions, flagging drift against another source -- is the routine you write next; this pack keeps the raw material fresh.
+The watching half of a knowledgebot: a routine that sweeps configured documentation repositories, records what changed since its last look, and keeps memory current on what those changes affect. What your agent *does* with that awareness -- updating a knowledge base, answering questions, flagging drift against another source -- is the routine you write next; this plugin keeps the raw material fresh.
 
 ## What you get
 
