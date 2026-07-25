@@ -1,65 +1,72 @@
 # Security
 
-openroutines runs autonomous AI agents unattended, with credentials, on your
-infrastructure. Security is the reason most of its design decisions exist --
-[DESIGN.md](DESIGN.md) records each one with its reasoning.
+openroutines runs autonomous AI agents unattended, with credentials, on your infrastructure. Its primary security boundary separates untrusted model-directed execution from the supervisor's credentials, Git worktree, and host filesystem.
 
 ## Reporting a vulnerability
 
-Report privately via [GitHub's private vulnerability reporting](../../security/advisories/new)
-on this repository, or email henry@steady.space. Please don't open a public
-issue for anything exploitable. You'll get an acknowledgment within a few
-days; this is a small project and we'll be candid about timelines.
+Report privately via [GitHub's private vulnerability reporting](../../security/advisories/new) on this repository. Please do not open a public issue for an exploitable vulnerability. You should receive an acknowledgment within a few days; this is a small project and we will be candid about timelines.
 
-## Supported versions
+A useful report identifies:
 
-Pre-1.0: only the latest release is supported. `openroutines update` brings
-an agent to the version of the binary you run.
+- the attacker's starting access;
+- the trust boundary crossed;
+- the resulting access or impact;
+- a reproduction against the latest release.
 
-## What the design defends
+Correctness, durability, and availability bugs are welcome as regular GitHub issues unless they cross a security boundary described below.
 
-- **Credential scoping**: a routine's process receives only the secrets its
-  frontmatter declares, in an environment constructed from scratch. The
-  master and deploy keys are delivered to the supervisor by file
-  (`OPENROUTINES_*_KEY_FILE`, preferred) or environment variable; the file
-  paths sit outside the model sandbox's rule set, and the supervisor marks
-  itself non-dumpable at boot, so same-UID model processes can read neither
-  its environment nor its memory. Running the model process under its own
-  UID is the remaining hardening step (tracked in the backlog).
-- **Filesystem confinement**: model processes run in a per-run container
-  locally and under a Landlock sandbox in production -- read access to their
-  run workspace, the OS, and the opencode installation; write access to
-  staged memory, the run tmp, and a disposable per-attempt HOME, nothing
-  else. Fails closed at boot, and a Linux-gated integration test asserts
-  each boundary on a real kernel.
-- **No ingress**: a deployed agent listens on nothing. Logs are the only way
-  in.
-- **Git isolation**: model processes never touch a git worktree or metadata;
-  the supervisor validates staged output (no symlinks, no git control files,
-  size limits) before importing it.
-- **Memory as untrusted input**: agent memory is framed to the model as
-  records, never instructions; sync refuses rewritten remote history.
-- **Supply chain**: two runtime dependencies plus Landlock bindings; the
-  agent base image pins its opencode version.
+## Security model
 
-## Known limitations (honest list)
+openroutines treats model-directed execution as untrusted. This includes model output, commands and tools selected by the model, memory produced by routines, and content fetched from external systems.
 
-- **Network egress is unrestricted.** A prompt-injected routine can send
-  anything it legitimately holds (its declared credentials, readable memory)
-  to any host. Scoping caps what a routine holds; nothing yet caps where it
-  can send. Per-routine egress control is the top item on the hardening
-  backlog.
-- **Log redaction is best-effort**: exact-value matching only; an encoded
-  secret can evade it. The primary protection is scoping, not redaction.
-- **Prompt injection is mitigated, not solved.** Skills and web content are
-  instructions the model may follow. Treat every skill and credential grant
-  as authority.
-- Release artifacts are checksummed; darwin binaries are ad-hoc signed. Developer ID signing and notarization are pending (launch checklist). When replacing an installed binary on macOS, download to a temp path and `mv` into place -- overwriting in place invalidates the kernel's signature cache and the binary gets killed.
+openroutines trusts:
+
+- the agent repository's reviewed main branch, including its routines, skills, `agent.yaml`, and `opencode.json`;
+- the container host and deployment configuration;
+- administrators of the agent's Git origin;
+- the selected base image, opencode distribution, model provider, and other runtime dependencies.
+
+The repository is the agent. Someone who can change trusted repository content can change its behavior and authority by design. openroutines validates common mistakes in trusted inputs, but does not attempt to sandbox an agent from its own source code or administrators.
+
+## Security properties
+
+When deployed as documented:
+
+- **Credential scoping:** a model process receives only the routine credentials declared in frontmatter, plus the credential needed for its selected model provider. Its environment is constructed rather than inherited.
+- **Supervisor-key isolation:** with `OPENROUTINES_MASTER_KEY_FILE` and `OPENROUTINES_DEPLOY_KEY_FILE`, master and deploy key values do not enter the model process environment. Their files are outside the model filesystem sandbox.
+- **Filesystem confinement:** local model execution occurs in a disposable container. Production model execution is confined with Landlock to the run workspace and required runtime paths. Writable paths are staged memory, the run temporary directory, a disposable per-attempt home, and `/dev`.
+- **Git isolation:** model-directed processes do not receive the supervisor's Git worktree or Git metadata. They write to a disposable staging tree that the supervisor validates before importing.
+- **Workspace minimization:** a run workspace is assembled from an allow-list of required repository content. Files such as the encrypted credential store and deploy keys are not copied merely because they exist in the repository.
+- **No application ingress:** the shipped agent runtime does not listen on a network port. This does not prevent outbound connections or host-level access configured by an operator.
+- **Rewrite detection:** memory synchronization rejects a remote history that no longer descends from the last accepted tip, while the accepted reference remains available and trustworthy.
+
+These controls are layered. Production model processes currently share the supervisor's UID; isolation between them relies on Landlock, a constructed environment, file-based key delivery, and a non-dumpable supervisor.
+
+## Deployment requirements
+
+The security properties above assume that operators:
+
+- deliver master and deploy keys through read-only files;
+- do not mount the Docker socket or unrelated host directories;
+- run only one supervisor instance for an agent;
+- keep the host, container runtime, base image, and openroutines release current;
+- review repository changes, skills, credentials, and permission grants as code;
+- do not disable the production sandbox with `OPENROUTINES_UNSAFE_NO_SANDBOX=1`.
+
+Environment-variable key delivery is supported for compatibility, but has a weaker process-exposure posture than file delivery and is not the recommended production configuration.
+
+## Known limitations
+
+- **Network egress is unrestricted.** A prompt-injected routine can send anything it legitimately holds, including declared credentials and readable memory, to any reachable host. Credential and workspace scoping limit what it holds, not where it can send it.
+- **Prompt injection is not solved.** External content may influence model behavior. Treat every skill, credential, and tool grant as authority.
+- **Dry runs are not offline sandboxes.** `routines test` withholds declared routine credentials, discards staged memory changes, and denies action-oriented model tools. It still starts the trusted runtime and may contact the selected model provider.
+- **Log redaction is best-effort.** Exact secret values are scrubbed from ordinary output, but transformed, encoded, fragmented, or indirectly disclosed values may evade redaction.
+- **The supervisor and model process share a Linux user.** In the production container, opencode runs as a child of the supervisor under the same user ID. Unix user permissions therefore do not separate them; isolation relies on the layered controls described above.
+- **Trusted code remains powerful.** A malicious routine, skill, `opencode.json`, container image, or host configuration is outside the model sandbox's threat boundary.
 
 ## Out of scope
 
-- Vulnerabilities in opencode, model providers, or Docker itself (report
-  upstream; we'll pin around them where we can).
-- Attacks requiring control of the agent's own repository or host -- the
-  repo is the agent; whoever controls it controls the agent by design.
-- Denial of service against your own agent.
+- Attacks requiring control of the trusted agent repository, Git origin administration, container host, or deployment configuration.
+- Vulnerabilities in opencode, model providers, Git, or the container runtime, though openroutines may pin or mitigate affected versions.
+- Denial of service, scheduling errors, concurrent routine conflicts, or lost agent memory that do not grant access across a security boundary.
+- Protection from credentials, files, or capabilities deliberately granted to a routine.

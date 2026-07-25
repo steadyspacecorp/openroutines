@@ -42,6 +42,7 @@ Use these terms exactly; the docs and code should agree:
 - The project name is **openroutines** -- one word, all lowercase, everywhere, even starting a sentence. Never "Open Routines" or "OpenRoutines".
 - README.md uses `--` double hyphens, not em dashes; conversational but technical tone; no marketing superlatives.
 - DESIGN.md entries are `## Heading` + `**Decision.**` + `**Why.**` -- state the decision, then argue it.
+- Documentation paragraphs use one physical line per paragraph; do not add hard line breaks for column wrapping.
 - Tests: minimal and behavior-focused. Prefer exercising a real flow (scaffold a temp agent, run a routine against a stub) over unit-testing internals. Don't let testing infrastructure outgrow the thing it tests.
 - Commit messages: short imperative subject; body only when the why isn't obvious.
 

@@ -62,7 +62,7 @@ Records hold facts, never polished prose -- compression and voice are a reader's
 
 - No fleets. An ORA can run as many routines as you want, but it holds one job. Two jobs means two agents.
 - No chat gateway for developing the agent by talking to it. Work on it locally with the coding agent of your choice -- AGENTS.md is there to make that easy.
-- No ingress. Routines may reach out to networked services through their skills, but in production, logs are the only way in.
+- No application ingress. The shipped container listens on no ports. Routines may still reach out to networked services, and operators remain responsible for host and deployment access.
 
 ## Creating a new agent
 
@@ -120,7 +120,9 @@ Give the agent its first routine:
 openroutines routines new doc-drift
 ```
 
-Edit the generated file -- schedule and scope in the frontmatter, prompt in the body -- then run it once, locally, exactly as the supervisor would in production. And "exactly" is literal: the run executes inside the same Docker container your deployment uses, with your working copy mounted, so there is no works-locally-breaks-in-production gap.
+Edit the generated file -- schedule and scope in the frontmatter, prompt in the body -- then run it once locally. The local run uses the same runtime image, opencode version, constructed environment, and assembled workspace as production.
+
+Both `routines run` and `routines test` start opencode in a disposable Docker container; `test` changes its permissions and discards its writes, but uses the same containerized runtime.
 
 ```bash
 openroutines routines run doc-drift
@@ -131,7 +133,7 @@ Day to day:
 ```bash
 openroutines status                   # master key, models, routines and schedules, skills, memory sync state
 openroutines routines list            # also: edit, activate, deactivate, remove
-openroutines routines test <name>     # dry run: no outbound calls, no memory saved, actions narrated
+openroutines routines test <name>     # dry run: routine credentials withheld, acting tools denied, memory discarded
 openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove
 openroutines credentials set <name>   # add/replace one encrypted secret; also: list, remove
 openroutines check                    # validate config, frontmatter, and schedules; made for CI
@@ -173,14 +175,14 @@ The image contains the pinned `openroutines` binary, opencode, git, and your rep
 - **The master key** (a copy of `master.key`) decrypts the credentials file. Routines receive only the credentials their frontmatter declares.
 - **The deploy key** lets the agent push its memory. On boot the supervisor fetches the `memory` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
 
-Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEPLOY_KEY_FILE` at the paths, as above -- file delivery keeps key material out of the process environment entirely. (On platforms where mounting a file is awkward, the values can arrive directly in `OPENROUTINES_MASTER_KEY` / `OPENROUTINES_DEPLOY_KEY` instead; the supervisor shields its environment from model processes either way.)
+Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEPLOY_KEY_FILE` at the paths, as above -- file delivery keeps key material out of the process environment. On platforms where mounting a file is awkward, the values can arrive directly in `OPENROUTINES_MASTER_KEY` / `OPENROUTINES_DEPLOY_KEY` instead, but environment delivery has a weaker process-exposure posture and is not the recommended production configuration.
 
 A few properties fall out of the design (see [DESIGN.md](DESIGN.md) for the reasoning):
 
 - **Run exactly one instance.** One agent, one runtime -- the agent is the sole writer to its memory branch, so there is nothing to scale horizontally. If a platform asks how many replicas, the answer is 1, and the supervisor enforces it with a lease: an accidental second instance waits instead of corrupting memory.
 - **Redeploys are safe.** A routine killed mid-run fires again on the next boot, and a scheduled moment that passes while the container is down runs late instead of never. Missed is recoverable; silently skipped is not.
 - **Memory survives.** Code rolls back with the image; memory lives on its own branch and persists, like a database, but versioned.
-- **Logs are the only way in.** The container listens on no ports. Routine output and run records go to stdout -- read them with `docker logs` or your platform's log tooling.
+- **No application ingress.** The shipped container listens on no ports. Routine output and run records go to stdout -- read them with `docker logs` or your platform's log tooling. This does not replace normal host and deployment access controls.
 
 For continuous deployment, wire the usual hooks: run `openroutines check` on every push, rebuild and redeploy on merge to `main`. Pushes to the `memory` branch never trigger a deploy -- that separation is by design.
 
