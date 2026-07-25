@@ -4,7 +4,7 @@ openroutines runs autonomous AI agents unattended, with credentials, on your inf
 
 ## Reporting a vulnerability
 
-Report privately via [GitHub's private vulnerability reporting](../../security/advisories/new) on this repository. Please do not open a public issue for an exploitable vulnerability. You should receive an acknowledgment within a few days; this is a small project and we will be candid about timelines.
+Email security@steady.space, or -- once this repository is public -- report privately via [GitHub's private vulnerability reporting](../../security/advisories/new). Please do not open a public issue for an exploitable vulnerability. You should receive an acknowledgment within a few days; this is a small project and we will be candid about timelines.
 
 A useful report identifies:
 
