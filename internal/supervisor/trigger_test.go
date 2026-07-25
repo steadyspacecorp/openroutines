@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
 // triggerServer is a mutable poll target: set() changes the served value,
@@ -194,5 +196,42 @@ func TestScheduledRunRefreshesTriggerBaseline(t *testing.T) {
 	s.Tick(ctx, t0.Add(6*time.Minute)) // trigger sees v2 == stored v2: quiet
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("refreshed baseline should prevent a redundant trigger run, got %d", got)
+	}
+}
+
+// A typed credential's stored value is a root secret (derivation exists so
+// runs never see it); the poll refuses to send it as a bearer token, so the
+// trigger never reaches the wire and never fires.
+func TestTriggerRefusesTypedCredential(t *testing.T) {
+	srv := newTriggerServer("v1")
+	defer srv.Close()
+	dir := fixture(t, "ok")
+	typedYAML := agentYAML + "credentials:\n  gh_key:\n    type: github_app\n    app_id: \"1\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "agent.yaml"), []byte(typedYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.Write(dir, key, map[string]string{"gh_key": "a-root-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	writeTriggerRoutine(t, dir, srv.URL, "  credential: gh_key\n  interval: 1m\ncredentials: [gh_key]\n")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0)
+	s.Tick(ctx, t0.Add(1*time.Minute))
+	s.Tick(ctx, t0.Add(2*time.Minute))
+	if srv.pollCount() != 0 {
+		t.Fatalf("typed credential must never reach the wire, got %d polls", srv.pollCount())
+	}
+	if got := runCount(t, dir); got != 0 {
+		t.Fatalf("refused poll must not fire, got %d runs", got)
 	}
 }

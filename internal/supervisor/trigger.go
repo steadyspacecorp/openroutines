@@ -2,8 +2,10 @@ package supervisor
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/trigger"
@@ -109,7 +111,17 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 // credentialValue decrypts one credential for a trigger poll. The supervisor
 // holds the master key already; this is the one place it uses a routine
 // credential itself, and the value goes only into an Authorization header.
+// Typed credentials are refused: their stored value is a root secret that
+// derivation exists to keep out of requests, and a poll sends its credential
+// verbatim as a bearer token.
 func (s *Supervisor) credentialValue(name string) (string, error) {
+	agent, err := config.Load(s.Dir)
+	if err != nil {
+		return "", err
+	}
+	if spec := agent.Credentials[name]; spec.Type != "" {
+		return "", fmt.Errorf("credential is typed (%s) and cannot authenticate a trigger poll", spec.Type)
+	}
 	key, err := creds.LoadKey(s.Dir)
 	if err != nil {
 		return "", err
