@@ -15,9 +15,7 @@ A useful report identifies:
 
 Correctness, durability, and availability bugs are welcome as regular GitHub issues unless they cross a security boundary described below.
 
-## Supported versions
-
-Before 1.0, only the latest release is supported, and fixes ship in the next release rather than as backports. `openroutines update` brings an agent to the version of the binary you run.
+Before 1.0 there are no backported fixes: a fix ships in the next release, and `openroutines update` brings an agent to the version of the binary you run.
 
 ## Security model
 
