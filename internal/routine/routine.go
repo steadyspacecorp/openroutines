@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/steadyspacecorp/openroutines/internal/trigger"
 )
 
 // NamePattern constrains routine names: the filename is the routine's
@@ -20,18 +22,20 @@ import (
 // no separators, no dots, no way to spell an escape.
 var NamePattern = regexp.MustCompile(`^[a-z0-9]+([_-][a-z0-9]+)*$`)
 
-// Frontmatter is a routine's declared scope. Every field but Schedule
-// is optional; see DESIGN.md "Routines are markdown files" for defaults.
+// Frontmatter is a routine's declared scope. Every field is optional except
+// that at least one of Schedule and Trigger must be set; see DESIGN.md
+// "Routines are markdown files" and TRIGGERS.md for defaults.
 type Frontmatter struct {
-	Schedule    string   `yaml:"schedule"`
-	Timeout     string   `yaml:"timeout,omitempty"`
-	Active      *bool    `yaml:"active,omitempty"`
-	Skills      []string `yaml:"skills"`
-	Credentials []string `yaml:"credentials"`
-	Model       string   `yaml:"model,omitempty"`
-	Effort      string   `yaml:"effort,omitempty"` // provider-specific reasoning effort (opencode --variant)
-	Events      *bool    `yaml:"events,omitempty"`
-	Consumes    string   `yaml:"consumes,omitempty"` // "memory": this routine consumes the memory change feed
+	Schedule    string        `yaml:"schedule"`
+	Trigger     *trigger.Spec `yaml:"trigger,omitempty"` // outbound change-detection wake-up (TRIGGERS.md)
+	Timeout     string        `yaml:"timeout,omitempty"`
+	Active      *bool         `yaml:"active,omitempty"`
+	Skills      []string      `yaml:"skills"`
+	Credentials []string      `yaml:"credentials"`
+	Model       string        `yaml:"model,omitempty"`
+	Effort      string        `yaml:"effort,omitempty"` // provider-specific reasoning effort (opencode --variant)
+	Events      *bool         `yaml:"events,omitempty"`
+	Consumes    string        `yaml:"consumes,omitempty"` // "memory": this routine consumes the memory change feed
 }
 
 // IsActive applies the default: routines are active unless explicitly not.

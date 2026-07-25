@@ -66,10 +66,35 @@ func cmdCheck(args []string) int {
 	}
 	for _, r := range routines {
 		var errs []string
-		if r.FM.Schedule == "" {
-			errs = append(errs, "missing schedule")
-		} else if _, err := cron.ParseStandard(r.FM.Schedule); err != nil {
-			errs = append(errs, fmt.Sprintf("schedule %q: %v", r.FM.Schedule, err))
+		if r.FM.Schedule == "" && r.FM.Trigger == nil {
+			errs = append(errs, "needs a schedule or a trigger")
+		}
+		if r.FM.Schedule != "" {
+			if _, err := cron.ParseStandard(r.FM.Schedule); err != nil {
+				errs = append(errs, fmt.Sprintf("schedule %q: %v", r.FM.Schedule, err))
+			}
+		}
+		if t := r.FM.Trigger; t != nil {
+			if err := t.Validate(); err != nil {
+				errs = append(errs, err.Error())
+			} else if strings.HasPrefix(t.Poll, "http://") {
+				warnf("%s: trigger polls over plain http -- the bearer credential and response travel unencrypted", r.Name)
+			}
+			if t.Credential != "" && !slices.Contains(r.FM.Credentials, t.Credential) {
+				errs = append(errs, fmt.Sprintf("trigger credential %q must also be listed in credentials", t.Credential))
+			}
+			// A typed credential's stored value is a root secret (the run
+			// receives derived material instead); a poll would send that
+			// root secret as a bearer token.
+			if t.Credential != "" && agent != nil && agent.Credentials[t.Credential].Type != "" {
+				errs = append(errs, fmt.Sprintf("trigger credential %q is typed (%s) -- a poll would send the stored root secret as a bearer token; use a raw credential", t.Credential, agent.Credentials[t.Credential].Type))
+			}
+			if d, err := t.IntervalDuration(); err == nil && d < time.Minute {
+				warnf("%s: trigger interval %q is below the 1m tick -- polls can't happen more often than the tick", r.Name, t.Interval)
+			}
+			if r.FM.Schedule == "" {
+				warnf("%s: trigger with no schedule heartbeat -- a missed wake-up has no backstop", r.Name)
+			}
 		}
 		if r.FM.Timeout != "" {
 			if _, err := time.ParseDuration(r.FM.Timeout); err != nil {
@@ -126,7 +151,7 @@ func cmdCheck(args []string) int {
 			if !r.FM.IsActive() {
 				state = "inactive"
 			}
-			okf("%s (%s, %s)", r.Name, r.FM.Schedule, state)
+			okf("%s (%s, %s)", r.Name, scheduleSummary(r), state)
 		} else {
 			for _, e := range errs {
 				failf("%s: %s", r.Name, e)

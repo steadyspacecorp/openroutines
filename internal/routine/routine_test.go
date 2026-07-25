@@ -29,6 +29,27 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestParseTriggerFrontmatter(t *testing.T) {
+	r, err := Parse(writeTemp(t, "---\ntrigger:\n  poll: https://example.com/cursor\n  credential: steady_token\n  select: /cursor\n  interval: 2m\ncredentials: [steady_token]\n---\nCheck the inbox.\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := r.FM.Trigger
+	if tr == nil || tr.Poll != "https://example.com/cursor" || tr.Credential != "steady_token" ||
+		tr.Select != "/cursor" || tr.Interval != "2m" {
+		t.Fatalf("unexpected trigger parse: %+v", tr)
+	}
+	if r.FM.Schedule != "" {
+		t.Fatalf("schedule should be empty for a trigger-only routine: %q", r.FM.Schedule)
+	}
+
+	// No trigger declared: the field stays nil.
+	r, err = Parse(writeTemp(t, "---\nschedule: \"* * * * *\"\n---\nBody.\n"))
+	if err != nil || r.FM.Trigger != nil {
+		t.Fatalf("trigger should be nil when undeclared: %+v err=%v", r.FM.Trigger, err)
+	}
+}
+
 func TestParseRejectsMissingFrontmatter(t *testing.T) {
 	if _, err := Parse(writeTemp(t, "just a body\n")); err == nil {
 		t.Fatal("expected error for missing frontmatter")
