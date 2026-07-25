@@ -194,7 +194,7 @@ func TestInstructionRendering(t *testing.T) {
 		"Every run appends at least one event",
 		"Full facts with real links",
 		"./inbox.md",
-		"./CONSUMED",
+		"memory/CONSUMED",
 		"$DOCS_URL, $PRODUCT_REPO",
 	} {
 		if !strings.Contains(full, want) {
@@ -286,5 +286,36 @@ func TestCopyDeclaredSkillsRejectsTraversal(t *testing.T) {
 		if err := copyDeclaredSkills(filepath.Join(dir, "agent"), t.TempDir(), []string{bad}); err == nil {
 			t.Errorf("skill name %q should be rejected", bad)
 		}
+	}
+}
+
+func TestConsumeMarkerLivesInStagedMemory(t *testing.T) {
+	dir := t.TempDir()
+	wt := filepath.Join(dir, memory.Dir)
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staging := &Staging{MemoryDir: t.TempDir(), workspace: t.TempDir()}
+	if staging.Consumed() {
+		t.Fatal("Consumed() true with no marker anywhere")
+	}
+	// The sandbox leaves only staged memory writable: the marker there counts.
+	os.WriteFile(filepath.Join(staging.MemoryDir, memory.ConsumeMarker), nil, 0o644)
+	if !staging.Consumed() {
+		t.Fatal("marker in staged memory not honored")
+	}
+	// It is a receipt for the runtime, not memory content: import drops it.
+	r := &routine.Routine{Name: "report", FM: routine.Frontmatter{Consumes: "memory"}}
+	if _, err := ImportMemory(dir, r, staging); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(wt, memory.ConsumeMarker)); !os.IsNotExist(err) {
+		t.Fatal("consume marker imported into the memory worktree")
+	}
+	// Unsandboxed runs may still drop the marker at the workspace root.
+	legacy := &Staging{MemoryDir: t.TempDir(), workspace: t.TempDir()}
+	os.WriteFile(filepath.Join(legacy.workspace, memory.ConsumeMarker), nil, 0o644)
+	if !legacy.Consumed() {
+		t.Fatal("workspace-root marker no longer honored")
 	}
 }
