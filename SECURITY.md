@@ -1,10 +1,10 @@
 # Security
 
-openroutines runs autonomous AI agents unattended, with credentials, on your infrastructure. Its primary security boundary separates untrusted model-directed execution from the supervisor's credentials, Git worktree, and host filesystem.
+**openroutines** runs autonomous AI agents unattended, with credentials, on your infrastructure. Its primary security boundary separates untrusted model-directed execution from the supervisor's credentials, Git worktree, and host filesystem.
 
 ## Reporting a vulnerability
 
-Email security@steady.space, or -- once this repository is public -- report privately via [GitHub's private vulnerability reporting](../../security/advisories/new). Please do not open a public issue for an exploitable vulnerability. You should receive an acknowledgment within a few days; this is a small project and we will be candid about timelines.
+Email security@steady.space, or -- once this repository is public -- report privately via [GitHub's private vulnerability reporting](../../security/advisories/new). Please do not open a public issue for an exploitable vulnerability. You should receive an acknowledgment within a few days; this is a small project and we will be candid about timelines. We do not accept AI generated security reports
 
 A useful report identifies:
 
