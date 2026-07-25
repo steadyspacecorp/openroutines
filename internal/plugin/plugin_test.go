@@ -62,7 +62,7 @@ func write(t *testing.T, extra map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
-		"PLUGIN.md": "---\nname: demo\ndescription: A demo plugin.\ncredentials:\n  demo_token:\n    description: A demo token\n---\nBody.\n",
+		"PLUGIN.md":        "---\nname: demo\ndescription: A demo plugin.\ncredentials:\n  demo_token:\n    description: A demo token\n---\nBody.\n",
 		"routines/demo.md": "---\nschedule: \"0 9 * * *\"\ncredentials: [demo_token]\n---\nDo the demo.\n",
 	}
 	for k, v := range extra {

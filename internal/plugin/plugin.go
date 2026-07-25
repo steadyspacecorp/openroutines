@@ -65,11 +65,11 @@ var benignRoot = map[string]bool{
 // forbidden are agent- or harness-owned files a plugin must never ship;
 // naming them gets a sharper refusal than the generic allow-list one.
 var forbidden = map[string]string{
-	"opencode.json":        "opencode.json is the agent's harness config -- a plugin granting itself permissions or endpoints is exactly what the allow-list exists to stop",
-	"agent.yaml":           "agent.yaml belongs to the agent; credential metadata and variables are declared in PLUGIN.md and printed as next steps",
-	"Dockerfile":           "the Dockerfile is framework-owned",
+	"opencode.json":         "opencode.json is the agent's harness config -- a plugin granting itself permissions or endpoints is exactly what the allow-list exists to stop",
+	"agent.yaml":            "agent.yaml belongs to the agent; credential metadata and variables are declared in PLUGIN.md and printed as next steps",
+	"Dockerfile":            "the Dockerfile is framework-owned",
 	".openroutines-version": "the version pin is framework-owned",
-	"master.key":           "a plugin must never carry key material",
+	"master.key":            "a plugin must never carry key material",
 }
 
 // Load parses and validates the plugin at dir. agentSkills are skill names
