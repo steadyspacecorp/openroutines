@@ -76,10 +76,15 @@ func cmdUpdate(args []string) int {
 		fmt.Printf("--- %s differs from the %s template ---\n", name, target)
 		printDiff(string(gotRaw), want)
 		apply := true
-		if interactive {
+		// The Dockerfile's base image and .openroutines-version are one pin.
+		// Letting a user skip one while advancing the other produces an agent
+		// whose local/CI framework version differs from production.
+		if interactive && name != "Dockerfile" {
 			fmt.Printf("Apply update to %s? [Y/n] ", name)
 			line, _ := in.ReadString('\n')
 			apply = strings.TrimSpace(strings.ToLower(line)) != "n"
+		} else if interactive {
+			fmt.Println("applying Dockerfile update (required to keep the deploy image aligned with the framework pin)")
 		}
 		if !apply {
 			skipped++
@@ -93,6 +98,13 @@ func cmdUpdate(args []string) int {
 		fmt.Printf("updated %s\n\n", name)
 	}
 
+	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		return fail(fmt.Errorf("cannot verify Dockerfile framework version: %w", err))
+	}
+	if !dockerfileUsesVersion(dockerfile, target) {
+		return fail(fmt.Errorf("Dockerfile still uses a different openroutines base image -- .openroutines-version was left at %s; update the FROM tag to %s and rerun", current, target))
+	}
 	if err := os.WriteFile(pinPath, []byte(target+"\n"), 0o644); err != nil {
 		return fail(err)
 	}
@@ -100,6 +112,17 @@ func cmdUpdate(args []string) int {
 	fmt.Println("Review the diff, commit, and push -- your next deploy runs the new version.")
 	fmt.Println("Rolling back is git revert. Routines, skills, memory, and credentials were not touched.")
 	return 0
+}
+
+func dockerfileUsesVersion(raw []byte, version string) bool {
+	want := "ghcr.io/steadyspacecorp/openroutines:" + version
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "FROM") && fields[1] == want {
+			return true
+		}
+	}
+	return false
 }
 
 // printDiff shows a compact line diff: removed lines from ours, added lines

@@ -296,8 +296,16 @@ func cmdCheck(args []string) int {
 		okf("origin %s", strings.TrimSpace(string(out)))
 	}
 	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines-version")); err == nil {
-		if v := strings.TrimSpace(string(pin)); strings.Contains(v, "-dev") {
+		v := strings.TrimSpace(string(pin))
+		if strings.Contains(v, "-dev") {
 			warnf("pinned %s -- a source-build version; the base image tag for it does not exist, so this agent cannot deploy until the pin points at a release", v)
+		}
+		if dockerfile, derr := os.ReadFile(filepath.Join(dir, "Dockerfile")); derr != nil {
+			failf("Dockerfile: %v", derr)
+		} else if !dockerfileUsesVersion(dockerfile, v) {
+			failf("Dockerfile base image does not match .openroutines-version %s", v)
+		} else {
+			okf("Dockerfile base image matches %s", v)
 		}
 	}
 

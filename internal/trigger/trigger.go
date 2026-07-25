@@ -168,6 +168,9 @@ func Poll(client *http.Client, spec Spec, credential string, name string, prior 
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotModified {
+		if prior == nil {
+			return Result{}, errors.New("poll returned 304 Not Modified before a baseline was established")
+		}
 		return Result{Changed: false, Next: *prior}, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -192,8 +195,12 @@ func Poll(client *http.Client, spec Spec, credential string, name string, prior 
 func observe(body io.Reader, selector string) (string, error) {
 	if selector == "" {
 		h := sha256.New()
-		if _, err := io.Copy(h, io.LimitReader(body, hashBodyCap)); err != nil {
+		n, err := io.Copy(h, io.LimitReader(body, hashBodyCap+1))
+		if err != nil {
 			return "", err
+		}
+		if n > hashBodyCap {
+			return "", fmt.Errorf("response exceeds %d bytes -- use a smaller endpoint or select one JSON value", hashBodyCap)
 		}
 		return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 	}

@@ -129,4 +129,12 @@ grep -q "openroutines:$("$bin" version) AS agent" Dockerfile || die "update did 
 cmp -s opencode.json "$work/opencode.json.seeded" || die "update rewrote opencode.json"
 step "update bumps the pin, rewrites the base-image tag, leaves opencode.json alone"
 
+# The pin and deploy image are one version invariant. Check rejects drift.
+sed -i.bak 's/openroutines:v[^ ]* AS agent/openroutines:v0.0.0-old AS agent/' Dockerfile && rm -f Dockerfile.bak
+if run check; then
+  die "check accepted a Dockerfile base-image tag that disagrees with the pin"
+fi
+grep -q 'Dockerfile base image does not match' "$work/out" || die "check did not explain the Dockerfile/pin mismatch"
+step "check rejects framework-version drift"
+
 echo "smoke: OK"

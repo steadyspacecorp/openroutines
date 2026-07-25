@@ -103,6 +103,8 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 			badf("credential name %q must be lowercase snake_case", cname)
 		case strings.HasPrefix(cname, creds.ReservedPrefix):
 			badf("credential name %q collides with the reserved %s_* prefix", cname, strings.ToUpper(creds.ReservedPrefix))
+		case creds.ReservedEnvName(cname):
+			badf("credential name %q would shadow the %s environment variable in the run", cname, strings.ToUpper(cname))
 		}
 		if strings.TrimSpace(c.Description) == "" {
 			badf("credential %q needs a description -- someone has to know what to fill in", cname)
@@ -112,11 +114,16 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		}
 	}
 	for _, vname := range slices.Sorted(maps.Keys(p.Manifest.Variables)) {
+		_, collidesWithCredential := p.Manifest.Credentials[vname]
 		switch {
 		case !creds.NamePattern.MatchString(vname):
 			badf("variable name %q must be lowercase snake_case", vname)
 		case strings.HasPrefix(vname, creds.ReservedPrefix):
 			badf("variable name %q collides with the reserved %s_* prefix", vname, strings.ToUpper(creds.ReservedPrefix))
+		case creds.ReservedEnvName(vname):
+			badf("variable name %q would shadow the %s environment variable in the run", vname, strings.ToUpper(vname))
+		case collidesWithCredential:
+			badf("variable %q collides with a credential declared by the plugin", vname)
 		}
 		if strings.TrimSpace(p.Manifest.Variables[vname].Description) == "" {
 			badf("variable %q needs a description", vname)

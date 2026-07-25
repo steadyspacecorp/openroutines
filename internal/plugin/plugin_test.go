@@ -102,6 +102,15 @@ func TestLoadRefusals(t *testing.T) {
 		"unknown credential type": {map[string]string{
 			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: token\n    type: plugin_code\n---\n",
 		}, "unknown type"},
+		"reserved credential env": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  path:\n    description: executable path\n---\n",
+		}, "shadow the PATH"},
+		"reserved variable env": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\nvariables:\n  home:\n    description: home directory\n---\n",
+		}, "shadow the HOME"},
+		"credential variable collision": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: token\nvariables:\n  demo_token:\n    description: non-secret token\n---\n",
+		}, "collides with a credential"},
 	}
 	for name, c := range cases {
 		if _, err := Load(write(t, c.extra), nil); err == nil || !strings.Contains(err.Error(), c.want) {

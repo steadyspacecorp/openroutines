@@ -151,6 +151,16 @@ func TestPollRawBodyHashAndETag(t *testing.T) {
 	}
 }
 
+func TestPollRefuses304BeforeBaseline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+	if _, err := Poll(srv.Client(), Spec{Poll: srv.URL}, "", "r", nil); err == nil {
+		t.Fatal("304 before a baseline should be an error")
+	}
+}
+
 func TestPollRefusesRedirectsAndErrors(t *testing.T) {
 	redirect := httptest.NewServer(http.RedirectHandler("https://elsewhere.invalid/", http.StatusFound))
 	defer redirect.Close()
@@ -176,6 +186,17 @@ func TestPollSelectBodyCap(t *testing.T) {
 	defer srv.Close()
 	if _, err := Poll(srv.Client(), Spec{Poll: srv.URL, Select: "/pad"}, "", "r", nil); err == nil {
 		t.Fatal("oversized select body should be an error")
+	}
+}
+
+func TestPollRawBodyCap(t *testing.T) {
+	big := strings.Repeat("x", hashBodyCap+1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(big))
+	}))
+	defer srv.Close()
+	if _, err := Poll(srv.Client(), Spec{Poll: srv.URL}, "", "r", nil); err == nil {
+		t.Fatal("oversized raw body should be an error")
 	}
 }
 
