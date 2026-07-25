@@ -5,8 +5,10 @@
 package plugin
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -16,6 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
@@ -95,11 +98,26 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 	}
 	for _, cname := range slices.Sorted(maps.Keys(p.Manifest.Credentials)) {
 		c := p.Manifest.Credentials[cname]
+		switch {
+		case !creds.NamePattern.MatchString(cname):
+			badf("credential name %q must be lowercase snake_case", cname)
+		case strings.HasPrefix(cname, creds.ReservedPrefix):
+			badf("credential name %q collides with the reserved %s_* prefix", cname, strings.ToUpper(creds.ReservedPrefix))
+		}
 		if strings.TrimSpace(c.Description) == "" {
 			badf("credential %q needs a description -- someone has to know what to fill in", cname)
 		}
+		if c.Type != "" && c.Type != "github_app" {
+			badf("credential %q has unknown type %q (supported: github_app)", cname, c.Type)
+		}
 	}
 	for _, vname := range slices.Sorted(maps.Keys(p.Manifest.Variables)) {
+		switch {
+		case !creds.NamePattern.MatchString(vname):
+			badf("variable name %q must be lowercase snake_case", vname)
+		case strings.HasPrefix(vname, creds.ReservedPrefix):
+			badf("variable name %q collides with the reserved %s_* prefix", vname, strings.ToUpper(creds.ReservedPrefix))
+		}
 		if strings.TrimSpace(p.Manifest.Variables[vname].Description) == "" {
 			badf("variable %q needs a description", vname)
 		}
@@ -115,7 +133,14 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		if rel == "." {
 			return nil
 		}
-		if d.Name() == ".git" || rel == ".github" {
+		if rel == ".git" || rel == ".github" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == ".git" {
+			badf("%s: nested .git metadata is refused", rel)
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -236,7 +261,9 @@ func parseManifestFile(path string) (*Manifest, string, error) {
 		return nil, "", fmt.Errorf("%s: unterminated frontmatter", FileName)
 	}
 	var m Manifest
-	if err := yaml.Unmarshal([]byte(rest[:end]), &m); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader([]byte(rest[:end])))
+	dec.KnownFields(true)
+	if err := dec.Decode(&m); err != nil && err != io.EOF {
 		return nil, "", fmt.Errorf("%s: %w", FileName, err)
 	}
 	return &m, strings.TrimSpace(rest[end+len("\n---\n"):]), nil
@@ -325,18 +352,42 @@ func (p *Plugin) Summary() string {
 // creates it on first run), otherwise they are returned as pending for the
 // caller to surface. Collisions must be checked before calling.
 func (p *Plugin) Install(agentDir string) (installed, pendingStubs []string, err error) {
+	var created []string
+	rollback := func() {
+		for i := len(created) - 1; i >= 0; i-- {
+			_ = os.RemoveAll(created[i])
+		}
+		installed = nil
+	}
 	for _, r := range p.Routines {
 		rel := filepath.Join("routines", r.Name+".md")
-		if err := copyFile(filepath.Join(p.Dir, rel), filepath.Join(agentDir, rel)); err != nil {
+		src := filepath.Join(p.Dir, rel)
+		raw, readErr := os.ReadFile(src)
+		if readErr != nil {
+			rollback()
+			return nil, nil, readErr
+		}
+		raw, readErr = routine.WithActive(raw, false)
+		if readErr != nil {
+			rollback()
+			return nil, nil, fmt.Errorf("%s: %w", rel, readErr)
+		}
+		dest := filepath.Join(agentDir, rel)
+		if err := writeFileExclusive(dest, raw); err != nil {
+			rollback()
 			return installed, nil, err
 		}
+		created = append(created, dest)
 		installed = append(installed, rel)
 	}
 	for _, s := range p.Skills {
 		rel := filepath.Join("skills", s.Name)
-		if err := copyTree(filepath.Join(p.Dir, rel), filepath.Join(agentDir, rel)); err != nil {
+		dest := filepath.Join(agentDir, rel)
+		if err := copyTreeExclusive(filepath.Join(p.Dir, rel), dest); err != nil {
+			rollback()
 			return installed, nil, err
 		}
+		created = append(created, dest)
 		installed = append(installed, rel)
 	}
 	wt := memory.WorktreePath(agentDir)
@@ -355,8 +406,10 @@ func (p *Plugin) Install(agentDir string) (installed, pendingStubs []string, err
 			continue
 		}
 		if err := copyFile(filepath.Join(p.Dir, stub), dest); err != nil {
+			rollback()
 			return installed, pendingStubs, err
 		}
+		created = append(created, dest)
 		installed = append(installed, stub)
 	}
 	return installed, pendingStubs, nil
@@ -367,16 +420,41 @@ func copyFile(src, dest string) error {
 	if err != nil {
 		return err
 	}
+	return writeFileExclusive(dest, raw)
+}
+
+func writeFileExclusive(dest string, raw []byte) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(dest, raw, 0o644)
+	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(raw); err != nil {
+		_ = f.Close()
+		_ = os.Remove(dest)
+		return err
+	}
+	return f.Close()
 }
 
-// copyTree copies regular files only -- validation already refused anything
-// irregular, this is belt and braces.
-func copyTree(src, dest string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, werr error) error {
+// copyTreeExclusive independently enforces the payload boundary while copying:
+// validation and copy can be separated in time for a local development source.
+func copyTreeExclusive(src, dest string) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.RemoveAll(dest)
+		}
+	}()
+	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			return werr
 		}
@@ -384,13 +462,21 @@ func copyTree(src, dest string) error {
 		if rel == "." {
 			return nil
 		}
+		if d.Name() == ".git" {
+			return fmt.Errorf("%s: nested .git metadata is refused", filepath.Join(dest, rel))
+		}
 		target := filepath.Join(dest, rel)
 		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return os.Mkdir(target, 0o755)
 		}
 		if !d.Type().IsRegular() {
-			return nil
+			return fmt.Errorf("%s: not a regular file", path)
 		}
 		return copyFile(path, target)
 	})
+	if err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }

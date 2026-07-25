@@ -18,7 +18,7 @@ import (
 
 func cmdPlugin(args []string) int {
 	if len(args) == 0 {
-		return fail(fmt.Errorf("usage: openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir]"))
+		return fail(fmt.Errorf("usage: openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir] [--yes]"))
 	}
 	switch args[0] {
 	case "add":
@@ -34,6 +34,7 @@ func cmdPlugin(args []string) int {
 // is the only gate (DESIGN.md "Plugins").
 func pluginAdd(args []string) int {
 	var source, subPath string
+	yes := false
 	rest := args[:0:0]
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--path" && i+1 < len(args) {
@@ -41,10 +42,14 @@ func pluginAdd(args []string) int {
 			i++
 			continue
 		}
+		if args[i] == "--yes" {
+			yes = true
+			continue
+		}
 		rest = append(rest, args[i])
 	}
 	if len(rest) != 1 {
-		return fail(fmt.Errorf("usage: openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir]"))
+		return fail(fmt.Errorf("usage: openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir] [--yes]"))
 	}
 	source = rest[0]
 
@@ -78,7 +83,11 @@ func pluginAdd(args []string) int {
 		root = tmp
 	}
 	if subPath != "" {
-		root = filepath.Join(root, filepath.Clean(subPath))
+		selectedRoot, err := pluginSubdir(root, subPath)
+		if err != nil {
+			return fail(err)
+		}
+		root = selectedRoot
 	}
 
 	agentSkills := map[string]bool{}
@@ -104,7 +113,11 @@ func pluginAdd(args []string) int {
 	fmt.Println(indent(strings.TrimRight(p.Summary(), "\n"), "  "))
 	fmt.Println()
 
-	if term.IsTerminal(int(os.Stdin.Fd())) {
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	if !interactive && !yes {
+		return fail(fmt.Errorf("stdin is not interactive; review the bundle above, then rerun with --yes to install"))
+	}
+	if interactive && !yes {
 		fmt.Print("Install? [y/N] ")
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		if strings.TrimSpace(strings.ToLower(line)) != "y" {
@@ -142,12 +155,35 @@ func pluginAdd(args []string) int {
 		stepf("seed %s after the memory worktree exists (first run creates it)", s)
 	}
 	stepf("openroutines check")
+	if len(p.Routines) > 0 {
+		stepf("review the routine and skill contents, then activate wanted routines with openroutines routines activate <name>")
+	}
 	provenance := source
 	if revision != "" {
 		provenance += " @ " + revision
 	}
 	stepf("review the diff and commit -- suggested message: \"Install plugin %s (from %s)\"", p.Manifest.Name, provenance)
 	return 0
+}
+
+func pluginSubdir(root, subPath string) (string, error) {
+	clean := filepath.Clean(subPath)
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("--path %q escapes the plugin repository", subPath)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	candidate, err := filepath.EvalSymlinks(filepath.Join(resolvedRoot, clean))
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(resolvedRoot, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("--path %q escapes the plugin repository", subPath)
+	}
+	return candidate, nil
 }
 
 func indent(s, prefix string) string {

@@ -17,7 +17,7 @@ Usage:
   openroutines status               show what the agent has and still needs
   openroutines routines <command>   new, list, run, test, edit, activate, deactivate, remove
   openroutines skills <command>     new, list, remove
-  openroutines plugin add <source>  install a plugin: routines + skills + credential names
+  openroutines plugin add <source>  install an inactive plugin bundle (--yes for non-interactive use)
   openroutines credentials <cmd>    set, list, remove
   openroutines supervise            run the scheduler (container entrypoint)
   openroutines update               bump the pinned framework version

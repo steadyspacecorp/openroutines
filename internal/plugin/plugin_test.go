@@ -90,8 +90,18 @@ func TestLoadRefusals(t *testing.T) {
 		"install hook":    {map[string]string{"install.sh": "#!/bin/sh\n"}, "allow-listed"},
 		"shared memory":   {map[string]string{"memory/events.md": "- sneaky\n"}, "never shared memory"},
 		"master key":      {map[string]string{"master.key": "k"}, "key material"},
+		"nested git":      {map[string]string{"skills/demo-skill/.git/config": "bad"}, "nested .git"},
 		"dangling skill":  {map[string]string{"routines/other.md": "---\nschedule: \"0 9 * * *\"\nskills: [ghost]\n---\nx\n"}, "neither the plugin nor the agent"},
 		"undeclared cred": {map[string]string{"routines/other.md": "---\nschedule: \"0 9 * * *\"\ncredentials: [ghost_token]\n---\nx\n"}, "missing from the PLUGIN.md credentials block"},
+		"unknown manifest field": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentialz: {}\n---\n",
+		}, "field credentialz not found"},
+		"credential value": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: token\n    value: secret\n---\n",
+		}, "field value not found"},
+		"unknown credential type": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: token\n    type: plugin_code\n---\n",
+		}, "unknown type"},
 	}
 	for name, c := range cases {
 		if _, err := Load(write(t, c.extra), nil); err == nil || !strings.Contains(err.Error(), c.want) {
@@ -158,6 +168,10 @@ func TestCollisionsAndInstall(t *testing.T) {
 			t.Fatalf("%s not installed: %v", rel, err)
 		}
 	}
+	raw, err := os.ReadFile(filepath.Join(agent, "routines", "demo.md"))
+	if err != nil || !strings.Contains(string(raw), "active: false") {
+		t.Fatalf("installed routine must be explicitly inactive: %v\n%s", err, raw)
+	}
 	if len(installed) != 2 {
 		t.Fatalf("installed %v, want the routine and the skill", installed)
 	}
@@ -187,5 +201,34 @@ func TestCollisionsAndInstall(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(filepath.Join(agent3, "memory", "ledgers", "demo.md")); string(raw) != "live state\n" {
 		t.Fatal("live ledger was overwritten")
+	}
+}
+
+func TestInstallRollsBackOnCopyFailure(t *testing.T) {
+	src := write(t, map[string]string{
+		"skills/demo-skill/SKILL.md": "---\nname: demo-skill\ndescription: d\n---\nHow.\n",
+	})
+	p, err := Load(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutate the local development source after validation. Copy must recheck
+	// the boundary, fail, and remove the routine it created earlier.
+	if err := os.MkdirAll(filepath.Join(src, "skills", "demo-skill", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "skills", "demo-skill", ".git", "config"), []byte("bad"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agent := t.TempDir()
+	if _, _, err := p.Install(agent); err == nil || !strings.Contains(err.Error(), "nested .git") {
+		t.Fatalf("want nested .git copy refusal, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(agent, "routines", "demo.md")); !os.IsNotExist(err) {
+		t.Fatalf("partial routine survived rollback: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(agent, "skills", "demo-skill")); !os.IsNotExist(err) {
+		t.Fatalf("partial skill survived rollback: %v", err)
 	}
 }

@@ -99,13 +99,24 @@ func SetActive(path string, active bool) error {
 	if err != nil {
 		return err
 	}
+	out, err := WithActive(raw, active)
+	if err != nil {
+		return fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	return os.WriteFile(path, out, 0o644)
+}
+
+// WithActive returns routine markdown with an explicit active field, preserving
+// every other byte. Installers use it before a routine becomes visible so an
+// active-by-default source can never race a live supervisor.
+func WithActive(raw []byte, active bool) ([]byte, error) {
 	text := string(raw)
 	if !strings.HasPrefix(text, "---\n") {
-		return fmt.Errorf("%s: missing frontmatter", filepath.Base(path))
+		return nil, fmt.Errorf("missing frontmatter")
 	}
 	end := strings.Index(text[4:], "\n---")
 	if end < 0 {
-		return fmt.Errorf("%s: unterminated frontmatter", filepath.Base(path))
+		return nil, fmt.Errorf("unterminated frontmatter")
 	}
 	fmEnd := 4 + end // offset of the newline before the closing ---
 	head, tail := text[:fmEnd], text[fmEnd:]
@@ -120,7 +131,7 @@ func SetActive(path string, active bool) error {
 	} else {
 		head += "\n" + value
 	}
-	return os.WriteFile(path, []byte(head+tail), 0o644)
+	return []byte(head + tail), nil
 }
 
 // LoadDir parses every *.md routine in dir, sorted by name. A missing dir is
