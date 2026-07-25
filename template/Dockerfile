@@ -7,8 +7,9 @@
 #              visible to it. Self-contained: builds without registry access.
 #   agent   -- the deployable image: the openroutines base image (supervisor
 #              entrypoint included) plus this repository. A sealed box: no
-#              ports, two env-var secrets (OPENROUTINES_MASTER_KEY,
-#              OPENROUTINES_DEPLOY_KEY), logs on stdout.
+#              ports, two secrets mounted read-only at run time and named by
+#              OPENROUTINES_MASTER_KEY_FILE / OPENROUTINES_DEPLOY_KEY_FILE,
+#              logs on stdout. Neither secret is ever built into the image.
 
 ARG OPENCODE_VERSION=1.18.3
 

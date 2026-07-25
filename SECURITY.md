@@ -15,6 +15,10 @@ A useful report identifies:
 
 Correctness, durability, and availability bugs are welcome as regular GitHub issues unless they cross a security boundary described below.
 
+## Supported versions
+
+Before 1.0, only the latest release is supported, and fixes ship in the next release rather than as backports. `openroutines update` brings an agent to the version of the binary you run.
+
 ## Security model
 
 openroutines treats model-directed execution as untrusted. This includes model output, commands and tools selected by the model, memory produced by routines, and content fetched from external systems.
@@ -51,7 +55,7 @@ The security properties above assume that operators:
 - run only one supervisor instance for an agent;
 - keep the host, container runtime, base image, and openroutines release current;
 - review repository changes, skills, credentials, and permission grants as code;
-- do not disable the production sandbox with `OPENROUTINES_UNSAFE_NO_SANDBOX=1`.
+- do not disable the production sandbox with `OPENROUTINES_UNSAFE_NO_SANDBOX=1`, and do not run a deployed agent with `OPENROUTINES_NATIVE=1` or with the image's `OPENROUTINES_IN_CONTAINER=1` unset -- either can spawn an unconfined model process, and only the first of those fails closed.
 
 Environment-variable key delivery is supported for compatibility, but has a weaker process-exposure posture than file delivery and is not the recommended production configuration.
 
@@ -63,6 +67,7 @@ Environment-variable key delivery is supported for compatibility, but has a weak
 - **Log redaction is best-effort.** Exact secret values are scrubbed from ordinary output, but transformed, encoded, fragmented, or indirectly disclosed values may evade redaction.
 - **The supervisor and model process share a Linux user.** In the production container, opencode runs as a child of the supervisor under the same user ID. Unix user permissions therefore do not separate them; isolation relies on the layered controls described above.
 - **Trusted code remains powerful.** A malicious routine, skill, `opencode.json`, container image, or host configuration is outside the model sandbox's threat boundary.
+- **Release and dependency integrity is incomplete.** Release artifacts are checksummed and macOS binaries are ad-hoc signed; Developer ID signing and notarization are pending. The agent base image and its opencode installation are pinned by tag and version rather than by digest.
 
 ## Out of scope
 

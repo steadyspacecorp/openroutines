@@ -59,7 +59,7 @@ func cmdConfigure(args []string) int {
 		if err := os.WriteFile(keyPath, []byte(creds.GenerateKey()+"\n"), 0o600); err != nil {
 			return fail(err)
 		}
-		fmt.Printf("Generated %s (gitignored -- deliver it to production as %s)\n", creds.KeyFileName, creds.EnvMasterKey)
+		fmt.Printf("Generated %s (gitignored -- in production, mount it read-only and point %s at the path)\n", creds.KeyFileName, creds.EnvMasterKeyFile)
 	} else {
 		fmt.Printf("Master key already present (%s)\n", creds.KeyFileName)
 	}
