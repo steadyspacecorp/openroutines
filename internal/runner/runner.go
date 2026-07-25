@@ -172,10 +172,13 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	}
 	timeout := EffectiveTimeout(agent, r)
 
-	secrets, err := resolveCredentials(dir, r, model, meta.DryRun)
+	secrets, err := resolveCredentials(dir, agent, r, model, meta.DryRun)
 	if err != nil {
 		return nil, nil, err
 	}
+	// Derived material (installation tokens) is revoked when the attempt
+	// ends, success or failure; a fresh attempt derives fresh material.
+	defer secrets.release()
 	if err := memory.EnsureWorktree(dir); err != nil {
 		return nil, nil, err
 	}
@@ -233,13 +236,13 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	if meta.CoveredThrough != "" {
 		env = append(env, "OPENROUTINES_COVERED_THROUGH="+meta.CoveredThrough)
 	}
-	for k, v := range secrets {
-		env = append(env, strings.ToUpper(k)+"="+v)
+	for _, k := range slices.Sorted(maps.Keys(secrets.env)) {
+		env = append(env, k+"="+secrets.env[k])
 	}
 	// Non-secret variables from agent.yaml, injected into every run (dry runs
 	// included). On a name collision the credential wins; check flags it.
 	for _, k := range slices.Sorted(maps.Keys(agent.Variables)) {
-		if _, taken := secrets[k]; taken {
+		if _, taken := secrets.env[strings.ToUpper(k)]; taken {
 			continue
 		}
 		env = append(env, strings.ToUpper(k)+"="+agent.Variables[k])
@@ -314,7 +317,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		cmd = containerCmd(containerName, workspace, image, env, ocArgs)
 	}
 	tail := &tailBuffer{max: 4096}
-	scrubber := scrub.NewWriter(io.MultiWriter(os.Stdout, tail), secrets)
+	scrubber := scrub.NewWriter(io.MultiWriter(os.Stdout, tail), secrets.scrub)
 	cmd.Stdout = scrubber
 	cmd.Stderr = scrubber
 
@@ -486,11 +489,40 @@ func RecordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, man
 	return string(record)
 }
 
+// runSecrets is a run's resolved secret material: the exact environment to
+// inject, the values the log scrubber must redact, and cleanup for derived
+// credentials (token revocation at attempt end).
+type runSecrets struct {
+	env     map[string]string
+	scrub   map[string]string
+	cleanup []func()
+}
+
+func (s *runSecrets) setEnv(name, value string) error {
+	if _, taken := s.env[name]; taken {
+		return fmt.Errorf("credential grants set the %s environment variable twice", name)
+	}
+	s.env[name] = value
+	return nil
+}
+
+// release disposes of derived material -- best-effort, once, at attempt end.
+func (s *runSecrets) release() {
+	for _, f := range s.cleanup {
+		f()
+	}
+	s.cleanup = nil
+}
+
 // resolveCredentials builds the routine's secret set: declared credentials
-// plus the auto-injected provider key for its model. Names map to env vars.
-func resolveCredentials(dir string, r *routine.Routine, model string, dryRun bool) (map[string]string, error) {
+// plus the auto-injected provider key for its model. A raw credential
+// injects verbatim under its uppercase name; a typed credential (see
+// DESIGN.md "Credentials have types") is derived by the trusted runner and
+// injects its type's surface -- the stored root secret never enters the run.
+func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string, dryRun bool) (*runSecrets, error) {
 	provider := strings.SplitN(model, "/", 2)[0]
 	providerKey := creds.ProviderKeyName(provider)
+	out := &runSecrets{env: map[string]string{}, scrub: map[string]string{}}
 
 	key, keyErr := creds.LoadKey(dir)
 	if keyErr != nil {
@@ -498,26 +530,50 @@ func resolveCredentials(dir string, r *routine.Routine, model string, dryRun boo
 			return nil, fmt.Errorf("routine declares credentials but %v", keyErr)
 		}
 		// No store: opencode may still have its own auth for the provider.
-		return map[string]string{}, nil
+		return out, nil
 	}
 	store, err := creds.Read(dir, key)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]string{}
 	if !dryRun {
 		// Dry runs never receive the routine's secrets: nothing real can be
-		// authenticated against, whatever the model decides to try.
+		// authenticated against, whatever the model decides to try. Derived
+		// credentials follow the same rule -- nothing is minted.
 		for _, name := range r.FM.Credentials {
 			v, present := store[name]
 			if !present {
 				return nil, fmt.Errorf("routine declares credential %q, not present in %s", name, creds.FileName)
 			}
-			out[name] = v
+			spec, typed := agent.Credentials[name]
+			if !typed {
+				if err := out.setEnv(strings.ToUpper(name), v); err != nil {
+					return nil, err
+				}
+				out.scrub[name] = v
+				continue
+			}
+			derived, err := creds.Derive(name, spec, v)
+			if err != nil {
+				out.release()
+				return nil, err
+			}
+			out.cleanup = append(out.cleanup, derived.Cleanup)
+			for _, k := range slices.Sorted(maps.Keys(derived.Env)) {
+				if err := out.setEnv(k, derived.Env[k]); err != nil {
+					out.release()
+					return nil, err
+				}
+			}
+			maps.Copy(out.scrub, derived.Scrub)
 		}
 	}
 	if v, present := store[providerKey]; present {
-		out[providerKey] = v
+		if err := out.setEnv(strings.ToUpper(providerKey), v); err != nil {
+			out.release()
+			return nil, err
+		}
+		out.scrub[providerKey] = v
 	}
 	return out, nil
 }

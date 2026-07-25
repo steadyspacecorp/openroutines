@@ -135,31 +135,32 @@ func TestResolveCredentialsScope(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	agent := &config.Agent{}
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"slack_webhook"}}}
-	got, err := resolveCredentials(dir, r, "anthropic/claude-sonnet-5", false)
+	got, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"slack_webhook": "hook-value", "anthropic_api_key": "sk-ant-x"}
-	if len(got) != len(want) {
-		t.Fatalf("resolved %v, want exactly %v -- undeclared secrets must not exist in the run", got, want)
+	want := map[string]string{"SLACK_WEBHOOK": "hook-value", "ANTHROPIC_API_KEY": "sk-ant-x"}
+	if len(got.env) != len(want) {
+		t.Fatalf("resolved %v, want exactly %v -- undeclared secrets must not exist in the run", got.env, want)
 	}
 	for k, v := range want {
-		if got[k] != v {
-			t.Fatalf("resolved %v, want %v", got, want)
+		if got.env[k] != v {
+			t.Fatalf("resolved %v, want %v", got.env, want)
 		}
 	}
 
-	dry, err := resolveCredentials(dir, r, "anthropic/claude-sonnet-5", true)
+	dry, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dry) != 1 || dry["anthropic_api_key"] == "" {
-		t.Fatalf("dry run resolved %v, want only the provider key", dry)
+	if len(dry.env) != 1 || dry.env["ANTHROPIC_API_KEY"] == "" {
+		t.Fatalf("dry run resolved %v, want only the provider key", dry.env)
 	}
 
 	r.FM.Credentials = []string{"missing_cred"}
-	if _, err := resolveCredentials(dir, r, "anthropic/claude-sonnet-5", false); err == nil {
+	if _, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5", false); err == nil {
 		t.Fatal("declaring an absent credential must fail the run, not proceed without it")
 	}
 }
@@ -317,5 +318,59 @@ func TestConsumeMarkerLivesInStagedMemory(t *testing.T) {
 	os.WriteFile(filepath.Join(legacy.workspace, memory.ConsumeMarker), nil, 0o644)
 	if !legacy.Consumed() {
 		t.Fatal("workspace-root marker no longer honored")
+	}
+}
+
+// Raw credentials inject verbatim under their uppercase names; a typed
+// credential derives nothing in a dry run -- dry runs receive no secrets of
+// any kind, so no token is ever minted for one.
+func TestResolveCredentialsRawAndDryRun(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.Write(dir, key, map[string]string{
+		"steady_token":   "sekrit",
+		"openai_api_key": "provider-key",
+		"gh_key":         "not a real pem",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agent := &config.Agent{Credentials: map[string]creds.Spec{"gh_key": {Type: "github_app", AppID: "1"}}}
+
+	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"steady_token"}}}
+	s, err := resolveCredentials(dir, agent, r, "openai/gpt", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.env["STEADY_TOKEN"] != "sekrit" || s.env["OPENAI_API_KEY"] != "provider-key" {
+		t.Fatalf("raw injection wrong: %v", s.env)
+	}
+	if s.scrub["steady_token"] != "sekrit" {
+		t.Fatal("raw credential missing from scrub set")
+	}
+
+	// Dry run with a typed credential declared: no store lookup, no
+	// derivation (a real derivation of "not a real pem" would error).
+	typed := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"gh_key"}}}
+	s, err = resolveCredentials(dir, agent, typed, "openai/gpt", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := s.env["GITHUB_TOKEN"]; present {
+		t.Fatal("dry run derived a token")
+	}
+	if s.env["OPENAI_API_KEY"] != "provider-key" {
+		t.Fatal("provider key should still reach dry runs")
+	}
+
+	// A live run with the typed credential fails at derivation (bad key)
+	// rather than injecting the stored root secret.
+	if _, err = resolveCredentials(dir, agent, typed, "openai/gpt", false); err == nil {
+		t.Fatal("expected derivation failure for an invalid stored key")
 	}
 }

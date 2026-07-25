@@ -141,6 +141,8 @@ openroutines check                    # validate config, frontmatter, and schedu
 
 Non-secret configuration -- a repo name, a docs URL -- goes in a `variables:` map in `agent.yaml`, and every run receives each one as an environment variable (`product_repo` becomes `$PRODUCT_REPO`). Secrets go in encrypted credentials instead; inside a routine the interface is the same either way, so the only question a value raises is whether it's secret.
 
+A credential can also carry a *type*. A `credentials:` entry in `agent.yaml` tells the runner how to materialize the stored value -- `type: github_app` turns a stored App private key into a short-lived installation token minted fresh for each run, injected as `GITHUB_TOKEN` alongside the App's Git identity, and revoked when the run ends. The routine declares the credential exactly as before; it just never sees the root secret. Credentials without an entry inject verbatim, as always.
+
 Custom model endpoints -- an AI gateway, a proxy, a self-hosted server -- are harness configuration: a `provider` block in `opencode.json`, in [opencode's provider schema](https://opencode.ai/docs/providers/), keyed by the prefix your model strings use:
 
 ```json

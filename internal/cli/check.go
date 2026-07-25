@@ -182,6 +182,24 @@ func cmdCheck(args []string) int {
 				}
 			}
 		}
+		if agent != nil {
+			// A typed entry names a stored credential; one without a stored
+			// value is dormant misconfiguration.
+			for name, spec := range agent.Credentials {
+				if _, ok := store[name]; !ok {
+					warnf("credential entry %q (type %s) has no stored value in %s", name, spec.Type, creds.FileName)
+				}
+			}
+			// github_app tokens expire after one hour; a routine that can run
+			// close to that may lose authentication late in the attempt.
+			for _, r := range routines {
+				for _, c := range r.FM.Credentials {
+					if agent.Credentials[c].Type == "github_app" && runner.EffectiveTimeout(agent, r) >= 50*time.Minute {
+						warnf("%s: timeout %s approaches the one-hour github_app token life -- authentication may fail late in a run", r.Name, runner.EffectiveTimeout(agent, r))
+					}
+				}
+			}
+		}
 		// A variable sharing a credential's name would be shadowed in the
 		// run environment (the credential wins) -- rename one of them.
 		if agent != nil {

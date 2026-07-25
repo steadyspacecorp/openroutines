@@ -40,14 +40,18 @@ type Memory struct {
 // Agent is the parsed agent.yaml. Description is the agent's job description.
 // Variables are non-secret configuration values, injected into every run's
 // environment (product_repo -> PRODUCT_REPO); secrets belong in credentials.
+// Credentials is optional per-credential metadata: an entry gives a stored
+// credential a derived type (see DESIGN.md "Credentials have types"); a
+// credential without an entry is raw, injected verbatim.
 type Agent struct {
-	Name        string            `yaml:"name"`
-	Description string            `yaml:"description"`
-	Owner       Owner             `yaml:"owner"`
-	Timezone    string            `yaml:"timezone"`
-	Defaults    Defaults          `yaml:"defaults"`
-	Memory      *Memory           `yaml:"memory,omitempty"`
-	Variables   map[string]string `yaml:"variables,omitempty"`
+	Name        string                `yaml:"name"`
+	Description string                `yaml:"description"`
+	Owner       Owner                 `yaml:"owner"`
+	Timezone    string                `yaml:"timezone"`
+	Defaults    Defaults              `yaml:"defaults"`
+	Memory      *Memory               `yaml:"memory,omitempty"`
+	Variables   map[string]string     `yaml:"variables,omitempty"`
+	Credentials map[string]creds.Spec `yaml:"credentials,omitempty"`
 }
 
 // Retention returns the configured memory retention string ("" = default).
@@ -127,6 +131,13 @@ func (a *Agent) Problems() []string {
 		case creds.ReservedEnvName(name):
 			out = append(out, fmt.Sprintf("variable name %q collides with the %s environment variable", name, strings.ToUpper(name)))
 		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(a.Credentials)) {
+		if !creds.NamePattern.MatchString(name) {
+			out = append(out, fmt.Sprintf("credential entry %q must name a stored credential in lowercase snake_case", name))
+			continue
+		}
+		out = append(out, creds.SpecProblems(name, a.Credentials[name])...)
 	}
 	return out
 }
