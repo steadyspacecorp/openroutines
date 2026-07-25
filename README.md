@@ -1,5 +1,7 @@
 # openroutines
 
+[![ci](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml/badge.svg)](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml)
+
 The framework for running simple, secure, and durable autonomous AI agents.
 
 > **Status: alpha.** The full lifecycle works -- local development, production deployment, updates, the filesystem sandbox -- and a deployed test agent exercises it daily. Remaining work is in [issues](../../issues); known limitations are in [SECURITY.md](SECURITY.md). While the repo is private there is no brew/curl install -- collaborators grab a binary from [Releases](../../releases).
