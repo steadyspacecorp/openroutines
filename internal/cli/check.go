@@ -3,10 +3,12 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -191,15 +193,37 @@ func cmdCheck(args []string) int {
 		}
 	}
 
-	// opencode.json should stay a permission policy: model and provider
-	// choice belongs in agent.yaml and routine frontmatter, where grants are
-	// visible. Config drift here has arrived via coding-agent sessions.
+	// opencode.json is the harness's config file: the permission policy plus
+	// custom provider endpoint definitions (an AI gateway, a proxy), both
+	// interpreted by opencode alone -- and update never rewrites the file.
+	// Model *choice* is framework config (the framework interprets it for
+	// per-routine resolution and provider-key injection), so a harness-side
+	// default model or anything else here is drift worth flagging (it has
+	// arrived via coding-agent sessions before). Defined providers are
+	// cross-checked against model prefixes: an unreferenced id usually means
+	// a typo on one side.
 	if raw, err := os.ReadFile(filepath.Join(dir, "opencode.json")); err == nil {
 		var cfg map[string]any
 		if json.Unmarshal(raw, &cfg) == nil {
-			for key := range cfg {
-				if key != "$schema" && key != "permission" {
-					warnf("opencode.json contains %q -- model/provider choice belongs in agent.yaml and frontmatter, not here", key)
+			for _, key := range slices.Sorted(maps.Keys(cfg)) {
+				if key != "$schema" && key != "permission" && key != "provider" {
+					warnf("opencode.json contains %q -- model choice belongs in agent.yaml and frontmatter, not here", key)
+				}
+			}
+			if providers, ok := cfg["provider"].(map[string]any); ok {
+				prefixes := map[string]bool{}
+				if agent != nil && agent.Defaults.Model != "" {
+					prefixes[strings.SplitN(agent.Defaults.Model, "/", 2)[0]] = true
+				}
+				for _, r := range routines {
+					if r.FM.Model != "" {
+						prefixes[strings.SplitN(r.FM.Model, "/", 2)[0]] = true
+					}
+				}
+				for _, id := range slices.Sorted(maps.Keys(providers)) {
+					if !prefixes[id] {
+						warnf("provider %q in opencode.json is not referenced by any model in agent.yaml defaults or routine frontmatter", id)
+					}
 				}
 			}
 		}

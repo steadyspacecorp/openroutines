@@ -66,7 +66,13 @@ counts as delivered.
   into every run. If a value is secret it's a credential; otherwise it's a
   variable.
 - `master.key` must never be committed or printed.
-- Do not edit `opencode.json`: it is the agent's permission policy, nothing
-  else. Model and provider choice belong in `agent.yaml` defaults and routine
-  frontmatter, where every grant is visible. `openroutines check` warns if
-  extra configuration drifts in.
+- Two config files, two systems -- each belongs to the system that
+  interprets it. `opencode.json` is the harness's: the permission policy
+  plus, when a custom endpoint is needed (an AI gateway, a proxy),
+  `provider` definitions in opencode's schema, keyed by the prefix model
+  strings use. Never remove or rewrite a provider block that is already
+  there; `openroutines update` never rewrites this file. `agent.yaml` and
+  routine frontmatter are the framework's: identity, schedules, grants, and
+  model *choice* (the framework resolves it per routine and injects the
+  matching provider key). `openroutines check` warns when config lands on
+  the wrong side.
