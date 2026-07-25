@@ -163,6 +163,14 @@ A routine then selects `model: my_gateway/some-model` in its frontmatter, and th
 
 Skills follow the open [Agent Skills](https://agentskills.io/) standard, so any skill written for Claude Code, Cursor, opencode, or the rest of the ecosystem works in your agent's `skills/` directory unchanged. A routine only gets the skills its frontmatter declares. And treat a skill like the dependency it is: instructions -- sometimes code -- that your agent will follow unattended. Review what you vendor in.
 
+A whole capability -- one or more routines, their skills, the names of the credentials to fill in -- can arrive as a **plugin**:
+
+```bash
+openroutines plugin add steadyspacecorp/steady-pack
+```
+
+`plugin add` shows you exactly what the bundle asks for -- every routine with its schedule, trigger, model, credentials, and skills -- and copies the files in only after you confirm. It writes nothing outside `routines/` and `skills/`, and secrets are never part of a plugin: you're told which credentials to `credentials set` afterward. Plugins are copy-first: after install the files are yours, indistinguishable from ones you wrote by hand, reviewed and versioned in the same diff. A plugin can also be just a skills pack (you write the routines) -- see [DESIGN.md](DESIGN.md) for the format and the boundaries it enforces.
+
 To contribute to openroutines itself, clone this repo -- see [License and contributing](#license-and-contributing).
 
 ## Deploying your agent
