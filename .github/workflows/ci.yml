@@ -43,6 +43,6 @@ jobs:
         uses: rtCamp/action-slack-notify@v2
         env:
           SLACK_USERNAME: "${{ github.repository }}: ${{ needs.ci.result }}"
-          SLACK_ICON: https://app.steady.space/alt/iconx-256.dev.png
+          SLACK_ICON: ${{ vars.SLACK_WEBHOOK_ICON_DEV }}
           SLACK_COLOR: ${{ needs.ci.result }}
           SLACK_FOOTER: ""

@@ -20,7 +20,7 @@ jobs:
         env:
           MSG_MINIMAL: true
           SLACK_USERNAME: "${{ github.repository }}: release"
-          SLACK_ICON: https://app.steady.space/alt/iconx-256.dev.png
+          SLACK_ICON: ${{ vars.SLACK_WEBHOOK_ICON_DEV }}
           SLACK_COLOR: good
           SLACK_MESSAGE: "Released <${{ github.event.release.html_url }}|${{ github.event.release.tag_name }}> -- base image ghcr.io/${{ github.repository }}:${{ github.event.release.tag_name }}"
           SLACK_FOOTER: ""
