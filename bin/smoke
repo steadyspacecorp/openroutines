@@ -106,11 +106,17 @@ step "plugin add installs all three reference plugins, refuses reinstall"
 printf 'fake\n' | run credentials set steady_token || die "credentials set steady_token"
 printf 'fake\n' | run credentials set slack_webhook_url || die "credentials set slack_webhook_url"
 printf 'fake\n' | run credentials set github_app_private_key || die "credentials set github_app_private_key"
+printf 'fake\n' | run credentials set support_desk_secret || die "credentials set support_desk_secret"
 cat >> agent.yaml <<'EOF'
 credentials:
   github_app_private_key:
     type: github_app
     app_id: "12345"
+  support_desk_secret:
+    type: oauth2_client
+    token_url: https://auth.example.invalid/oauth2/token
+    client_id: "client-abc"
+    inject_as: support_desk_token
 variables:
   docs_repos: "acme/docs"
 EOF
