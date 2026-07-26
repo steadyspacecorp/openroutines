@@ -2,7 +2,10 @@ package creds
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
+	"slices"
+	"strings"
 )
 
 // Spec declares how a stored credential is materialized into a run (see
@@ -12,7 +15,11 @@ import (
 // derived surface, never the stored root secret.
 type Spec struct {
 	Type  string `yaml:"type"`
-	AppID string `yaml:"app_id,omitempty"`
+	AppID string `yaml:"app_id,omitempty"` // github_app
+
+	TokenURL string `yaml:"token_url,omitempty"` // oauth2_client
+	ClientID string `yaml:"client_id,omitempty"` // oauth2_client
+	InjectAs string `yaml:"inject_as,omitempty"` // oauth2_client
 }
 
 // Derived is run-scoped material minted from a stored root secret: the
@@ -27,19 +34,56 @@ type Derived struct {
 
 var appIDPattern = regexp.MustCompile(`^[0-9]+$`)
 
+// DerivedTypes are the derived credential types the framework implements,
+// in the order they shipped. Every validator that names the set consults
+// this list -- two hardcoded copies drifted once already (the plugin
+// validator missed oauth2_client).
+var DerivedTypes = []string{"github_app", "oauth2_client"}
+
+// KnownType reports whether t is an implemented derived credential type.
+func KnownType(t string) bool {
+	return slices.Contains(DerivedTypes, t)
+}
+
 // SpecProblems returns human-readable validation failures for one credential
-// metadata entry, empty when valid.
+// metadata entry, empty when valid. Fields another type owns are rejected,
+// not ignored -- silently dead configuration is what strict decoding exists
+// to prevent.
 func SpecProblems(name string, s Spec) []string {
 	var out []string
+	problem := func(format string, a ...any) {
+		out = append(out, fmt.Sprintf("credential %q: ", name)+fmt.Sprintf(format, a...))
+	}
 	switch s.Type {
 	case "":
-		out = append(out, fmt.Sprintf("credential %q: metadata entry has no type -- omit the entry entirely for a raw credential", name))
+		problem("metadata entry has no type -- omit the entry entirely for a raw credential")
 	case "github_app":
 		if !appIDPattern.MatchString(s.AppID) {
-			out = append(out, fmt.Sprintf("credential %q: type github_app requires a numeric app_id", name))
+			problem("type github_app requires a numeric app_id")
+		}
+		for field, v := range map[string]string{"token_url": s.TokenURL, "client_id": s.ClientID, "inject_as": s.InjectAs} {
+			if v != "" {
+				problem("%s is not part of type github_app", field)
+			}
+		}
+	case "oauth2_client":
+		if u, err := url.Parse(s.TokenURL); err != nil || u.Scheme != "https" || u.Host == "" {
+			problem("type oauth2_client requires an https token_url")
+		}
+		if s.ClientID == "" {
+			problem("type oauth2_client requires a client_id")
+		}
+		switch {
+		case !NamePattern.MatchString(s.InjectAs):
+			problem("type oauth2_client requires inject_as, a lowercase snake_case env name for the minted bearer")
+		case strings.HasPrefix(s.InjectAs, ReservedPrefix) || ReservedEnvName(s.InjectAs):
+			problem("inject_as %q collides with a reserved environment name", s.InjectAs)
+		}
+		if s.AppID != "" {
+			problem("app_id is not part of type oauth2_client")
 		}
 	default:
-		out = append(out, fmt.Sprintf("credential %q: unknown type %q (supported: github_app)", name, s.Type))
+		problem("unknown type %q (supported: %s)", s.Type, strings.Join(DerivedTypes, ", "))
 	}
 	return out
 }
@@ -51,6 +95,8 @@ func Derive(name string, s Spec, stored string) (*Derived, error) {
 	switch s.Type {
 	case "github_app":
 		return deriveGitHubApp(s, stored, githubAPIBase)
+	case "oauth2_client":
+		return deriveOAuth2Client(name, s, stored)
 	default:
 		return nil, fmt.Errorf("credential %q: unknown derived type %q", name, s.Type)
 	}
