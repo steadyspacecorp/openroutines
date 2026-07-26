@@ -168,7 +168,7 @@ Skills follow the open [Agent Skills](https://agentskills.io/) standard, so any 
 A whole capability -- one or more routines, their skills, the names of the credentials to fill in -- can arrive as a **plugin**:
 
 ```bash
-openroutines plugin add steadyspacecorp/openroutines-plugin-steady
+openroutines plugin add steadyspacecorp/openroutines --path examples/plugins/steady
 ```
 
 `plugin add` shows you the bundle's declared authority -- every routine with its schedule, trigger, model, credentials, and skills -- and copies the files in only after you confirm (`--yes` is required when stdin is not interactive). The summary is not a substitute for reviewing routine bodies and skill files, which are executable supply-chain input. Installed routines are forced inactive so you can configure them, inspect the diff, and activate them explicitly. Install writes nothing outside `routines/` and `skills/`, and secrets are never part of a plugin: you're told which credentials to `credentials set` afterward. Plugins are copy-first: after install the files are yours, indistinguishable from ones you wrote by hand, reviewed and versioned in the same diff. A plugin can also be skills-only (you write the routines) -- see [DESIGN.md](DESIGN.md) for the format and the boundaries it enforces. To author one, copy a reference plugin from [`examples/plugins/`](examples/plugins/) and edit: the `PLUGIN.md` manifest names the bundle and the credentials and variables it needs; `routines/`, `skills/`, and `memory/ledgers/` stubs are the payload.
