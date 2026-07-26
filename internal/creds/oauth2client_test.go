@@ -47,7 +47,7 @@ func TestDeriveOAuth2Client(t *testing.T) {
 }
 
 func TestDeriveOAuth2ClientErrors(t *testing.T) {
-	denied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	denied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"invalid_client","error_description":"bad secret"}`))
 	}))
@@ -57,7 +57,7 @@ func TestDeriveOAuth2ClientErrors(t *testing.T) {
 		t.Fatalf("expected invalid_client error, got %v", err)
 	}
 
-	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"token_type":"bearer"}`))
 	}))
 	defer empty.Close()
