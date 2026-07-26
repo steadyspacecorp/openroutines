@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
@@ -77,7 +79,22 @@ func cmdConfigure(_ []string) int {
 	provider := strings.SplitN(agent.Defaults.Model, "/", 2)[0]
 	providerKey := creds.ProviderKeyName(provider)
 	if _, ok := store[providerKey]; !ok {
-		val := prompt(fmt.Sprintf("%s API key (enter to skip)", provider), "")
+		// Hidden input: a pasted key must not land on screen or in
+		// terminal scrollback. Piped stdin still reads a line, so scripted
+		// configure keeps working.
+		var val string
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			fmt.Printf("%s API key (hidden; enter to skip): ", provider)
+			raw, rerr := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Println()
+			if rerr != nil {
+				return fail(rerr)
+			}
+			val = strings.TrimSpace(string(raw))
+		} else {
+			line, _ := in.ReadString('\n')
+			val = strings.TrimSpace(line)
+		}
 		if val != "" {
 			store[providerKey] = val
 		}
