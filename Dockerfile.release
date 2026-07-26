@@ -1,8 +1,11 @@
 # The openroutines base image, published to GHCR by bin/release.
 #
 # Agent Dockerfiles build FROM this: it carries the openroutines binary
-# (supervisor + CLI), pinned opencode, git, and ssh -- everything a deployed
-# agent runs on. Keep the runtime stage of template/Dockerfile in sync.
+# (supervisor + CLI), pinned opencode, git, gh, jq, and ssh -- everything a
+# deployed agent runs on. gh is the idiom for GitHub work (the typed
+# github_app credential injects GH_TOKEN, which gh reads natively) and jq is
+# how routines read JSON APIs without parsing blobs by eye. Keep the runtime
+# stage of template/Dockerfile in sync.
 
 ARG VERSION
 
@@ -15,7 +18,12 @@ LABEL org.opencontainers.image.source=https://github.com/steadyspacecorp/openrou
 LABEL org.opencontainers.image.description="openroutines agent base image"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates curl bash openssh-client \
+    && apt-get install -y --no-install-recommends git ca-certificates curl bash openssh-client jq \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10001 agent
 
