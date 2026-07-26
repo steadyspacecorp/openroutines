@@ -109,8 +109,8 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		if strings.TrimSpace(c.Description) == "" {
 			badf("credential %q needs a description -- someone has to know what to fill in", cname)
 		}
-		if c.Type != "" && c.Type != "github_app" {
-			badf("credential %q has unknown type %q (supported: github_app)", cname, c.Type)
+		if c.Type != "" && !creds.KnownType(c.Type) {
+			badf("credential %q has unknown type %q (supported: %s)", cname, c.Type, strings.Join(creds.DerivedTypes, ", "))
 		}
 	}
 	for _, vname := range slices.Sorted(maps.Keys(p.Manifest.Variables)) {

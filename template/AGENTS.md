@@ -77,7 +77,8 @@ counts as delivered.
   `app_id`) injects `GITHUB_TOKEN` and the App's Git identity;
   `type: oauth2_client` (plus `token_url`, `client_id`, `inject_as`)
   exchanges an OAuth2 client secret for a bearer via the client-credentials
-  grant. No entry means the value injects verbatim.
+  grant, injected under the uppercased `inject_as` name
+  (`support_desk_token` -> `SUPPORT_DESK_TOKEN`). No entry means the value injects verbatim.
 - `master.key` must never be committed or printed.
 - Two config files, two systems -- each belongs to the system that
   interprets it. `opencode.json` is the harness's: the permission policy

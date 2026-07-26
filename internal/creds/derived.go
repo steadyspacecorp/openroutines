@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -32,6 +33,17 @@ type Derived struct {
 }
 
 var appIDPattern = regexp.MustCompile(`^[0-9]+$`)
+
+// DerivedTypes are the derived credential types the framework implements,
+// in the order they shipped. Every validator that names the set consults
+// this list -- two hardcoded copies drifted once already (the plugin
+// validator missed oauth2_client).
+var DerivedTypes = []string{"github_app", "oauth2_client"}
+
+// KnownType reports whether t is an implemented derived credential type.
+func KnownType(t string) bool {
+	return slices.Contains(DerivedTypes, t)
+}
 
 // SpecProblems returns human-readable validation failures for one credential
 // metadata entry, empty when valid. Fields another type owns are rejected,
@@ -71,7 +83,7 @@ func SpecProblems(name string, s Spec) []string {
 			problem("app_id is not part of type oauth2_client")
 		}
 	default:
-		problem("unknown type %q (supported: github_app, oauth2_client)", s.Type)
+		problem("unknown type %q (supported: %s)", s.Type, strings.Join(DerivedTypes, ", "))
 	}
 	return out
 }

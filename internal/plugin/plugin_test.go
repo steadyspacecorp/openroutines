@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
 func examples(t *testing.T, name string) string {
@@ -239,5 +241,24 @@ func TestInstallRollsBackOnCopyFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(agent, "skills", "demo-skill")); !os.IsNotExist(err) {
 		t.Fatalf("partial skill survived rollback: %v", err)
+	}
+}
+
+// The plugin validator consults the framework's shared derived-type list --
+// a second hardcoded copy drifted once (oauth2_client was refused here
+// while creds accepted it).
+func TestManifestAcceptsAllDerivedTypes(t *testing.T) {
+	manifest := func(typ string) string {
+		return "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: t\n  api_secret:\n    description: s\n    type: " + typ + "\n---\n"
+	}
+	for _, typ := range creds.DerivedTypes {
+		dir := write(t, map[string]string{"PLUGIN.md": manifest(typ)})
+		if _, err := Load(dir, nil); err != nil {
+			t.Fatalf("type %s refused by the plugin validator: %v", typ, err)
+		}
+	}
+	dir := write(t, map[string]string{"PLUGIN.md": manifest("aws_sts")})
+	if _, err := Load(dir, nil); err == nil || !strings.Contains(err.Error(), strings.Join(creds.DerivedTypes, ", ")) {
+		t.Fatalf("unknown type must be refused naming the known set, got %v", err)
 	}
 }
