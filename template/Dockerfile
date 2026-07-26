@@ -1,7 +1,7 @@
 # Runtime for this openroutines agent.
 #
 # Two stages:
-#   runtime -- debian + git + pinned opencode. Local `openroutines routines
+#   runtime -- debian + git/gh/jq + pinned opencode. Local `openroutines routines
 #              run/test` executes the model process in this stage with the
 #              run workspace mounted; nothing else from your machine is
 #              visible to it. Self-contained: builds without registry access.
@@ -17,7 +17,12 @@ FROM debian:bookworm-slim AS runtime
 ARG OPENCODE_VERSION
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates curl bash \
+    && apt-get install -y --no-install-recommends git ca-certificates curl bash jq \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10001 agent
 
