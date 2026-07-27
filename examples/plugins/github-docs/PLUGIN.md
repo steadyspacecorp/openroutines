@@ -21,7 +21,7 @@ The watching half of a knowledgebot: a routine that sweeps configured documentat
 ## After installing
 
 1. Create a GitHub App with read-only Contents permission, install it on the repos you want watched, and note its App ID.
-2. Add the typed-credential entry to `agent.yaml` (the App's private key never enters a run -- each run gets a one-hour installation token):
+2. Add the typed-credential entry to `openroutines.yaml` (the App's private key never enters a run -- each run gets a one-hour installation token):
 
    ```yaml
    credentials:
@@ -31,7 +31,7 @@ The watching half of a knowledgebot: a routine that sweeps configured documentat
    ```
 
 3. `openroutines credentials set github_app_private_key`
-4. Set the `docs_repos` variable in `agent.yaml`.
+4. Set the `docs_repos` variable in `openroutines.yaml`.
 5. `openroutines check`, review the diff, commit.
 
 A fine-grained PAT in a raw credential works too if a GitHub App is overkill -- swap the credential name into the routine and skip step 2. The App is the better unattended posture: short-lived tokens, revoked after every run.
