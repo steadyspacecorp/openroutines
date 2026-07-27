@@ -67,6 +67,9 @@ type ExecResult struct {
 	ExitCode int
 	Duration time.Duration
 	Hint     string
+	Model    string // the resolved model this attempt ran with
+	Effort   string // frontmatter reasoning effort, when set
+	Usage    *Usage // token consumption; nil when the surface was unavailable
 }
 
 // tailBuffer keeps the last max bytes written -- enough to classify a
@@ -315,6 +318,19 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		if err := ensureRuntimeImage(dir, image); err != nil {
 			return nil, nil, err
 		}
+		// Pre-create the attempt home world-writable: the container's agent
+		// uid (10001) is not the host user's, and the workspace is a bind
+		// mount discarded after the run.
+		for _, p := range []string{
+			filepath.Join(workspace, attemptHomeName),
+			filepath.Join(workspace, attemptHomeName, ".local"),
+			filepath.Join(workspace, attemptHomeName, ".local", "share"),
+		} {
+			if err := os.MkdirAll(p, 0o777); err != nil {
+				return nil, nil, err
+			}
+			_ = os.Chmod(p, 0o777)
+		}
 		containerName = "openroutines-" + meta.RunID
 		cmd = containerCmd(containerName, workspace, image, env, ocArgs)
 	}
@@ -357,6 +373,9 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	}
 	res.Duration = time.Since(started).Round(time.Millisecond)
 	scrubber.Flush()
+	res.Model = model
+	res.Effort = r.FM.Effort
+	res.Usage = captureUsage(workspace)
 	if res.Outcome == Crashed && authFailurePattern.Match(tail.buf) {
 		provider := strings.SplitN(model, "/", 2)[0]
 		res.Hint = fmt.Sprintf("provider authentication failed -- the %s key looks missing or invalid (openroutines credentials set %s)", provider, creds.ProviderKeyName(provider))
@@ -474,9 +493,11 @@ func AdvanceConsumer(dir string, r *routine.Routine, staging *Staging, runID str
 	})
 }
 
-// RecordJSON formats one run record line for runs.jsonl.
+// RecordJSON formats one run record line for runs.jsonl. Usage fields are
+// per attempt (spend happens per attempt; retries would double-count a
+// run-level figure) and absent means the runtime didn't report, never zero.
 func RecordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, manual bool) string {
-	record, _ := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"run_id":          meta.RunID,
 		"routine":         r.Name,
 		"attempt":         attempt,
@@ -487,7 +508,18 @@ func RecordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, man
 		"scheduled_for":   meta.ScheduledFor,
 		"covered_through": meta.CoveredThrough,
 		"manual":          manual,
-	})
+	}
+	if res.Model != "" {
+		fields["model"] = res.Model
+	}
+	if res.Effort != "" {
+		fields["effort"] = res.Effort
+	}
+	if res.Usage != nil {
+		fields["tokens"] = res.Usage
+		fields["cost_reported"] = res.Usage.CostReported
+	}
+	record, _ := json.Marshal(fields)
 	return string(record)
 }
 

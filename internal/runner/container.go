@@ -56,12 +56,17 @@ func ensureRuntimeImage(agentDir, tag string) error {
 // values never appear on the command line (argv is world-readable via ps
 // for the duration of the run).
 func containerCmd(containerName, workspace, image string, env []string, ocArgs []string) *exec.Cmd {
+	// HOME is the disposable per-attempt directory inside the mounted
+	// workspace -- the same hygiene production applies, and what makes
+	// opencode's session storage (token usage) readable after the
+	// container exits instead of vanishing with --rm.
 	args := []string{
 		"run", "--rm", "--init",
 		"--name", containerName,
 		"-v", workspace + ":/work",
 		"-w", "/work",
-		"-e", "HOME=/home/agent",
+		"-e", "HOME=/work/" + attemptHomeName,
+		"-e", "XDG_DATA_HOME=/work/" + attemptHomeName + "/.local/share",
 		"-e", "TMPDIR=/work/.runtmp",
 	}
 	for _, kv := range env {

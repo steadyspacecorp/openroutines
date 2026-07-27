@@ -133,7 +133,7 @@ openroutines routines run doc-drift
 Day to day:
 
 ```bash
-openroutines status                   # master key, models, routines and schedules, skills, memory sync state
+openroutines status                   # master key, models, routines and schedules, skills, memory sync state, token usage
 openroutines routines list            # also: edit, activate, deactivate, remove
 openroutines routines test <name>     # dry run: routine credentials withheld, acting tools denied, memory discarded
 openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove

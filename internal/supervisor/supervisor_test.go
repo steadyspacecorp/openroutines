@@ -18,6 +18,11 @@ import (
 // scaffolding) to decide whether to succeed (writing memory) or fail.
 const fakeOpencode = `#!/bin/sh
 mode=$(cat "$(dirname "$0")/fake-mode" 2>/dev/null || echo ok)
+# Every mode leaves the session storage a real opencode leaves in the
+# attempt home -- the surface the runner captures token usage from.
+mkdir -p .home/.local/share/opencode/storage/message/ses_fake
+printf '{"role":"assistant","modelID":"fake","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}' \
+  > .home/.local/share/opencode/storage/message/ses_fake/msg_1.json
 case "$mode" in
   fail) echo "boom"; exit 1 ;;
   consume) cp inbox.md memory/inbox-copy.md
@@ -338,5 +343,28 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	}
 	if !s.syncBlocked {
 		t.Fatal("supervisor should be sync-blocked after a rewrite")
+	}
+}
+
+// A supervised run's record carries the usage the runner captured from the
+// attempt home's session storage, plus the resolved model.
+func TestRunRecordCarriesUsage(t *testing.T) {
+	dir := fixture(t, "ok")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+	s.Tick(ctx, t0)
+	s.Tick(ctx, t0.Add(time.Minute))
+	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	last := ""
+	for _, l := range strings.Split(strings.TrimSpace(records), "\n") {
+		if l != "" {
+			last = l
+		}
+	}
+	for _, want := range []string{`"model":"fake/model"`, `"input":100`, `"output":20`, `"cost_reported":0.01`} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("run record missing %s: %s", want, last)
+		}
 	}
 }
