@@ -14,18 +14,23 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/plugin"
+	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
 func cmdPlugin(args []string) int {
 	if len(args) == 0 {
-		return fail(fmt.Errorf("usage: openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir] [--yes]"))
+		return fail(fmt.Errorf("usage: openroutines plugin <add|list|update>"))
 	}
 	switch args[0] {
 	case "add":
 		return pluginAdd(args[1:])
+	case "list":
+		return pluginList(args[1:])
+	case "update":
+		return pluginUpdate(args[1:])
 	default:
-		return fail(fmt.Errorf("unknown plugin command %q (available: add)", args[0]))
+		return fail(fmt.Errorf("unknown plugin command %q (available: add, list, update)", args[0]))
 	}
 }
 
@@ -58,42 +63,20 @@ func pluginAdd(args []string) int {
 		return fail(fmt.Errorf("run plugin add from inside an agent repository"))
 	}
 
-	// A local directory installs directly -- the development and fixture
-	// path. Anything else is cloned with the same hardening as skills add.
-	root := ""
-	revision := ""
-	if fi, err := os.Stat(source); err == nil && fi.IsDir() {
-		root = source
-	} else {
-		cloneURL := source
-		if !strings.Contains(source, "://") && !strings.Contains(source, "@") && strings.Count(source, "/") == 1 {
-			cloneURL = "https://github.com/" + source + ".git"
-		}
-		tmp, err := os.MkdirTemp("", "openroutines-plugin-*")
-		if err != nil {
-			return fail(err)
-		}
-		defer os.RemoveAll(tmp)
-		clone := exec.Command("git", "-c", "protocol.ext.allow=never", "clone", "--quiet", "--depth", "1", "--", cloneURL, tmp)
-		clone.Stderr = os.Stderr
-		if err := clone.Run(); err != nil {
-			return fail(fmt.Errorf("clone %s: %w", cloneURL, err))
-		}
-		revBytes, _ := exec.Command("git", "-C", tmp, "rev-parse", "--short", "HEAD").Output()
-		revision = strings.TrimSpace(string(revBytes))
-		root = tmp
+	// Local directories and remote sources both go through a temporary clone,
+	// so the vendored payload always corresponds to the recorded commit.
+	root, provenance, cleanup, err := resolvePluginSource(source, subPath, "")
+	if err != nil {
+		return fail(err)
 	}
-	if subPath != "" {
-		selectedRoot, err := pluginSubdir(root, subPath)
-		if err != nil {
-			return fail(err)
-		}
-		root = selectedRoot
-	}
+	defer cleanup()
 
+	_, existingSkills, err := plugin.AgentNamespace(".")
+	if err != nil {
+		return fail(err)
+	}
 	agentSkills := map[string]bool{}
-	existing, _ := skill.List("skills")
-	for _, s := range existing {
+	for _, s := range existingSkills {
 		agentSkills[s.Name] = true
 	}
 
@@ -101,7 +84,11 @@ func pluginAdd(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	if collisions := p.Collisions("."); len(collisions) > 0 {
+	collisions, err := p.Collisions(".")
+	if err != nil {
+		return fail(err)
+	}
+	if len(collisions) > 0 {
 		return fail(fmt.Errorf("already present, refusing to replace: %s -- remove them first to reinstall", strings.Join(collisions, ", ")))
 	}
 
@@ -127,7 +114,7 @@ func pluginAdd(args []string) int {
 		}
 	}
 
-	installed, pendingStubs, err := p.Install(".")
+	installed, pendingStubs, err := p.Install(".", provenance)
 	if err != nil {
 		return fail(err)
 	}
@@ -159,12 +146,312 @@ func pluginAdd(args []string) int {
 	if len(p.Routines) > 0 {
 		stepf("review the routine and skill contents, then activate wanted routines with openroutines routines activate <name>")
 	}
-	provenance := source
-	if revision != "" {
-		provenance += " @ " + revision
-	}
-	stepf("review the diff and commit -- suggested message: \"Install plugin %s (from %s)\"", p.Manifest.Name, provenance)
+	stepf("review the diff and commit -- suggested message: \"Install plugin %s (from %s @ %s)\"", p.Manifest.Name, provenance.Repository, shortRevision(provenance.Revision))
 	return 0
+}
+
+func resolvePluginSource(source, subPath, revision string) (string, plugin.Source, func(), error) {
+	cleanup := func() {}
+	repository := source
+	cloneURL := ""
+	repoRoot := ""
+	if fi, err := os.Stat(source); err == nil && fi.IsDir() {
+		abs, err := filepath.Abs(source)
+		if err != nil {
+			return "", plugin.Source{}, cleanup, err
+		}
+		abs, err = filepath.EvalSymlinks(abs)
+		if err != nil {
+			return "", plugin.Source{}, cleanup, err
+		}
+		out, err := exec.Command("git", "-C", abs, "rev-parse", "--show-toplevel").Output()
+		if err != nil {
+			return "", plugin.Source{}, cleanup, fmt.Errorf("local plugin source must be inside a git repository: %w", err)
+		}
+		repoRoot, err = filepath.EvalSymlinks(strings.TrimSpace(string(out)))
+		if err != nil {
+			return "", plugin.Source{}, cleanup, err
+		}
+		cloneURL = repoRoot
+		localPath, err := filepath.Rel(repoRoot, abs)
+		if err != nil {
+			return "", plugin.Source{}, cleanup, err
+		}
+		if subPath != "" {
+			localPath = filepath.Join(localPath, subPath)
+		}
+		subPath = filepath.ToSlash(localPath)
+		repository = repoRoot
+	}
+	if cloneURL == "" {
+		cloneURL = repository
+	}
+	if !strings.Contains(repository, "://") && !strings.Contains(repository, "@") && strings.Count(repository, "/") == 1 {
+		cloneURL = "https://github.com/" + repository + ".git"
+		repository = cloneURL
+	}
+	tmp, err := os.MkdirTemp("", "openroutines-plugin-*")
+	if err != nil {
+		return "", plugin.Source{}, cleanup, err
+	}
+	cleanup = func() { _ = os.RemoveAll(tmp) }
+	clone := exec.Command("git", "-c", "protocol.ext.allow=never", "clone", "--quiet", "--", cloneURL, tmp)
+	clone.Stderr = os.Stderr
+	if err := clone.Run(); err != nil {
+		cleanup()
+		return "", plugin.Source{}, func() {}, fmt.Errorf("clone %s: %w", cloneURL, err)
+	}
+	if revision != "" {
+		checkout := exec.Command("git", "-C", tmp, "checkout", "--quiet", "--detach", revision)
+		checkout.Stderr = os.Stderr
+		if err := checkout.Run(); err != nil {
+			cleanup()
+			return "", plugin.Source{}, func() {}, fmt.Errorf("checkout %s: %w", revision, err)
+		}
+	}
+	revBytes, err := exec.Command("git", "-C", tmp, "rev-parse", "HEAD").Output()
+	if err != nil {
+		cleanup()
+		return "", plugin.Source{}, func() {}, err
+	}
+	root := tmp
+	if subPath != "" && subPath != "." {
+		root, err = pluginSubdir(tmp, filepath.FromSlash(subPath))
+		if err != nil {
+			cleanup()
+			return "", plugin.Source{}, func() {}, err
+		}
+	}
+	return root, plugin.Source{Repository: repository, Path: subPath, Revision: strings.TrimSpace(string(revBytes))}, cleanup, nil
+}
+
+func shortRevision(revision string) string {
+	if len(revision) > 12 {
+		return revision[:12]
+	}
+	return revision
+}
+
+func pluginList(args []string) int {
+	if len(args) != 0 {
+		return fail(fmt.Errorf("usage: openroutines plugin list"))
+	}
+	entries, err := os.ReadDir("plugins")
+	if os.IsNotExist(err) || len(entries) == 0 {
+		fmt.Println("No plugins installed.")
+		return 0
+	}
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Printf("%-20s %-12s %s\n", "NAME", "REVISION", "SOURCE")
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		source, err := plugin.ReadSource(filepath.Join("plugins", entry.Name()))
+		if err != nil {
+			fmt.Printf("%-20s %-12s invalid provenance: %v\n", entry.Name(), "-", err)
+			continue
+		}
+		display := source.Repository
+		if source.Path != "" && source.Path != "." {
+			display += " --path " + source.Path
+		}
+		fmt.Printf("%-20s %-12s %s\n", entry.Name(), shortRevision(source.Revision), display)
+	}
+	return 0
+}
+
+func pluginUpdate(args []string) int {
+	yes := false
+	var rest []string
+	for _, arg := range args {
+		if arg == "--yes" {
+			yes = true
+		} else {
+			rest = append(rest, arg)
+		}
+	}
+	if len(rest) != 1 {
+		return fail(fmt.Errorf("usage: openroutines plugin update <name> [--yes]"))
+	}
+	name := rest[0]
+	if !skill.NamePattern.MatchString(name) {
+		return fail(fmt.Errorf("invalid plugin name %q", name))
+	}
+	ours := filepath.Join("plugins", name)
+	oldSource, err := plugin.ReadSource(ours)
+	if err != nil {
+		return fail(fmt.Errorf("plugin %s: %w", name, err))
+	}
+	base, _, cleanupBase, err := resolvePluginSource(oldSource.Repository, oldSource.Path, oldSource.Revision)
+	if err != nil {
+		return fail(fmt.Errorf("load recorded revision: %w", err))
+	}
+	defer cleanupBase()
+	theirs, newSource, cleanupTheirs, err := resolvePluginSource(oldSource.Repository, oldSource.Path, "")
+	if err != nil {
+		return fail(fmt.Errorf("load upstream: %w", err))
+	}
+	defer cleanupTheirs()
+	if newSource.Revision == oldSource.Revision {
+		fmt.Printf("Plugin %s is already current at %s.\n", name, shortRevision(oldSource.Revision))
+		return 0
+	}
+	_, existingSkills, err := plugin.AgentNamespace(".")
+	if err != nil {
+		return fail(err)
+	}
+	agentSkills := map[string]bool{}
+	for _, s := range existingSkills {
+		agentSkills[s.Name] = true
+	}
+	upstream, err := plugin.Load(theirs, agentSkills)
+	if err != nil {
+		return fail(fmt.Errorf("new upstream revision is invalid: %w", err))
+	}
+	if upstream.Manifest.Name != name {
+		return fail(fmt.Errorf("upstream plugin name changed from %q to %q", name, upstream.Manifest.Name))
+	}
+	collisions, err := pluginExternalCollisions(name, upstream)
+	if err != nil {
+		return fail(err)
+	}
+	if len(collisions) > 0 {
+		return fail(fmt.Errorf("updated plugin collides with agent content: %s", strings.Join(collisions, ", ")))
+	}
+	fmt.Printf("Update plugin %q: %s -> %s\n\n", name, shortRevision(oldSource.Revision), shortRevision(newSource.Revision))
+	changes, err := plugin.Changes(base, theirs)
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Println("Upstream files:")
+	for _, change := range changes {
+		fmt.Printf("  %s\n", change)
+	}
+	fmt.Println()
+	fmt.Println("The updated bundle asks for:")
+	fmt.Println(indent(strings.TrimRight(upstream.Summary(), "\n"), "  "))
+	fmt.Println()
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	if !interactive && !yes {
+		return fail(fmt.Errorf("stdin is not interactive; review the bundle above, then rerun with --yes to update"))
+	}
+	if interactive && !yes {
+		fmt.Print("Update? [y/N] ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(line)) != "y" {
+			fmt.Println("Nothing updated.")
+			return 0
+		}
+	}
+	merged, err := os.MkdirTemp(".", ".openroutines-plugin-update-*")
+	if err != nil {
+		return fail(err)
+	}
+	defer os.RemoveAll(merged)
+	conflicts, err := plugin.MergeTrees(base, ours, theirs, merged)
+	if err != nil {
+		return fail(err)
+	}
+	basePlugin, err := plugin.Load(base, agentSkills)
+	if err != nil {
+		return fail(fmt.Errorf("recorded upstream revision is invalid: %w", err))
+	}
+	baseRoutines := map[string]bool{}
+	for _, r := range basePlugin.Routines {
+		baseRoutines[r.Name] = true
+	}
+	for _, r := range upstream.Routines {
+		if baseRoutines[r.Name] {
+			continue
+		}
+		path := filepath.Join(merged, "routines", r.Name+".md")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return fail(err)
+		}
+		raw, err = routine.WithActive(raw, false)
+		if err != nil {
+			return fail(err)
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			return fail(err)
+		}
+	}
+	sourceToWrite := newSource
+	if len(conflicts) > 0 {
+		sourceToWrite = oldSource
+	}
+	if err := plugin.WriteSource(merged, sourceToWrite); err != nil {
+		return fail(err)
+	}
+	if len(conflicts) == 0 {
+		mergedPlugin, err := plugin.Load(merged, agentSkills)
+		if err != nil {
+			return fail(fmt.Errorf("merged plugin is invalid: %w", err))
+		}
+		mergedCollisions, err := pluginExternalCollisions(name, mergedPlugin)
+		if err != nil {
+			return fail(err)
+		}
+		if len(mergedCollisions) > 0 {
+			return fail(fmt.Errorf("merged plugin collides with agent content: %s", strings.Join(mergedCollisions, ", ")))
+		}
+	}
+	backup := ours + ".update-backup"
+	if err := os.Rename(ours, backup); err != nil {
+		return fail(err)
+	}
+	if err := os.Rename(merged, ours); err != nil {
+		_ = os.Rename(backup, ours)
+		return fail(err)
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return fail(err)
+	}
+	if len(conflicts) > 0 {
+		return fail(fmt.Errorf("plugin update has conflicts in %s; resolve the markers and rerun update (recorded revision remains %s)", strings.Join(conflicts, ", "), shortRevision(oldSource.Revision)))
+	}
+	fmt.Printf("Updated plugins/%s to %s. Review the diff, run openroutines check, and commit.\n", name, shortRevision(newSource.Revision))
+	return 0
+}
+
+func pluginExternalCollisions(name string, candidate *plugin.Plugin) ([]string, error) {
+	routines, skills, err := plugin.AgentNamespace(".")
+	if err != nil {
+		return nil, fmt.Errorf("agent routines and skills must be valid before updating: %w", err)
+	}
+	ownPrefix := filepath.Clean(filepath.Join("plugins", name)) + string(filepath.Separator)
+	routineNames := map[string]bool{}
+	for _, r := range routines {
+		clean := filepath.Clean(r.Path)
+		if clean == filepath.Clean(filepath.Join("plugins", name)) || strings.HasPrefix(clean, ownPrefix) {
+			continue
+		}
+		routineNames[r.Name] = true
+	}
+	skillNames := map[string]bool{}
+	for _, s := range skills {
+		clean := filepath.Clean(s.Dir)
+		if clean == filepath.Clean(filepath.Join("plugins", name)) || strings.HasPrefix(clean, ownPrefix) {
+			continue
+		}
+		skillNames[s.Name] = true
+	}
+	var collisions []string
+	for _, r := range candidate.Routines {
+		if routineNames[r.Name] {
+			collisions = append(collisions, "routine "+r.Name)
+		}
+	}
+	for _, s := range candidate.Skills {
+		if skillNames[s.Name] {
+			collisions = append(collisions, "skill "+s.Name)
+		}
+	}
+	return collisions, nil
 }
 
 func pluginSubdir(root, subPath string) (string, error) {
