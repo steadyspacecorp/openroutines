@@ -49,7 +49,7 @@ func cmdUpdate(_ []string) int {
 		return 0
 	}
 	if target == "v0.0.0-dev" {
-		fmt.Println("warning: this is a development build of openroutines -- updating the agent to an unreleased version")
+		fmt.Println("warning: this is a development build of OpenRoutines -- updating the agent to an unreleased version")
 	}
 	fmt.Printf("Updating agent from %s to %s\n\n", current, target)
 

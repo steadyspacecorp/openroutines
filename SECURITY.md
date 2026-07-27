@@ -1,6 +1,6 @@
 # Security
 
-**openroutines** runs autonomous AI agents unattended, with credentials, on your infrastructure. Its primary security boundary separates untrusted model-directed execution from the supervisor's credentials, Git worktree, and host filesystem.
+**OpenRoutines** runs autonomous AI agents unattended, with credentials, on your infrastructure. Its primary security boundary separates untrusted model-directed execution from the supervisor's credentials, Git worktree, and host filesystem.
 
 ## Reporting a vulnerability
 
@@ -19,16 +19,16 @@ Before 1.0 there are no backported fixes: a fix ships in the next release, and `
 
 ## Security model
 
-openroutines treats model-directed execution as untrusted. This includes model output, commands and tools selected by the model, memory produced by routines, and content fetched from external systems.
+OpenRoutines treats model-directed execution as untrusted. This includes model output, commands and tools selected by the model, memory produced by routines, and content fetched from external systems.
 
-openroutines trusts:
+OpenRoutines trusts:
 
 - the agent repository's reviewed main branch, including its routines, skills, `agent.yaml`, and `opencode.json`;
 - the container host and deployment configuration;
 - administrators of the agent's Git origin;
 - the selected base image, opencode distribution, model provider, and other runtime dependencies.
 
-The repository is the agent. Someone who can change trusted repository content can change its behavior and authority by design. openroutines validates common mistakes in trusted inputs, but does not attempt to sandbox an agent from its own source code or administrators.
+The repository is the agent. Someone who can change trusted repository content can change its behavior and authority by design. OpenRoutines validates common mistakes in trusted inputs, but does not attempt to sandbox an agent from its own source code or administrators.
 
 ## Security properties
 
@@ -51,7 +51,7 @@ The security properties above assume that operators:
 - deliver master and deploy keys through read-only files;
 - do not mount the Docker socket or unrelated host directories;
 - run only one supervisor instance for an agent;
-- keep the host, container runtime, base image, and openroutines release current;
+- keep the host, container runtime, base image, and OpenRoutines release current;
 - review repository changes, skills, credentials, and permission grants as code;
 - do not disable the production sandbox with `OPENROUTINES_UNSAFE_NO_SANDBOX=1`, and do not run a deployed agent with `OPENROUTINES_NATIVE=1` or with the image's `OPENROUTINES_IN_CONTAINER=1` unset -- either can spawn an unconfined model process, and only the first of those fails closed.
 
@@ -70,6 +70,6 @@ Environment-variable key delivery is supported for compatibility, but has a weak
 ## Out of scope
 
 - Attacks requiring control of the trusted agent repository, Git origin administration, container host, or deployment configuration.
-- Vulnerabilities in opencode, model providers, Git, or the container runtime, though openroutines may pin or mitigate affected versions.
+- Vulnerabilities in opencode, model providers, Git, or the container runtime, though OpenRoutines may pin or mitigate affected versions.
 - Denial of service, scheduling errors, concurrent routine conflicts, or lost agent memory that do not grant access across a security boundary.
 - Protection from credentials, files, or capabilities deliberately granted to a routine.

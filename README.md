@@ -1,4 +1,4 @@
-# openroutines
+# OpenRoutines
 
 [![ci](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml/badge.svg)](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml)
 
@@ -12,13 +12,13 @@ An autonomous AI agent is software that uses AI models to fulfill a job descript
 
 For example: a product management agent that gathers user research into themes, updates specifications against technical constraints, and checks that documentation hasn't drifted from what shipped. Or an IT ops agent that triages tickets, monitors licenses, and surfaces compliance issues.
 
-**openroutines** is an opinionated way to build and run one such agent -- one job description, one runtime, a handful of routines -- and to treat it like any other deployed software: versioned, operationalized, and secure.
+**OpenRoutines** is an opinionated way to build and run one such agent -- one job description, one runtime, a handful of routines -- and to treat it like any other deployed software: versioned, operationalized, and secure.
 
 ## What it does
 
-**openroutines** generates an agent as a git repository that deploys as a Docker container. The repository holds configuration, skills, structured memory, encrypted credentials, and a set of routines as markdown files. [opencode](https://opencode.ai) talks to the AI models you choose.
+**OpenRoutines** generates an agent as a git repository that deploys as a Docker container. The repository holds configuration, skills, structured memory, encrypted credentials, and a set of routines as markdown files. [opencode](https://opencode.ai) talks to the AI models you choose.
 
-You work on an openroutines-generated agent (ORA) like any software project: build and test locally, deploy with git and Docker, wire up standard CI/CD if your origin is GitHub, GitLab, or the like.
+You work on an OpenRoutines-generated agent (ORA) like any software project: build and test locally, deploy with git and Docker, wire up standard CI/CD if your origin is GitHub, GitLab, or the like.
 
 The heart of the agent is its routines. Frontmatter scopes the schedule, skills, credentials, model, and optionally the reasoning effort. The body is the prompt.
 
@@ -174,7 +174,7 @@ openroutines plugin add steadyspacecorp/openroutines --path examples/plugins/ste
 
 `plugin add` shows you the bundle's declared authority -- every routine with its schedule, trigger, model, credentials, and skills -- and copies the files in only after you confirm (`--yes` is required when stdin is not interactive). The summary is not a substitute for reviewing routine bodies and skill files, which are executable supply-chain input. Installed routines are forced inactive so you can configure them, inspect the diff, and activate them explicitly. Install writes nothing outside `routines/` and `skills/`, and secrets are never part of a plugin: you're told which credentials to `credentials set` afterward. Plugins are copy-first: after install the files are yours, indistinguishable from ones you wrote by hand, reviewed and versioned in the same diff. A plugin can also be skills-only (you write the routines) -- see [DESIGN.md](DESIGN.md) for the format and the boundaries it enforces. To author one, copy a reference plugin from [`examples/plugins/`](examples/plugins/) and edit: the `PLUGIN.md` manifest names the bundle and the credentials and variables it needs; `routines/`, `skills/`, and `memory/ledgers/` stubs are the payload.
 
-To contribute to openroutines itself, clone this repo -- see [License and contributing](#license-and-contributing).
+To contribute to OpenRoutines itself, clone this repo -- see [License and contributing](#license-and-contributing).
 
 ## Deploying your agent
 
@@ -189,7 +189,7 @@ ssh-keygen -t ed25519 -f ~/.keys/my-agent_deploy_key -N "" -C "my-agent deploy k
 gh repo deploy-key add ~/.keys/my-agent_deploy_key.pub --allow-write --title "my-agent"
 ```
 
-Then build and run (the agent image builds `FROM` the openroutines base image on GHCR, which carries the supervisor and opencode; while that registry is private, `docker login ghcr.io` first):
+Then build and run (the agent image builds `FROM` the OpenRoutines base image on GHCR, which carries the supervisor and opencode; while that registry is private, `docker login ghcr.io` first):
 
 ```bash
 docker build -t my-agent .
@@ -219,7 +219,7 @@ For continuous deployment, wire the usual hooks: run `openroutines check` on eve
 
 ## Updating your agent
 
-Your agent pins the openroutines version it runs against in `.openroutines-version`. The deployed container installs exactly that release, so laptop, CI, and production always agree.
+Your agent pins the OpenRoutines version it runs against in `.openroutines-version`. The deployed container installs exactly that release, so laptop, CI, and production always agree.
 
 To update the framework:
 
@@ -247,7 +247,7 @@ Well, now you can.
 
 ## License and contributing
 
-openroutines is [MIT licensed](LICENSE). Agents you scaffold with it are yours -- the license places no claim on your routines, skills, or memory.
+OpenRoutines is [MIT licensed](LICENSE). Agents you scaffold with it are yours -- the license places no claim on your routines, skills, or memory.
 
 Contributions are welcome, with one ask: read [DESIGN.md](DESIGN.md) first. This is an opinionated framework, and the opinions are documented -- each decision comes with its reasoning. Bug fixes and small improvements can go straight to a pull request. For anything that touches a documented decision, open an issue and argue with the reasoning, not just the behavior; if the rationale doesn't hold up, we'll change the design. Security reports: see [SECURITY.md](SECURITY.md).
 

@@ -8,7 +8,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
-const usage = `openroutines -- run simple, secure, and durable autonomous AI agents
+const usage = `OpenRoutines -- run simple, secure, and durable autonomous AI agents
 
 Usage:
   openroutines scaffold <path>      create a new agent repository

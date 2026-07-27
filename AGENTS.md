@@ -1,10 +1,10 @@
 # AGENTS.md
 
-Guidance for coding agents working on the openroutines framework itself. (If you are working on a *scaffolded agent*, this is the wrong file -- see the AGENTS.md that `openroutines scaffold` placed in that repo.)
+Guidance for coding agents working on the OpenRoutines framework itself. (If you are working on a *scaffolded agent*, this is the wrong file -- see the AGENTS.md that `openroutines scaffold` placed in that repo.)
 
 ## What this is
 
-openroutines generates and runs single-purpose autonomous AI agents: one agent, one job description, one runtime, defined as a git repo and deployed as a Docker container. Routines are markdown files with frontmatter; execution goes through headless opencode; memory lives on a dedicated git branch.
+OpenRoutines generates and runs single-purpose autonomous AI agents: one agent, one job description, one runtime, defined as a git repo and deployed as a Docker container. Routines are markdown files with frontmatter; execution goes through headless opencode; memory lives on a dedicated git branch.
 
 ## Read before changing anything
 
@@ -33,13 +33,13 @@ Design-first is the workflow here: behavior gets decided in DESIGN.md before it 
 Use these terms exactly; the docs and code should agree:
 
 - **routine** (not job) -- a markdown file in `routines/`; a **task** is a memory record in `tasks.md`, never a synonym for routine
-- **ORA** -- an openroutines-generated agent
+- **ORA** -- an OpenRoutines-generated agent
 - **memory primitives** -- `events.md`, `tasks.md`, `context.md`; per-routine state is a **ledger** (`memory/ledgers/<routine>.md`); per-consumer delivery cursors live under supervisor-owned `state/`
 - **supervisor** -- the long-running process in the container; **run** -- one execution of one routine
 
 ## Conventions
 
-- The project name is **openroutines** -- one word, all lowercase, everywhere, even starting a sentence. Never "Open Routines" or "OpenRoutines".
+- The project is **OpenRoutines** in prose and `openroutines` in code, commands, URLs, paths, and other machine identifiers. Never "Open Routines". (DESIGN.md "The name".)
 - README.md uses `--` double hyphens, not em dashes; conversational but technical tone; no marketing superlatives.
 - DESIGN.md entries are `## Heading` + `**Decision.**` + `**Why.**` -- state the decision, then argue it.
 - Documentation paragraphs use one physical line per paragraph; do not add hard line breaks for column wrapping.
