@@ -143,6 +143,11 @@ func printUsageLine(label string, r usageRow, withRuns bool) {
 	if r.Tokens.Reasoning > 0 {
 		fmt.Printf(" (reasoning %s)", formatTokens(r.Tokens.Reasoning))
 	}
+	// Cache traffic usually dwarfs fresh input and is priced differently --
+	// without it a human cannot derive the spend from the counts.
+	if r.Tokens.CacheRead > 0 || r.Tokens.CacheWrite > 0 {
+		fmt.Printf("  cache-read %s  cache-write %s", formatTokens(r.Tokens.CacheRead), formatTokens(r.Tokens.CacheWrite))
+	}
 	if r.CostReported > 0 {
 		fmt.Printf("  ~$%.2f reported", r.CostReported)
 	}
