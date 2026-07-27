@@ -63,16 +63,32 @@ func cmdCheck(_ []string) int {
 		}
 	}
 
-	// Routines
+	// Skills -- checked first because plugin validation reads the agent's
+	// skill names. A duplicate global name is dropped from the list rather
+	// than returned, so the namespace errors have to be reported here or
+	// nothing downstream will ever mention them.
+	fmt.Println("skills/")
+	allSkills, skillErrs := skill.ListAgent(dir)
+	for _, e := range skillErrs {
+		failf("%v", e)
+	}
+	agentSkills := map[string]bool{}
+	for _, s := range allSkills {
+		agentSkills[s.Name] = true
+	}
+	if len(skillErrs) == 0 {
+		if len(allSkills) == 0 {
+			okf("no skills")
+		} else {
+			okf("%d skill(s), globally unique", len(allSkills))
+		}
+	}
+
+	// Plugins
 	fmt.Println("plugins/")
 	pluginEntries, pluginDirErr := os.ReadDir(filepath.Join(dir, "plugins"))
 	if pluginDirErr != nil && !os.IsNotExist(pluginDirErr) {
 		failf("%v", pluginDirErr)
-	}
-	allSkills, _ := skill.ListAgent(dir)
-	agentSkills := map[string]bool{}
-	for _, s := range allSkills {
-		agentSkills[s.Name] = true
 	}
 	pluginCount := 0
 	for _, entry := range pluginEntries {
@@ -170,7 +186,7 @@ func cmdCheck(_ []string) int {
 				continue
 			}
 			if _, err := skill.Find(dir, s); err != nil {
-				errs = append(errs, fmt.Sprintf("skill %q not found in skills/", s))
+				errs = append(errs, err.Error())
 			}
 		}
 		if !routine.NamePattern.MatchString(r.Name) {

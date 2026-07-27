@@ -71,9 +71,12 @@ func pluginAdd(args []string) int {
 	}
 	defer cleanup()
 
+	_, existingSkills, err := plugin.AgentNamespace(".")
+	if err != nil {
+		return fail(err)
+	}
 	agentSkills := map[string]bool{}
-	existing, _ := skill.ListAgent(".")
-	for _, s := range existing {
+	for _, s := range existingSkills {
 		agentSkills[s.Name] = true
 	}
 
@@ -81,7 +84,11 @@ func pluginAdd(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	if collisions := p.Collisions("."); len(collisions) > 0 {
+	collisions, err := p.Collisions(".")
+	if err != nil {
+		return fail(err)
+	}
+	if len(collisions) > 0 {
 		return fail(fmt.Errorf("already present, refusing to replace: %s -- remove them first to reinstall", strings.Join(collisions, ", ")))
 	}
 
@@ -292,8 +299,11 @@ func pluginUpdate(args []string) int {
 		fmt.Printf("Plugin %s is already current at %s.\n", name, shortRevision(oldSource.Revision))
 		return 0
 	}
+	_, existingSkills, err := plugin.AgentNamespace(".")
+	if err != nil {
+		return fail(err)
+	}
 	agentSkills := map[string]bool{}
-	existingSkills, _ := skill.ListAgent(".")
 	for _, s := range existingSkills {
 		agentSkills[s.Name] = true
 	}
@@ -304,7 +314,11 @@ func pluginUpdate(args []string) int {
 	if upstream.Manifest.Name != name {
 		return fail(fmt.Errorf("upstream plugin name changed from %q to %q", name, upstream.Manifest.Name))
 	}
-	if collisions := pluginExternalCollisions(name, upstream); len(collisions) > 0 {
+	collisions, err := pluginExternalCollisions(name, upstream)
+	if err != nil {
+		return fail(err)
+	}
+	if len(collisions) > 0 {
 		return fail(fmt.Errorf("updated plugin collides with agent content: %s", strings.Join(collisions, ", ")))
 	}
 	fmt.Printf("Update plugin %q: %s -> %s\n\n", name, shortRevision(oldSource.Revision), shortRevision(newSource.Revision))
@@ -378,8 +392,12 @@ func pluginUpdate(args []string) int {
 		if err != nil {
 			return fail(fmt.Errorf("merged plugin is invalid: %w", err))
 		}
-		if collisions := pluginExternalCollisions(name, mergedPlugin); len(collisions) > 0 {
-			return fail(fmt.Errorf("merged plugin collides with agent content: %s", strings.Join(collisions, ", ")))
+		mergedCollisions, err := pluginExternalCollisions(name, mergedPlugin)
+		if err != nil {
+			return fail(err)
+		}
+		if len(mergedCollisions) > 0 {
+			return fail(fmt.Errorf("merged plugin collides with agent content: %s", strings.Join(mergedCollisions, ", ")))
 		}
 	}
 	backup := ours + ".update-backup"
@@ -400,10 +418,13 @@ func pluginUpdate(args []string) int {
 	return 0
 }
 
-func pluginExternalCollisions(name string, candidate *plugin.Plugin) []string {
+func pluginExternalCollisions(name string, candidate *plugin.Plugin) ([]string, error) {
+	routines, skills, err := plugin.AgentNamespace(".")
+	if err != nil {
+		return nil, fmt.Errorf("agent routines and skills must be valid before updating: %w", err)
+	}
 	ownPrefix := filepath.Clean(filepath.Join("plugins", name)) + string(filepath.Separator)
 	routineNames := map[string]bool{}
-	routines, _ := routine.LoadAgent(".")
 	for _, r := range routines {
 		clean := filepath.Clean(r.Path)
 		if clean == filepath.Clean(filepath.Join("plugins", name)) || strings.HasPrefix(clean, ownPrefix) {
@@ -412,7 +433,6 @@ func pluginExternalCollisions(name string, candidate *plugin.Plugin) []string {
 		routineNames[r.Name] = true
 	}
 	skillNames := map[string]bool{}
-	skills, _ := skill.ListAgent(".")
 	for _, s := range skills {
 		clean := filepath.Clean(s.Dir)
 		if clean == filepath.Clean(filepath.Join("plugins", name)) || strings.HasPrefix(clean, ownPrefix) {
@@ -431,7 +451,7 @@ func pluginExternalCollisions(name string, candidate *plugin.Plugin) []string {
 			collisions = append(collisions, "skill "+s.Name)
 		}
 	}
-	return collisions
+	return collisions, nil
 }
 
 func pluginSubdir(root, subPath string) (string, error) {

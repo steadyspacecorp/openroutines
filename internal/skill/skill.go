@@ -128,5 +128,5 @@ func Find(root, name string) (*Skill, error) {
 			return s, nil
 		}
 	}
-	return nil, fmt.Errorf("no skill %q", name)
+	return nil, fmt.Errorf("skill %q not found in skills/ or any installed plugin", name)
 }

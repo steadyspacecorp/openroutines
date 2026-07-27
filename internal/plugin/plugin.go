@@ -291,19 +291,35 @@ func parseManifestFile(path string) (*Manifest, string, error) {
 	return &m, strings.TrimSpace(rest[end+len("\n---\n"):]), nil
 }
 
+// AgentNamespace returns the agent's global routine and skill namespaces, or
+// an error if that namespace is already invalid. Duplicate names are dropped
+// from the lists LoadAgent/ListAgent return, so a caller that ignored the
+// errors would check collisions against a namespace missing exactly the names
+// already in conflict -- and install on top of them. Fail closed instead.
+func AgentNamespace(agentDir string) ([]*routine.Routine, []*skill.Skill, error) {
+	routines, routineErrs := routine.LoadAgent(agentDir)
+	skills, skillErrs := skill.ListAgent(agentDir)
+	if errs := slices.Concat(routineErrs, skillErrs); len(errs) > 0 {
+		return nil, nil, errors.Join(errs...)
+	}
+	return routines, skills, nil
+}
+
 // Collisions reports the agent paths this plugin would overwrite. Install
 // refuses to replace anything: an existing path is the user's.
-func (p *Plugin) Collisions(agentDir string) []string {
+func (p *Plugin) Collisions(agentDir string) ([]string, error) {
 	var out []string
 	if _, err := os.Stat(filepath.Join(agentDir, "plugins", p.Manifest.Name)); err == nil {
 		out = append(out, filepath.Join("plugins", p.Manifest.Name))
 	}
-	existingRoutines, _ := routine.LoadAgent(agentDir)
+	existingRoutines, existingSkills, err := AgentNamespace(agentDir)
+	if err != nil {
+		return nil, fmt.Errorf("agent routines and skills must be valid before installing: %w", err)
+	}
 	routineNames := map[string]bool{}
 	for _, r := range existingRoutines {
 		routineNames[r.Name] = true
 	}
-	existingSkills, _ := skill.ListAgent(agentDir)
 	skillNames := map[string]bool{}
 	for _, s := range existingSkills {
 		skillNames[s.Name] = true
@@ -318,7 +334,7 @@ func (p *Plugin) Collisions(agentDir string) []string {
 			out = append(out, "skill "+s.Name)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // Summary renders the grant summary: every authority the bundle asks for,
@@ -385,6 +401,12 @@ func (p *Plugin) Summary() string {
 // creates it on first run), otherwise they are returned as pending for the
 // caller to surface. Collisions must be checked before calling.
 func (p *Plugin) Install(agentDir string, source Source) (installed, pendingStubs []string, err error) {
+	// Provenance is validated on the way out as strictly as ReadSource
+	// validates it on the way in: an installed plugin whose metadata later
+	// commands reject is worse than a refused install.
+	if err := source.Validate(); err != nil {
+		return nil, nil, err
+	}
 	destRoot := filepath.Join(agentDir, "plugins", p.Manifest.Name)
 	if err := copyTreeExclusive(p.Dir, destRoot); err != nil {
 		return nil, nil, err
@@ -455,17 +477,25 @@ func ReadSource(dir string) (Source, error) {
 	if err := dec.Decode(&source); err != nil {
 		return source, fmt.Errorf("%s: %w", SourceFileName, err)
 	}
-	if source.Repository == "" || source.Revision == "" {
-		return source, fmt.Errorf("%s needs repository and revision", SourceFileName)
+	return source, source.Validate()
+}
+
+// Validate reports whether provenance is usable: a repository, a full commit
+// hash, and a path that stays inside the source repository. Both ReadSource
+// and Install enforce it, so the recorded identity means the same thing
+// whether it was just written or read back later.
+func (s Source) Validate() error {
+	if s.Repository == "" || s.Revision == "" {
+		return fmt.Errorf("%s needs repository and revision", SourceFileName)
 	}
-	cleanPath := filepath.Clean(filepath.FromSlash(source.Path))
-	if source.Path != "" && (filepath.IsAbs(cleanPath) || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator))) {
-		return source, fmt.Errorf("%s path %q escapes the source repository", SourceFileName, source.Path)
+	cleanPath := filepath.Clean(filepath.FromSlash(s.Path))
+	if s.Path != "" && (filepath.IsAbs(cleanPath) || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator))) {
+		return fmt.Errorf("%s path %q escapes the source repository", SourceFileName, s.Path)
 	}
-	if !revisionPattern.MatchString(source.Revision) {
-		return source, fmt.Errorf("%s revision must be a full git commit hash", SourceFileName)
+	if !revisionPattern.MatchString(s.Revision) {
+		return fmt.Errorf("%s revision must be a full git commit hash", SourceFileName)
 	}
-	return source, nil
+	return nil
 }
 
 // WriteSource replaces framework-owned provenance after a clean update.

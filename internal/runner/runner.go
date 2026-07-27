@@ -667,7 +667,9 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 		}
 		found, err := skill.Find(dir, name)
 		if err != nil {
-			return fmt.Errorf("declared skill %q not found in skills/", name)
+			// Pass the real cause through: a duplicate global name reported
+			// as "not found" sends the reader to the wrong directory.
+			return fmt.Errorf("declared skill unavailable: %w", err)
 		}
 		src := found.Dir
 		dest := filepath.Join(workspace, ".opencode", "skills", name)

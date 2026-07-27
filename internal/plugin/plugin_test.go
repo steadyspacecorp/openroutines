@@ -152,6 +152,13 @@ func TestLoadRefusals(t *testing.T) {
 	}
 }
 
+// testSource is valid provenance: Install validates it as strictly as
+// ReadSource does, so the revision has to be a full commit hash.
+var testSource = Source{
+	Repository: "example.test/demo.git",
+	Revision:   "0123456789abcdef0123456789abcdef01234567",
+}
+
 func TestCollisionsAndInstall(t *testing.T) {
 	src := write(t, map[string]string{
 		"skills/demo-skill/SKILL.md": "---\nname: demo-skill\ndescription: d\n---\nHow.\n",
@@ -163,12 +170,16 @@ func TestCollisionsAndInstall(t *testing.T) {
 	}
 
 	agent := t.TempDir()
-	if got := p.Collisions(agent); len(got) != 0 {
+	got, err := p.Collisions(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
 		t.Fatalf("fresh agent should have no collisions: %v", got)
 	}
 
 	// No memory worktree yet: stubs go pending, the rest installs.
-	installed, pending, err := p.Install(agent, Source{Repository: "example.test/demo.git", Revision: "abc123"})
+	installed, pending, err := p.Install(agent, testSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +200,11 @@ func TestCollisionsAndInstall(t *testing.T) {
 	}
 
 	// Now everything collides.
-	if got := p.Collisions(agent); len(got) != 3 {
+	got, err = p.Collisions(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
 		t.Fatalf("want plugin, routine, and skill collisions after install, got %v", got)
 	}
 
@@ -197,7 +212,7 @@ func TestCollisionsAndInstall(t *testing.T) {
 	// which is live memory and never clobbered.
 	agent2 := t.TempDir()
 	os.MkdirAll(filepath.Join(agent2, "memory", "ledgers"), 0o755)
-	installed, pending, err = p.Install(agent2, Source{Repository: "example.test/demo.git", Revision: "abc123"})
+	installed, pending, err = p.Install(agent2, testSource)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("stub should install into an existing worktree: pending=%v err=%v", pending, err)
 	}
@@ -207,12 +222,70 @@ func TestCollisionsAndInstall(t *testing.T) {
 	agent3 := t.TempDir()
 	os.MkdirAll(filepath.Join(agent3, "memory", "ledgers"), 0o755)
 	os.WriteFile(filepath.Join(agent3, "memory", "ledgers", "demo.md"), []byte("live state\n"), 0o644)
-	_, pending, err = p.Install(agent3, Source{Repository: "example.test/demo.git", Revision: "abc123"})
+	_, pending, err = p.Install(agent3, testSource)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("existing ledger must go pending, not be clobbered: pending=%v err=%v", pending, err)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(agent3, "memory", "ledgers", "demo.md")); string(raw) != "live state\n" {
 		t.Fatal("live ledger was overwritten")
+	}
+}
+
+// Provenance that later commands would reject must be refused at install
+// time, before anything is copied -- otherwise plugin list, plugin update,
+// and check all fail against a plugin the user was told installed fine.
+func TestInstallRefusesInvalidProvenance(t *testing.T) {
+	p, err := Load(write(t, nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]Source{
+		"missing repository": {Revision: testSource.Revision},
+		"missing revision":   {Repository: testSource.Repository},
+		"short revision":     {Repository: testSource.Repository, Revision: "abc123"},
+		"escaping path":      {Repository: testSource.Repository, Path: "../elsewhere", Revision: testSource.Revision},
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			agent := t.TempDir()
+			if _, _, err := p.Install(agent, source); err == nil {
+				t.Fatal("want refusal")
+			}
+			if _, err := os.Stat(filepath.Join(agent, "plugins")); !os.IsNotExist(err) {
+				t.Fatalf("nothing should have been copied: %v", err)
+			}
+		})
+	}
+}
+
+// A duplicate global name is filtered out of the routine and skill lists, so
+// collision detection against an already-ambiguous agent would miss exactly
+// the name in conflict. Refuse while the namespace is invalid.
+func TestCollisionsFailClosedOnInvalidNamespace(t *testing.T) {
+	p, err := Load(write(t, nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := t.TempDir()
+	routine := "---\nschedule: \"0 9 * * *\"\n---\nDo the demo.\n"
+	for _, rel := range []string{
+		filepath.Join("routines", "demo.md"),
+		filepath.Join("plugins", "other", "routines", "demo.md"),
+	} {
+		path := filepath.Join(agent, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(routine), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := p.Collisions(agent)
+	if err == nil {
+		t.Fatalf("want refusal on a duplicated namespace, got collisions %v", got)
+	}
+	if !strings.Contains(err.Error(), "duplicate routine") {
+		t.Fatalf("error should name the duplicate: %v", err)
 	}
 }
 
@@ -234,7 +307,7 @@ func TestInstallRollsBackOnCopyFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent := t.TempDir()
-	if _, _, err := p.Install(agent, Source{Repository: "example.test/demo.git", Revision: "abc123"}); err == nil || !strings.Contains(err.Error(), "nested .git") {
+	if _, _, err := p.Install(agent, testSource); err == nil || !strings.Contains(err.Error(), "nested .git") {
 		t.Fatalf("want nested .git copy refusal, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(agent, "plugins", "demo", "routines", "demo.md")); !os.IsNotExist(err) {
