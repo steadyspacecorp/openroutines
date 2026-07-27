@@ -1,0 +1,108 @@
+# Getting started
+
+From nothing to a running agent: install the CLI, scaffold an agent, configure it, and run your first routine.
+
+## Prerequisites
+
+- **git**
+- **Docker** -- routines run locally in the same container they run in when deployed
+- **An API key for at least one model provider** (Anthropic, OpenAI, ...) -- `configure` encrypts it into the agent's credentials
+
+That's the whole list. You don't install opencode or any language runtime -- everything the agent runs on ships inside the container.
+
+## Install the CLI
+
+**While this repo is private**, brew and the install script are not live yet -- install from [Releases](https://github.com/steadyspacecorp/openroutines/releases) instead:
+
+```bash
+# pick your platform: darwin|linux, arm64|amd64
+gh release download --repo steadyspacecorp/openroutines --pattern "openroutines_*_darwin_arm64" --pattern "checksums.txt" -D /tmp/or
+(cd /tmp/or && shasum -a 256 -c --ignore-missing checksums.txt)
+chmod +x /tmp/or/openroutines_* && mv /tmp/or/openroutines_* ~/bin/openroutines   # any dir on your PATH
+openroutines --version
+```
+
+(On macOS, always install by moving the file into place as above -- overwriting a running binary in place invalidates the kernel's signature cache. The darwin binaries are ad-hoc signed; Gatekeeper does not quarantine files downloaded via `gh`.)
+
+Once public, installation becomes:
+
+```bash
+brew install openroutines
+# or
+curl -fsSL https://openroutines.dev/install.sh | sh
+```
+
+## Scaffold and configure
+
+```bash
+openroutines scaffold my-agent
+cd my-agent
+openroutines configure
+```
+
+`scaffold` creates a fresh git repository with the agent's skeleton:
+
+- `openroutines.yaml` -- the agent's identity and defaults
+- `routines/` -- a starter check-in routine, active by default (twice a day, your agent reports what it did, what it intends to do, and where it's blocked -- to the logs, until you point it somewhere better)
+- `skills/` -- empty, ready for you to add to
+- `AGENTS.md` -- so you can work on the agent with the coding agent of your choice
+- a baseline `opencode.json` permission policy, `.gitignore`, Dockerfile, and pinned framework version
+
+A `memory/` directory appears on first run -- a checkout of the agent's dedicated memory branch, kept out of `main`'s history.
+
+`configure` is idempotent -- run it whenever. It fills in `openroutines.yaml` (name, job description, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
+
+## Pick your models
+
+`configure` sets the agent's default model in `openroutines.yaml` -- any provider opencode supports works, and any routine can override the default in its own frontmatter (see [Creating routines](routines.md)).
+
+Custom model endpoints -- an AI gateway, a proxy, a self-hosted server -- are harness configuration: a `provider` block in `opencode.json`, in [opencode's provider schema](https://opencode.ai/docs/providers/), keyed by the prefix your model strings use:
+
+```json
+{
+  "provider": {
+    "my_gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://gateway.example.com/v1/compat",
+        "apiKey": "{env:MY_GATEWAY_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+A routine then selects `model: my_gateway/some-model` in its frontmatter, and the credential `my_gateway_api_key` is injected automatically as the provider key. The boundary is simple: each config file belongs to the system that interprets it. Endpoint definitions and permissions are opencode's (`opencode.json`, which `openroutines update` never rewrites); model choice, grants, and schedules are the framework's (`openroutines.yaml` and frontmatter). `openroutines check` flags a defined provider that no model string references.
+
+## Your first routine
+
+```bash
+openroutines routines new doc-drift
+```
+
+Edit the generated file -- schedule and scope in the frontmatter, prompt in the body -- then run it once locally. The local run uses the same runtime image, opencode version, constructed environment, and assembled workspace as production.
+
+Both `routines run` and `routines test` start opencode in a disposable Docker container; `test` changes its permissions and discards its writes, but uses the same containerized runtime.
+
+```bash
+openroutines routines run doc-drift
+```
+
+Day to day:
+
+```bash
+openroutines status                   # master key, models, routines and schedules, skills, memory sync state, token usage
+openroutines routines list            # also: edit, activate, deactivate, remove
+openroutines routines test <name>     # dry run: routine credentials withheld, acting tools denied, memory discarded
+openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove
+openroutines credentials set <name>   # add/replace one encrypted secret; also: list, remove
+openroutines usage                    # token use and reported cost per routine; --json for scripts
+openroutines check                    # validate config, frontmatter, and schedules; made for CI
+```
+
+## Where next
+
+- [Creating routines](routines.md) -- the frontmatter reference, schedules, triggers, and testing
+- [Extending your agent](extending.md) -- skills, plugins, credentials, and variables
+- [Your agent on the team](teamwork.md) -- how the agent reports its work and improves at its job
+- [Operating in production](operating.md) -- deploying, CI/CD, and updating

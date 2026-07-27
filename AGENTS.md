@@ -8,19 +8,19 @@ OpenRoutines generates and runs single-purpose autonomous AI agents: one agent, 
 
 ## Read before changing anything
 
-- **README.md is the spec.** It was written before the code and the code is built against it.
-- **DESIGN.md is the constitution.** ~20 decisions in Decision/Why format, including a run-lifecycle sequence diagram that doubles as the supervisor's spec. If a change contradicts a documented decision, do not make the change -- argue with the decision first (update DESIGN.md in the same PR, or stop and ask). If a change *settles* something new, record it in DESIGN.md alongside the code.
+- **README.md and the docs/ pages are the spec.** They were written before the code and the code is built against them. README.md is the big-picture overview; the task-oriented pages in `docs/` carry the detail.
+- **docs/design.md is the constitution.** ~20 decisions in Decision/Why format, including a run-lifecycle sequence diagram that doubles as the supervisor's spec. If a change contradicts a documented decision, do not make the change -- argue with the decision first (update docs/design.md in the same PR, or stop and ask). If a change *settles* something new, record it in docs/design.md alongside the code.
 
-Design-first is the workflow here: behavior gets decided in DESIGN.md before it gets implemented.
+Design-first is the workflow here: behavior gets decided in docs/design.md before it gets implemented.
 
 ## Repo layout
 
-- `template/` -- the agent skeleton that `openroutines scaffold` stamps out. Compiled into the CLI binary via Go's `embed`; this directory is the source of truth for what every new agent looks like. Keep it consistent with DESIGN.md (frontmatter defaults, check-in routine, `openroutines.yaml` shape).
+- `template/` -- the agent skeleton that `openroutines scaffold` stamps out. Compiled into the CLI binary via Go's `embed`; this directory is the source of truth for what every new agent looks like. Keep it consistent with docs/design.md (frontmatter defaults, check-in routine, `openroutines.yaml` shape).
 - `bin/` -- development scripts: `smoke` (CI's end-to-end test) and `release` (cross-compiles, publishes the GHCR base image, tags, creates the GitHub release).
 - `Dockerfile.release` -- the agent base image published to `ghcr.io/steadyspacecorp/openroutines`; keep its runtime contents in sync with `template/Dockerfile`'s runtime stage.
 - Go code: a single binary, `openroutines`, whose subcommands include the supervisor (`supervise`, the container entrypoint) plus `scaffold`, `configure`, `check`, `status`, `routines`, `skills`, `credentials`, and `update` (still stubbed).
 
-## Implementation constraints (from DESIGN.md -- the short version)
+## Implementation constraints (from docs/design.md -- the short version)
 
 - **Go, minimal dependencies.** Target roughly one dependency (a cron parser). The supervisor is the trusted component; its dependency tree is its attack surface. Stdlib first, always.
 - **The supervisor stays dumb.** Tick every minute, re-read frontmatter, run what's due -- serially, one run at a time. Enforcement lives elsewhere: skill/tool scoping in generated opencode agent definitions, filesystem scoping via Landlock, credential scoping via built-from-scratch child environments. Do not add enforcement logic to the supervisor that a lower layer can provide.
@@ -33,15 +33,15 @@ Design-first is the workflow here: behavior gets decided in DESIGN.md before it 
 Use these terms exactly; the docs and code should agree:
 
 - **routine** (not job) -- a markdown file in `routines/`; a **task** is a memory record in `tasks.md`, never a synonym for routine
-- **ORA** -- an OpenRoutines-generated agent
+- **ORA** -- an OpenRoutines agent
 - **memory primitives** -- `events.md`, `tasks.md`, `context.md`; per-routine state is a **ledger** (`memory/ledgers/<routine>.md`); per-consumer delivery cursors live under supervisor-owned `state/`
 - **supervisor** -- the long-running process in the container; **run** -- one execution of one routine
 
 ## Conventions
 
-- The project is **OpenRoutines** in prose and `openroutines` in code, commands, URLs, paths, and other machine identifiers. Never "Open Routines". (DESIGN.md "The name".)
-- README.md uses `--` double hyphens, not em dashes; conversational but technical tone; no marketing superlatives.
-- DESIGN.md entries are `## Heading` + `**Decision.**` + `**Why.**` -- state the decision, then argue it.
+- The project is **OpenRoutines** in prose and `openroutines` in code, commands, URLs, paths, and other machine identifiers. Never "Open Routines". (docs/design.md "The name".)
+- README.md and the `docs/` pages use `--` double hyphens, not em dashes; conversational but technical tone; no marketing superlatives.
+- docs/design.md entries are `## Heading` + `**Decision.**` + `**Why.**` -- state the decision, then argue it.
 - Documentation paragraphs use one physical line per paragraph; do not add hard line breaks for column wrapping.
 - Tests: minimal and behavior-focused. Prefer exercising a real flow (scaffold a temp agent, run a routine against a stub) over unit-testing internals. Don't let testing infrastructure outgrow the thing it tests.
 - Commit messages: short imperative subject; body only when the why isn't obvious.
