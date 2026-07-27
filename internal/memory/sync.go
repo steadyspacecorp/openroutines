@@ -56,7 +56,7 @@ func recordAccepted(repoDir, tip string) {
 }
 
 // Sync reconciles the local memory branch with origin, defensively
-// (DESIGN.md "Memory"): fast-forward when behind; rebase local commits when
+// (design decision "Memory"): fast-forward when behind; rebase local commits when
 // diverged (append-only files rebase cleanly); refuse rewritten remote
 // history and conflicts -- never resolve silently. The rewrite baseline is
 // the durable accepted ref, so refusal holds across repeated syncs and

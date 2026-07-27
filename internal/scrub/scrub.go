@@ -1,6 +1,6 @@
 // Package scrub redacts injected secret values from a byte stream before it
-// reaches logs. Defense in depth: exact-value matching only (see DESIGN.md
-// "Credentials" rule 3) -- the primary protection is that undeclared secrets
+// reaches logs. Defense in depth: exact-value matching only (see design
+// decision "Credentials", rule 3) -- the primary protection is that undeclared secrets
 // are never in the process at all.
 package scrub
 

@@ -1,6 +1,6 @@
 // Package plugin reads and installs plugins: copy-in bundles of routines,
 // skills, and memory-ledger stubs described by a PLUGIN.md manifest (see
-// DESIGN.md "Plugins"). Validation is all-or-nothing over the whole payload
+// design decision "Plugins"). Validation is all-or-nothing over the whole payload
 // before anything is copied, and violation is refusal, not a skipped file.
 package plugin
 

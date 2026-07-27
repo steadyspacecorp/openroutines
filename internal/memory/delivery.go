@@ -4,7 +4,7 @@ package memory
 // already leaves a commit; a consumer routine (frontmatter `consumes: memory`)
 // reads the commits since its own cursor as an injected inbox, and the cursor
 // advances only when the routine explicitly consumes the whole change set.
-// See DESIGN.md "Delivery: the memory branch is the change feed".
+// See design decision "Delivery: the memory branch is the change feed".
 
 import (
 	"encoding/json"

@@ -1,4 +1,4 @@
-// Package trigger implements event-driven routine wake-ups (TRIGGERS.md): a
+// Package trigger implements event-driven routine wake-ups: a
 // cheap, outbound change-detection poll evaluated on the supervisor's tick.
 // A trigger carries no payload -- on change the routine simply becomes due,
 // and pulls its actual work through its own skills. The response is opaque:

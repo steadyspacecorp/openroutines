@@ -1,6 +1,6 @@
 // Package memory manages the agent's memory: a git worktree of the orphan
 // `memory` branch, plus the staging pipeline that keeps model-directed
-// processes away from git entirely (see DESIGN.md "Memory syncs per run").
+// processes away from git entirely (see design decision "Memory syncs per run").
 package memory
 
 import (
@@ -325,7 +325,7 @@ func Import(repoDir, stagingDir string) error {
 
 // RestoreFile puts the worktree's copy of one memory file back into the
 // staged tree, undoing whatever the run staged there. The enforcement half
-// of `events: false` (DESIGN.md "Memory records events, tasks, and
+// of `events: false` (design decision "Memory records events, tasks, and
 // context"): the instruction tells the routine not to write the file, this
 // makes sure. Reports whether a staged change was discarded.
 func RestoreFile(repoDir, stagingDir, name string) (bool, error) {

@@ -9,7 +9,7 @@ import (
 )
 
 // The model-directed process runs in a container; the pipeline runs on the
-// host. The container boundary matches the trust boundary (DESIGN.md): the
+// host. The container boundary matches the trust boundary: the
 // supervisor side (staging, validation, git) is trusted code, while opencode
 // and everything it spawns sees only the mounted, git-free run workspace.
 

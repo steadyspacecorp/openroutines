@@ -1,5 +1,5 @@
 // Package schedule implements the durable two-phase scheduling model
-// (DESIGN.md "Scheduling"): per-routine state keyed by routine id -- a
+// (design decision "Scheduling"): per-routine state keyed by routine id -- a
 // watermark (latest cron occurrence fully accounted for) plus at most one
 // pending logical run that survives failed attempts under the same run_id.
 package schedule
