@@ -1,7 +1,7 @@
 // Package runner executes one routine attempt: the per-run pipeline shared by
 // `openroutines routines run|test` and the supervisor.
 //
-// The pipeline (DESIGN.md "Appendix: one run, end to end"): assemble a
+// The pipeline (design decision "Appendix: one run, end to end"): assemble a
 // disposable run workspace (repo files plus a staged copy of memory, no git
 // metadata anywhere), generate the opencode agent definition granting only
 // declared skills, construct a clean environment holding only declared
@@ -274,7 +274,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 			// Production: the model process runs behind the Landlock shim --
 			// our own binary applies the rules to itself, then execs opencode.
-			// See DESIGN.md "Runs are sandboxed" for the fail-closed policy.
+			// See design decision "Runs are sandboxed" for the fail-closed policy.
 			//
 			// HOME is a disposable per-attempt directory inside the workspace:
 			// a shared writable opencode home let one routine persist state --
@@ -554,7 +554,7 @@ func (s *runSecrets) release() {
 // resolveCredentials builds the routine's secret set: declared credentials
 // plus the auto-injected provider key for its model. A raw credential
 // injects verbatim under its uppercase name; a typed credential (see
-// DESIGN.md "Credentials have types") is derived by the trusted runner and
+// design decision "Credentials have types") is derived by the trusted runner and
 // injects its type's surface -- the stored root secret never enters the run.
 func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string, dryRun bool) (*runSecrets, error) {
 	provider := strings.SplitN(model, "/", 2)[0]

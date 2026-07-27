@@ -23,11 +23,11 @@ import (
 var NamePattern = regexp.MustCompile(`^[a-z0-9]+([_-][a-z0-9]+)*$`)
 
 // Frontmatter is a routine's declared scope. Every field is optional except
-// that at least one of Schedule and Trigger must be set; see DESIGN.md
-// "Routines are markdown files" and TRIGGERS.md for defaults.
+// that at least one of Schedule and Trigger must be set; see design
+// decisions "Routines are markdown files" and "Triggers" for defaults.
 type Frontmatter struct {
 	Schedule    string        `yaml:"schedule"`
-	Trigger     *trigger.Spec `yaml:"trigger,omitempty"` // outbound change-detection wake-up (TRIGGERS.md)
+	Trigger     *trigger.Spec `yaml:"trigger,omitempty"` // outbound change-detection wake-up
 	Timeout     string        `yaml:"timeout,omitempty"`
 	Active      *bool         `yaml:"active,omitempty"`
 	Skills      []string      `yaml:"skills"`

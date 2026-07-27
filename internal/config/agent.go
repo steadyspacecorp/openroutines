@@ -56,7 +56,7 @@ type Defaults struct {
 	Timeout string `yaml:"timeout"`
 }
 
-// Memory holds memory-behavior settings; see DESIGN.md "Memory has three
+// Memory holds memory-behavior settings; see design decision "Memory has three
 // shared primitives" for the retention window semantics.
 type Memory struct {
 	Retention string `yaml:"retention,omitempty"`
@@ -66,7 +66,7 @@ type Memory struct {
 // Variables are non-secret configuration values, injected into every run's
 // environment (product_repo -> PRODUCT_REPO); secrets belong in credentials.
 // Credentials is optional per-credential metadata: an entry gives a stored
-// credential a derived type (see DESIGN.md "Credentials have types"); a
+// credential a derived type (see design decision "Credentials have types"); a
 // credential without an entry is raw, injected verbatim.
 type Agent struct {
 	Name        string                `yaml:"name"`

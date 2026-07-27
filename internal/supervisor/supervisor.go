@@ -2,7 +2,7 @@
 //
 // Every tick it re-reads routine frontmatter, reconciles memory with origin,
 // and dispatches due routines serially through the shared run pipeline --
-// implementing the durable two-phase model from DESIGN.md: a logical run
+// implementing the durable two-phase run model: a logical run
 // exists durably (committed, pushed) before it is allowed to act; failed
 // attempts retry under the same run id with backoff; abandonment after a
 // bounded number of attempts records a human-owned task and advances the watermark.
@@ -341,7 +341,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time) {
 	// The per-routine kernel lock covers the whole attempt, snapshot through
 	// settlement. Held means a manual `routines run` is mid-flight in this
-	// checkout: skip and log, per DESIGN.md "Overlap" -- the pending run
+	// checkout: skip and log, per design decision "Overlap" -- the pending run
 	// retries on a later tick.
 	release, lockErr := runner.LockRoutine(s.Dir, r.Name)
 	if lockErr != nil {

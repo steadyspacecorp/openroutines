@@ -37,7 +37,7 @@ func cmdPlugin(args []string) int {
 // pluginAdd installs a plugin: clone (or read a local directory), validate
 // the whole payload, show the manifest and the grant summary, confirm, copy.
 // Everything the bundle asks for is stated before anything lands -- review
-// is the only gate (DESIGN.md "Plugins").
+// is the only gate (design decision "Plugins").
 func pluginAdd(args []string) int {
 	var source, subPath string
 	yes := false

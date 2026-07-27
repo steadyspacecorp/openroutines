@@ -9,7 +9,7 @@ import (
 )
 
 // Spec declares how a stored credential is materialized into a run (see
-// DESIGN.md "Credentials have types"). A credential with no Spec is raw --
+// design decision "Credentials have types"). A credential with no Spec is raw --
 // injected verbatim under its uppercase name. A typed credential is
 // transformed by the trusted runner at spawn: the routine receives the
 // derived surface, never the stored root secret.

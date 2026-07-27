@@ -1,16 +1,16 @@
 # Design
 
-The decisions behind OpenRoutines, and why we made them. The [README](README.md) says what the framework does; this document says why it works the way it does.
+The decisions behind OpenRoutines, and why we made them. The [README](../README.md) says what the framework does; this document says why it works the way it does.
 
 ## One agent, one job description, one runtime
 
-**Decision.** An OpenRoutines-generated agent (ORA) is a single agent with a single mandate, defined in `openroutines.yaml`. There is no fleet management, no orchestration graph, no agent-to-agent protocol.
+**Decision.** An OpenRoutines agent (ORA) is a single agent with a single mandate, defined in `openroutines.yaml`. There is no fleet management, no orchestration graph, no agent-to-agent protocol.
 
 **Why.** Most of the complexity -- and most of the failure modes -- in agent frameworks comes from coordination between agents. A single agent with a clear job description is easy to reason about, easy to secure, and easy to hold accountable: "what did it do?" is one log and one memory. If you need two jobs done, deploy two agents. It also makes the security model tractable: exactly one runtime means exactly one writer to memory, one credential set, one blast radius.
 
 ## The repository is the agent
 
-**Decision.** Everything the agent is -- configuration, routines, skills, structured memory, encrypted credentials -- lives in one git repository. `openroutines scaffold` stamps out a new agent repo from the template embedded in the CLI binary (`template/` in this repo is its source, compiled in via Go's `embed`). The reviewed repository is trusted source code: whoever can change its routines, skills, configuration, or image can change the agent's behavior and authority. The security boundary isolates model-directed execution and external content from supervisor authority; it does not isolate an agent from its own source code or administrators. [SECURITY.md](SECURITY.md) defines that threat model precisely.
+**Decision.** Everything the agent is -- configuration, routines, skills, structured memory, encrypted credentials -- lives in one git repository. `openroutines scaffold` stamps out a new agent repo from the template embedded in the CLI binary (`template/` in this repo is its source, compiled in via Go's `embed`). The reviewed repository is trusted source code: whoever can change its routines, skills, configuration, or image can change the agent's behavior and authority. The security boundary isolates model-directed execution and external content from supervisor authority; it does not isolate an agent from its own source code or administrators. [SECURITY.md](../SECURITY.md) defines that threat model precisely.
 
 The framework's configuration file is `openroutines.yaml`, named for the system that reads it -- the same rule that keeps `opencode.json` the harness's file. `agent.yaml` was the original name and is still read, so a pinned agent migrates when its operator chooses; `check` nudges the rename, and `Save` writes back to whichever name the repository actually has.
 

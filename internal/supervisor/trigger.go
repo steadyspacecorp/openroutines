@@ -12,7 +12,7 @@ import (
 )
 
 // evaluateTrigger performs one change-detection poll for a routine with no
-// cron firing due (TRIGGERS.md). It reports whether the routine should fire
+// cron firing due. It reports whether the routine should fire
 // and whether durable trigger state changed (the caller folds that into the
 // intent commit -- the newly observed value is persisted before the run acts).
 //

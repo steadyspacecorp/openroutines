@@ -18,7 +18,7 @@ import (
 // in an agent repo -- routines, skills, memory, openroutines.yaml, credentials --
 // belongs to the agent and is never touched. opencode.json stays off this
 // list deliberately: it is the user's harness config (the permission policy
-// and provider endpoint definitions; DESIGN.md "One binary"), and an update
+// and provider endpoint definitions; design decision "One binary"), and an update
 // that rewrote it would clobber both -- bin/smoke asserts it survives an
 // update byte for byte.
 var frameworkOwned = []string{

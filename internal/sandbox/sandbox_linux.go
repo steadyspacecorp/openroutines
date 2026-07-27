@@ -1,7 +1,7 @@
 //go:build linux
 
 // Package sandbox applies the Landlock filesystem confinement to the model
-// process (DESIGN.md "Runs are sandboxed"). Rules bind to the calling
+// process (design decision "Runs are sandboxed"). Rules bind to the calling
 // process and its children, so the runner re-execs through
 // `openroutines sandbox-exec`, which applies the rules to itself and then
 // execs opencode.
