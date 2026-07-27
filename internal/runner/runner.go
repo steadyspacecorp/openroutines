@@ -265,6 +265,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	// production image or when a contributor opts out.
 	var cmd *exec.Cmd
 	containerName := ""
+	var ocExec opencodeExec // how capture reaches opencode after the run; nil in native dev mode
 	if nativeMode() {
 		if _, err := exec.LookPath("opencode"); err != nil {
 			return nil, nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
@@ -283,7 +284,8 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 			if err != nil {
 				return nil, nil, err
 			}
-			attemptHome := filepath.Join(workspace, ".home")
+			attemptHome := filepath.Join(workspace, attemptHomeName)
+			ocExec = hostOpencodeExec(workspace)
 			ro, rw := sandbox.Paths(workspace, runTmp, home, attemptHome)
 			cmd = exec.Command(self, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
 			cmd.Env = append(env,
@@ -332,6 +334,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 			_ = os.Chmod(p, 0o777)
 		}
 		containerName = "openroutines-" + meta.RunID
+		ocExec = containerOpencodeExec(workspace, image)
 		cmd = containerCmd(containerName, workspace, image, env, ocArgs)
 	}
 	tail := &tailBuffer{max: 4096}
@@ -375,7 +378,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	scrubber.Flush()
 	res.Model = model
 	res.Effort = r.FM.Effort
-	res.Usage = captureUsage(workspace)
+	res.Usage = captureUsage(workspace, ocExec)
 	if res.Outcome == Crashed && authFailurePattern.Match(tail.buf) {
 		provider := strings.SplitN(model, "/", 2)[0]
 		res.Hint = fmt.Sprintf("provider authentication failed -- the %s key looks missing or invalid (openroutines credentials set %s)", provider, creds.ProviderKeyName(provider))
