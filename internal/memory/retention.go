@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// DefaultRetention is the memory working-set window when agent.yaml doesn't
+// DefaultRetention is the memory working-set window when openroutines.yaml doesn't
 // set memory.retention. Git history is the unlimited archive; the working
 // files are the window a routine actually loads into context.
 const DefaultRetention = 30 * 24 * time.Hour

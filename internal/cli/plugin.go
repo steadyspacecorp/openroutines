@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/plugin"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
@@ -53,7 +54,7 @@ func pluginAdd(args []string) int {
 	}
 	source = rest[0]
 
-	if _, err := os.Stat("agent.yaml"); err != nil {
+	if _, err := os.Stat(config.Path(".")); err != nil {
 		return fail(fmt.Errorf("run plugin add from inside an agent repository"))
 	}
 
@@ -144,12 +145,12 @@ func pluginAdd(args []string) int {
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.Credentials)) {
 		c := p.Manifest.Credentials[name]
 		if c.Type != "" {
-			stepf("add to agent.yaml:  credentials: { %s: { type: %s, ... } }  (see the type's required fields)", name, c.Type)
+			stepf("add to openroutines.yaml:  credentials: { %s: { type: %s, ... } }  (see the type's required fields)", name, c.Type)
 		}
 		stepf("openroutines credentials set %s  # %s", name, firstLine(c.Description))
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.Variables)) {
-		stepf("set the %s variable in agent.yaml  # %s", name, firstLine(p.Manifest.Variables[name].Description))
+		stepf("set the %s variable in openroutines.yaml  # %s", name, firstLine(p.Manifest.Variables[name].Description))
 	}
 	for _, s := range pendingStubs {
 		stepf("seed %s after the memory worktree exists (first run creates it)", s)

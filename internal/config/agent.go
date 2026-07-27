@@ -1,4 +1,4 @@
-// Package config loads and validates agent.yaml -- the agent's identity:
+// Package config loads and validates openroutines.yaml -- the agent's identity:
 // name, job description, owner, timezone, and routine defaults.
 package config
 
@@ -20,7 +20,29 @@ import (
 )
 
 // FileName is the agent configuration file at the repository root.
-const FileName = "agent.yaml"
+// FileName is the framework's configuration file -- named for the system
+// that reads it, as opencode.json is named for the harness.
+const FileName = "openroutines.yaml"
+
+// LegacyFileName is the pre-rename configuration file. Still read, and
+// Save writes back to whichever file the agent actually has, so pinned
+// agents migrate on their own schedule; check nudges the rename.
+const LegacyFileName = "agent.yaml"
+
+// Path returns the configuration file dir actually has: FileName when
+// present, LegacyFileName when only it exists, FileName otherwise (the
+// name a fresh write should create).
+func Path(dir string) string {
+	preferred := filepath.Join(dir, FileName)
+	if _, err := os.Stat(preferred); err == nil {
+		return preferred
+	}
+	legacy := filepath.Join(dir, LegacyFileName)
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy
+	}
+	return preferred
+}
 
 // Owner identifies the human accountable for the agent.
 type Owner struct {
@@ -40,7 +62,7 @@ type Memory struct {
 	Retention string `yaml:"retention,omitempty"`
 }
 
-// Agent is the parsed agent.yaml. Description is the agent's job description.
+// Agent is the parsed configuration file. Description is the agent's job description.
 // Variables are non-secret configuration values, injected into every run's
 // environment (product_repo -> PRODUCT_REPO); secrets belong in credentials.
 // Credentials is optional per-credential metadata: an entry gives a stored
@@ -65,10 +87,12 @@ func (a *Agent) Retention() string {
 	return a.Memory.Retention
 }
 
-// Load reads agent.yaml from dir. Decoding is strict: a misspelled key is
-// an error, not silently ignored configuration.
+// Load reads the configuration file from dir (FileName, or LegacyFileName
+// as fallback). Decoding is strict: a misspelled key is an error, not
+// silently ignored configuration.
 func Load(dir string) (*Agent, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, FileName))
+	path := Path(dir)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -76,18 +100,19 @@ func Load(dir string) (*Agent, error) {
 	dec.KnownFields(true)
 	var a Agent
 	if err := dec.Decode(&a); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("%s: %w", FileName, err)
+		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
 	}
 	return &a, nil
 }
 
-// Save writes agent.yaml to dir.
+// Save writes the configuration back to the file dir actually has -- a
+// legacy-named agent keeps its name until its operator renames it.
 func (a *Agent) Save(dir string) error {
 	out, err := yaml.Marshal(a)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, FileName), out, 0o644)
+	return os.WriteFile(Path(dir), out, 0o644)
 }
 
 // isPlaceholder reports whether a value is still a {{SCAFFOLD}} placeholder.

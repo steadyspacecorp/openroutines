@@ -106,7 +106,7 @@ openroutines configure
 
 `scaffold` creates a fresh git repository with the agent's skeleton:
 
-- `agent.yaml` -- the agent's identity and defaults
+- `openroutines.yaml` -- the agent's identity and defaults
 - `routines/` -- a starter check-in routine, active by default (twice a day, your agent reports what it did, what it intends to do, and where it's blocked -- to the logs, until you point it somewhere better)
 - `skills/` -- empty, ready for you to add to
 - `AGENTS.md` -- so you can work on the agent with the coding agent of your choice
@@ -114,7 +114,7 @@ openroutines configure
 
 A `memory/` directory appears on first run -- a checkout of the agent's dedicated memory branch, kept out of `main`'s history.
 
-`configure` is idempotent -- run it whenever. It fills in `agent.yaml` (name, job description, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
+`configure` is idempotent -- run it whenever. It fills in `openroutines.yaml` (name, job description, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
 
 Give the agent its first routine:
 
@@ -142,9 +142,9 @@ openroutines usage                    # token use and reported cost per routine;
 openroutines check                    # validate config, frontmatter, and schedules; made for CI
 ```
 
-Non-secret configuration -- a repo name, a docs URL -- goes in a `variables:` map in `agent.yaml`, and every run receives each one as an environment variable (`product_repo` becomes `$PRODUCT_REPO`). Secrets go in encrypted credentials instead; inside a routine the interface is the same either way, so the only question a value raises is whether it's secret.
+Non-secret configuration -- a repo name, a docs URL -- goes in a `variables:` map in `openroutines.yaml`, and every run receives each one as an environment variable (`product_repo` becomes `$PRODUCT_REPO`). Secrets go in encrypted credentials instead; inside a routine the interface is the same either way, so the only question a value raises is whether it's secret.
 
-A credential can also carry a *type*. A `credentials:` entry in `agent.yaml` tells the runner how to materialize the stored value -- `type: github_app` turns a stored App private key into a short-lived installation token minted fresh for each run, injected as `GITHUB_TOKEN` alongside the App's Git identity, and revoked when the run ends. `type: oauth2_client` does the same for the OAuth2 client-credentials flow most SaaS APIs use for server-to-server access (Help Scout, Stripe, Slack app-level): the runner posts the stored client secret to the entry's `token_url` and injects only the resulting bearer under the entry's `inject_as` name -- same name→env mapping as everywhere else, so `support_desk_token` becomes `$SUPPORT_DESK_TOKEN`. Either way the routine declares the credential exactly as before; it just never sees the root secret. Credentials without an entry inject verbatim, as always.
+A credential can also carry a *type*. A `credentials:` entry in `openroutines.yaml` tells the runner how to materialize the stored value -- `type: github_app` turns a stored App private key into a short-lived installation token minted fresh for each run, injected as `GITHUB_TOKEN` alongside the App's Git identity, and revoked when the run ends. `type: oauth2_client` does the same for the OAuth2 client-credentials flow most SaaS APIs use for server-to-server access (Help Scout, Stripe, Slack app-level): the runner posts the stored client secret to the entry's `token_url` and injects only the resulting bearer under the entry's `inject_as` name -- same name→env mapping as everywhere else, so `support_desk_token` becomes `$SUPPORT_DESK_TOKEN`. Either way the routine declares the credential exactly as before; it just never sees the root secret. Credentials without an entry inject verbatim, as always.
 
 Custom model endpoints -- an AI gateway, a proxy, a self-hosted server -- are harness configuration: a `provider` block in `opencode.json`, in [opencode's provider schema](https://opencode.ai/docs/providers/), keyed by the prefix your model strings use:
 
@@ -162,7 +162,7 @@ Custom model endpoints -- an AI gateway, a proxy, a self-hosted server -- are ha
 }
 ```
 
-A routine then selects `model: my_gateway/some-model` in its frontmatter, and the credential `my_gateway_api_key` is injected automatically as the provider key. The boundary is simple: each config file belongs to the system that interprets it. Endpoint definitions and permissions are opencode's (`opencode.json`, which `openroutines update` never rewrites); model choice, grants, and schedules are the framework's (`agent.yaml` and frontmatter). `openroutines check` flags a defined provider that no model string references.
+A routine then selects `model: my_gateway/some-model` in its frontmatter, and the credential `my_gateway_api_key` is injected automatically as the provider key. The boundary is simple: each config file belongs to the system that interprets it. Endpoint definitions and permissions are opencode's (`opencode.json`, which `openroutines update` never rewrites); model choice, grants, and schedules are the framework's (`openroutines.yaml` and frontmatter). `openroutines check` flags a defined provider that no model string references.
 
 Skills follow the open [Agent Skills](https://agentskills.io/) standard, so any skill written for Claude Code, Cursor, opencode, or the rest of the ecosystem works in your agent's `skills/` directory unchanged. A routine only gets the skills its frontmatter declares. And treat a skill like the dependency it is: instructions -- sometimes code -- that your agent will follow unattended. Review what you vendor in.
 

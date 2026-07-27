@@ -39,7 +39,7 @@ func TestVariableNameValidation(t *testing.T) {
 	}
 }
 
-// agent.yaml decodes strictly: a misspelled key is an error, not silently
+// openroutines.yaml decodes strictly: a misspelled key is an error, not silently
 // ignored configuration.
 func TestLoadRejectsUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
@@ -49,7 +49,7 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
-// Credential metadata entries are validated like the rest of agent.yaml:
+// Credential metadata entries are validated like the rest of openroutines.yaml:
 // a typed entry needs a known type and its type's configuration.
 func TestCredentialEntryValidation(t *testing.T) {
 	base := Agent{

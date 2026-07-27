@@ -94,7 +94,7 @@ grep -q '^active: false$' routines/steady-check-in.md || die "installed plugin r
 [[ -e memory/ledgers/doc-watch.md ]] && die "ledger stub installed with no memory worktree"
 grep -q 'seed memory/ledgers/doc-watch.md' "$work/out" || die "pending stub not surfaced as a next step"
 grep -q 'credentials set github_app_private_key' "$work/out" || die "credential next-step missing"
-grep -q 'type: github_app' "$work/out" || die "typed-credential agent.yaml step missing"
+grep -q 'type: github_app' "$work/out" || die "typed-credential openroutines.yaml step missing"
 if run plugin add "$repo/examples/plugins/steady" --yes; then
   die "reinstalling over existing files should be refused"
 fi
@@ -107,7 +107,7 @@ printf 'fake\n' | run credentials set steady_token || die "credentials set stead
 printf 'fake\n' | run credentials set slack_webhook_url || die "credentials set slack_webhook_url"
 printf 'fake\n' | run credentials set github_app_private_key || die "credentials set github_app_private_key"
 printf 'fake\n' | run credentials set support_desk_secret || die "credentials set support_desk_secret"
-cat >> agent.yaml <<'EOF'
+cat >> openroutines.yaml <<'EOF'
 credentials:
   github_app_private_key:
     type: github_app
@@ -122,6 +122,18 @@ variables:
 EOF
 run check || die "check after plugin installs"
 step "check passes with the installed plugins wired up"
+
+# The legacy configuration name still loads: deployed agents run pinned
+# binaries and rename on their own schedule, so both names must work.
+mv openroutines.yaml agent.yaml
+run check || die "check with the legacy agent.yaml name"
+grep -q 'legacy configuration name' "$work/out" || die "check did not nudge the rename"
+mv agent.yaml openroutines.yaml
+run check || die "check after renaming back"
+if grep -q 'legacy configuration name' "$work/out"; then
+  die "check nudged the rename on an already-renamed agent"
+fi
+step "both configuration names load; check nudges the rename"
 
 # update: brings an agent to the running binary's version, rewriting
 # framework-owned files (non-interactive stdin applies automatically).

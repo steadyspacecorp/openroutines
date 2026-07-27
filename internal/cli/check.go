@@ -26,7 +26,7 @@ import (
 // define the real vocabulary; this just catches obvious mistakes.
 var effortPattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
-// cmdCheck validates the agent repository: agent.yaml, every routine's
+// cmdCheck validates the agent repository: openroutines.yaml, every routine's
 // frontmatter, skill references, credential names, and deploy prerequisites.
 // Exit code 1 on any failure -- made for CI.
 func cmdCheck(_ []string) int {
@@ -45,8 +45,8 @@ func cmdCheck(_ []string) int {
 		fmt.Printf("  ✓ %s\n", fmt.Sprintf(format, a...))
 	}
 
-	// agent.yaml
-	fmt.Println("agent.yaml")
+	configName := filepath.Base(config.Path(dir))
+	fmt.Println(configName)
 	agent, err := config.Load(dir)
 	if err != nil {
 		failf("%v", err)
@@ -56,6 +56,10 @@ func cmdCheck(_ []string) int {
 		}
 	} else {
 		okf("valid (%s, %s)", agent.Name, agent.Timezone)
+		if configName == config.LegacyFileName {
+			warnf("%s is the legacy configuration name -- rename it to %s (git mv %s %s); both are read, and the rename is a one-line diff",
+				config.LegacyFileName, config.FileName, config.LegacyFileName, config.FileName)
+		}
 	}
 
 	// Routines
@@ -175,7 +179,7 @@ func cmdCheck(_ []string) int {
 			}
 			model, merr := runner.EffectiveModel(agent, r)
 			if merr != nil {
-				continue // already reported against agent.yaml/frontmatter
+				continue // already reported against openroutines.yaml/frontmatter
 			}
 			keyName := creds.ProviderKeyName(strings.SplitN(model, "/", 2)[0])
 			providerNeeds[keyName] = append(providerNeeds[keyName], r.Name)
@@ -250,7 +254,7 @@ func cmdCheck(_ []string) int {
 		if json.Unmarshal(raw, &cfg) == nil {
 			for _, key := range slices.Sorted(maps.Keys(cfg)) {
 				if key != "$schema" && key != "permission" && key != "provider" {
-					warnf("opencode.json contains %q -- model choice belongs in agent.yaml and frontmatter, not here", key)
+					warnf("opencode.json contains %q -- model choice belongs in openroutines.yaml and frontmatter, not here", key)
 				}
 			}
 			if providers, ok := cfg["provider"].(map[string]any); ok {
@@ -265,7 +269,7 @@ func cmdCheck(_ []string) int {
 				}
 				for _, id := range slices.Sorted(maps.Keys(providers)) {
 					if !prefixes[id] {
-						warnf("provider %q in opencode.json is not referenced by any model in agent.yaml defaults or routine frontmatter", id)
+						warnf("provider %q in opencode.json is not referenced by any model in openroutines.yaml defaults or routine frontmatter", id)
 					}
 				}
 			}

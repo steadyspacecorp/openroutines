@@ -29,7 +29,7 @@ const FileName = "PLUGIN.md"
 
 // Credential is one required credential: a description for the person who
 // will fill it in, and for typed credentials the derived type to declare in
-// agent.yaml. Never a value -- secrets are not part of a plugin.
+// openroutines.yaml. Never a value -- secrets are not part of a plugin.
 type Credential struct {
 	Description string `yaml:"description"`
 	Type        string `yaml:"type,omitempty"`
@@ -69,7 +69,8 @@ var benignRoot = map[string]bool{
 // naming them gets a sharper refusal than the generic allow-list one.
 var forbidden = map[string]string{
 	"opencode.json":         "opencode.json is the agent's harness config -- a plugin granting itself permissions or endpoints is exactly what the allow-list exists to stop",
-	"agent.yaml":            "agent.yaml belongs to the agent; credential metadata and variables are declared in PLUGIN.md and printed as next steps",
+	"openroutines.yaml":     "openroutines.yaml belongs to the agent; credential metadata and variables are declared in PLUGIN.md and printed as next steps",
+	"agent.yaml":            "agent.yaml (the legacy config name) belongs to the agent; declare needs in PLUGIN.md",
 	"Dockerfile":            "the Dockerfile is framework-owned",
 	".openroutines-version": "the version pin is framework-owned",
 	"master.key":            "a plugin must never carry key material",
@@ -341,7 +342,7 @@ func (p *Plugin) Summary() string {
 		c := p.Manifest.Credentials[name]
 		w("Credential to fill in: %s -- %s", name, c.Description)
 		if c.Type != "" {
-			w(" (typed: %s -- needs an agent.yaml credentials entry)", c.Type)
+			w(" (typed: %s -- needs an openroutines.yaml credentials entry)", c.Type)
 		}
 		w("\n")
 	}

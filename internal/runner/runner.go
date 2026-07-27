@@ -149,7 +149,7 @@ func EffectiveModel(agent *config.Agent, r *routine.Routine) (string, error) {
 		model = agent.Defaults.Model
 	}
 	if model == "" || strings.Contains(model, "{{") {
-		return "", fmt.Errorf("no model: set model in frontmatter or defaults.model in agent.yaml (openroutines configure)")
+		return "", fmt.Errorf("no model: set model in frontmatter or defaults.model in openroutines.yaml (openroutines configure)")
 	}
 	return model, nil
 }
@@ -244,7 +244,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	for _, k := range slices.Sorted(maps.Keys(secrets.env)) {
 		env = append(env, k+"="+secrets.env[k])
 	}
-	// Non-secret variables from agent.yaml, injected into every run (dry runs
+	// Non-secret variables from openroutines.yaml, injected into every run (dry runs
 	// included). On a name collision the credential wins; check flags it.
 	for _, k := range slices.Sorted(maps.Keys(agent.Variables)) {
 		if _, taken := secrets.env[strings.ToUpper(k)]; taken {
@@ -616,7 +616,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 }
 
 // buildWorkspace assembles the run workspace by allow-list: exactly what a
-// run needs -- agent.yaml, opencode.json, and routines/. Everything else a
+// run needs -- the configuration file, opencode.json, and routines/. Everything else a
 // run sees is staged deliberately by the pipeline: declared skills, the
 // memory snapshot, the delivery inbox, the generated definition. A file not
 // on the list -- the encrypted credential store, a stray key, dev rules like
@@ -624,7 +624,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 // missed exactly one entry, credentials.yml.enc; allow-lists don't have
 // that failure mode.)
 func buildWorkspace(dir, workspace string) error {
-	for _, name := range []string{config.FileName, "opencode.json"} {
+	for _, name := range []string{filepath.Base(config.Path(dir)), "opencode.json"} {
 		raw, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			if os.IsNotExist(err) {

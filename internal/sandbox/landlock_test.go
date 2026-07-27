@@ -48,7 +48,7 @@ func TestLandlockConfinement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	seeded := filepath.Join(workspace, "agent.yaml")
+	seeded := filepath.Join(workspace, "openroutines.yaml")
 	if err := os.WriteFile(seeded, []byte("name: t\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
