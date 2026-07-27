@@ -138,6 +138,7 @@ openroutines routines list            # also: edit, activate, deactivate, remove
 openroutines routines test <name>     # dry run: routine credentials withheld, acting tools denied, memory discarded
 openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove
 openroutines credentials set <name>   # add/replace one encrypted secret; also: list, remove
+openroutines usage                    # token use and reported cost per routine; --json for scripts
 openroutines check                    # validate config, frontmatter, and schedules; made for CI
 ```
 

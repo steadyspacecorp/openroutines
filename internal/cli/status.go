@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -137,96 +136,20 @@ func cmdStatus(_ []string) int {
 	return 0
 }
 
-// printTokenUsage aggregates per-routine token consumption from the run
-// records the retention window keeps. Silent when no record carries usage
-// (older releases, native dev runs) -- absence of bookkeeping is not news.
+// printTokenUsage shows the one-line total; the numbers live in
+// `openroutines usage`. Silent when no record carries usage (older
+// releases, native dev runs) -- absence of bookkeeping is not news.
 func printTokenUsage(dir string) {
-	raw, err := os.ReadFile(filepath.Join(memory.WorktreePath(dir), "runs.jsonl"))
-	if err != nil {
-		return
-	}
-	type row struct {
-		runs               int
-		in, out, reasoning int64
-		cost               float64
-		model              string
-	}
-	rows := map[string]*row{}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var rec struct {
-			Routine string  `json:"routine"`
-			Model   string  `json:"model"`
-			Effort  string  `json:"effort"`
-			Cost    float64 `json:"cost_reported"`
-			Tokens  *struct {
-				Input     int64 `json:"input"`
-				Output    int64 `json:"output"`
-				Reasoning int64 `json:"reasoning"`
-			} `json:"tokens"`
-		}
-		if json.Unmarshal([]byte(line), &rec) != nil || rec.Tokens == nil {
-			continue
-		}
-		r := rows[rec.Routine]
-		if r == nil {
-			r = &row{}
-			rows[rec.Routine] = r
-		}
-		r.runs++
-		r.in += rec.Tokens.Input
-		r.out += rec.Tokens.Output
-		r.reasoning += rec.Tokens.Reasoning
-		r.cost += rec.Cost
-		if rec.Model != "" {
-			r.model = rec.Model
-			if rec.Effort != "" {
-				r.model += " @" + rec.Effort
-			}
-		}
-	}
+	rows := aggregateUsage(dir)
 	if len(rows) == 0 {
 		return
 	}
-	fmt.Printf("\ntoken usage (retention window):\n")
-	var tin, tout int64
-	var tcost float64
-	for _, name := range slices.Sorted(maps.Keys(rows)) {
-		r := rows[name]
-		fmt.Printf("  %-20s %3d run(s)  in %s  out %s", name, r.runs, formatTokens(r.in), formatTokens(r.out))
-		if r.reasoning > 0 {
-			fmt.Printf(" (reasoning %s)", formatTokens(r.reasoning))
-		}
-		if r.cost > 0 {
-			fmt.Printf("  ~$%.2f reported", r.cost)
-		}
-		if r.model != "" {
-			fmt.Printf("  %s", r.model)
-		}
-		fmt.Println()
-		tin += r.in
-		tout += r.out
-		tcost += r.cost
+	t := totalUsage(rows)
+	fmt.Printf("\ntoken usage (retention window): in %s  out %s", formatTokens(t.Tokens.Input), formatTokens(t.Tokens.Output))
+	if t.CostReported > 0 {
+		fmt.Printf("  ~$%.2f reported", t.CostReported)
 	}
-	fmt.Printf("  %-20s          in %s  out %s", "total", formatTokens(tin), formatTokens(tout))
-	if tcost > 0 {
-		fmt.Printf("  ~$%.2f reported", tcost)
-	}
-	fmt.Println()
-}
-
-// formatTokens keeps counts scannable: 812, 13.8k, 2.1M.
-func formatTokens(n int64) string {
-	switch {
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(n)/1_000)
-	default:
-		return fmt.Sprintf("%d", n)
-	}
+	fmt.Printf(" -- openroutines usage for the breakdown\n")
 }
 
 func orUnset(s string) string {

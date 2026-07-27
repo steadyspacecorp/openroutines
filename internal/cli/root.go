@@ -15,6 +15,7 @@ Usage:
   openroutines configure            fill in agent.yaml, generate the master key
   openroutines check                validate the agent; made for CI
   openroutines status               show what the agent has and still needs
+  openroutines usage                token use and reported cost per routine (--json)
   openroutines routines <command>   new, list, run, test, edit, activate, deactivate, remove
   openroutines skills <command>     new, list, remove
   openroutines plugin add <source>  install an inactive plugin bundle (--yes for non-interactive use)
@@ -46,6 +47,8 @@ func Run(args []string) int {
 		return cmdSupervise(rest)
 	case "status":
 		return cmdStatus(rest)
+	case "usage":
+		return cmdUsage(rest)
 	case "skills", "skill":
 		return cmdSkills(rest)
 	case "plugin", "plugins":
