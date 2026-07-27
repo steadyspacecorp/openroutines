@@ -18,7 +18,7 @@ Usage:
   openroutines usage                token use and reported cost per routine (--json)
   openroutines routines <command>   new, list, run, test, edit, activate, deactivate, remove
   openroutines skills <command>     new, list, remove
-  openroutines plugin add <source>  install an inactive plugin bundle (--yes for non-interactive use)
+  openroutines plugin <command>     add, list, update grouped plugin bundles
   openroutines credentials <cmd>    set, list, remove
   openroutines supervise            run the scheduler (container entrypoint)
   openroutines update               bump the pinned framework version

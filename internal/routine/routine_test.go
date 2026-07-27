@@ -109,3 +109,33 @@ func TestParseRejectsUnknownFrontmatterKeys(t *testing.T) {
 		t.Fatalf("expected unknown-field error naming the typo, got %v", err)
 	}
 }
+
+func TestLoadAgentIncludesPluginsAndDropsDuplicateIdentities(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nschedule: \"0 9 * * *\"\n---\nwork\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("routines/owned.md")
+	write("plugins/demo/routines/plugin-owned.md")
+	routines, errs := LoadAgent(root)
+	if len(errs) != 0 || len(routines) != 2 {
+		t.Fatalf("grouped discovery: routines=%v errs=%v", routines, errs)
+	}
+	write("plugins/demo/routines/owned.md")
+	routines, errs = LoadAgent(root)
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "duplicate routine") {
+		t.Fatalf("duplicate should be reported: routines=%v errs=%v", routines, errs)
+	}
+	for _, r := range routines {
+		if r.Name == "owned" {
+			t.Fatal("ambiguous routine must fail closed, not be returned for execution")
+		}
+	}
+}

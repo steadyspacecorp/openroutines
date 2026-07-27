@@ -161,3 +161,58 @@ func LoadDir(dir string) ([]*Routine, []error) {
 	sort.Slice(routines, func(i, j int) bool { return routines[i].Name < routines[j].Name })
 	return routines, errs
 }
+
+// LoadAgent reads agent-owned routines plus every installed plugin's
+// routines. Names are global identities, so duplicates are errors.
+func LoadAgent(root string) ([]*Routine, []error) {
+	routines, errs := LoadDir(filepath.Join(root, "routines"))
+	pluginDirs, err := os.ReadDir(filepath.Join(root, "plugins"))
+	if err != nil && !os.IsNotExist(err) {
+		errs = append(errs, err)
+	}
+	for _, entry := range pluginDirs {
+		if !entry.IsDir() {
+			continue
+		}
+		found, foundErrs := LoadDir(filepath.Join(root, "plugins", entry.Name(), "routines"))
+		routines = append(routines, found...)
+		errs = append(errs, foundErrs...)
+	}
+	seen := map[string]string{}
+	duplicates := map[string]bool{}
+	for _, r := range routines {
+		if prior, ok := seen[r.Name]; ok {
+			errs = append(errs, fmt.Errorf("duplicate routine %q: %s and %s", r.Name, prior, r.Path))
+			duplicates[r.Name] = true
+		} else {
+			seen[r.Name] = r.Path
+		}
+	}
+	if len(duplicates) > 0 {
+		filtered := routines[:0]
+		for _, r := range routines {
+			if !duplicates[r.Name] {
+				filtered = append(filtered, r)
+			}
+		}
+		routines = filtered
+	}
+	sort.Slice(routines, func(i, j int) bool { return routines[i].Name < routines[j].Name })
+	return routines, errs
+}
+
+// Find returns one globally named routine from an agent repository.
+func Find(root, name string) (*Routine, error) {
+	routines, errs := LoadAgent(root)
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "duplicate routine "+fmt.Sprintf("%q", name)) {
+			return nil, err
+		}
+	}
+	for _, r := range routines {
+		if r.Name == name {
+			return r, nil
+		}
+	}
+	return nil, fmt.Errorf("no routine %q", name)
+}

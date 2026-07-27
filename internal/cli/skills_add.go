@@ -71,8 +71,8 @@ func skillsAdd(args []string) int {
 		return fail(fmt.Errorf("skill name %q in SKILL.md is not a valid Agent Skills name", s.Name))
 	}
 	dest := filepath.Join("skills", s.Name)
-	if _, err := os.Stat(dest); err == nil {
-		return fail(fmt.Errorf("%s already exists -- remove it first to re-vendor", dest))
+	if existing, err := skill.Find(".", s.Name); err == nil {
+		return fail(fmt.Errorf("skill %q already exists at %s -- remove it first to re-vendor", s.Name, existing.Dir))
 	}
 
 	// Copy the skill folder (regular files only -- no symlinks, no .git).

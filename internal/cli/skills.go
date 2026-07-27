@@ -70,8 +70,8 @@ func skillsNew(args []string) int {
 	}
 	dir := filepath.Join("skills", name)
 	path := filepath.Join(dir, "SKILL.md")
-	if _, err := os.Stat(path); err == nil {
-		return fail(fmt.Errorf("%s already exists", path))
+	if existing, err := skill.Find(".", name); err == nil {
+		return fail(fmt.Errorf("skill %q already exists at %s", name, existing.Dir))
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fail(err)
@@ -84,7 +84,7 @@ func skillsNew(args []string) int {
 }
 
 func skillsList() int {
-	skills, errs := skill.List("skills")
+	skills, errs := skill.ListAgent(".")
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -94,7 +94,7 @@ func skillsList() int {
 	}
 	// Show which routines use each skill: grants are the interesting part.
 	usedBy := map[string][]string{}
-	routines, _ := routine.LoadDir("routines")
+	routines, _ := routine.LoadAgent(".")
 	for _, r := range routines {
 		for _, s := range r.FM.Skills {
 			usedBy[s] = append(usedBy[s], r.Name)
@@ -128,7 +128,7 @@ func skillsRemove(args []string) int {
 		return fail(fmt.Errorf("no skill %q", name))
 	}
 	// Refuse while any routine still declares the grant.
-	routines, _ := routine.LoadDir("routines")
+	routines, _ := routine.LoadAgent(".")
 	var holders []string
 	for _, r := range routines {
 		for _, s := range r.FM.Skills {

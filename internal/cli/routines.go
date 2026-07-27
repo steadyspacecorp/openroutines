@@ -106,8 +106,8 @@ func routinesNew(args []string) int {
 		return fail(err)
 	}
 	path := routinePath(name)
-	if _, err := os.Stat(path); err == nil {
-		return fail(fmt.Errorf("%s already exists", path))
+	if existing, err := routine.Find(".", name); err == nil {
+		return fail(fmt.Errorf("routine %q already exists at %s", name, existing.Path))
 	}
 	if err := os.MkdirAll("routines", 0o755); err != nil {
 		return fail(err)
@@ -143,10 +143,11 @@ func routinesEdit(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	path := routinePath(name)
-	if _, err := os.Stat(path); err != nil {
-		return fail(fmt.Errorf("no routine %q", name))
+	r, err := routine.Find(".", name)
+	if err != nil {
+		return fail(err)
 	}
+	path := r.Path
 	editor := os.Getenv("VISUAL")
 	if editor == "" {
 		editor = os.Getenv("EDITOR")
@@ -179,10 +180,11 @@ func routinesSetActive(args []string, active bool) int {
 	if err != nil {
 		return fail(err)
 	}
-	path := routinePath(name)
-	if _, err := os.Stat(path); err != nil {
-		return fail(fmt.Errorf("no routine %q", name))
+	r, err := routine.Find(".", name)
+	if err != nil {
+		return fail(err)
 	}
+	path := r.Path
 	if err := routine.SetActive(path, active); err != nil {
 		return fail(err)
 	}
@@ -198,11 +200,11 @@ func routinesRemove(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	path := routinePath(name)
-	r, err := routine.Parse(path)
+	r, err := routine.Find(".", name)
 	if err != nil {
 		return fail(fmt.Errorf("no routine %q: %v", name, err))
 	}
+	path := r.Path
 	if err := os.Remove(path); err != nil {
 		return fail(err)
 	}
@@ -217,7 +219,7 @@ func routinesRemove(args []string) int {
 }
 
 func routinesList() int {
-	routines, errs := routine.LoadDir("routines")
+	routines, errs := routine.LoadAgent(".")
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}

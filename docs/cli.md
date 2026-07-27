@@ -10,7 +10,7 @@ openroutines status               show what the agent has and still needs
 openroutines usage                token use and reported cost per routine (--json)
 openroutines routines <command>   new, list, run, test, edit, activate, deactivate, remove
 openroutines skills <command>     new, list, remove
-openroutines plugin add <source>  install an inactive plugin bundle (--yes for non-interactive use)
+openroutines plugin <command>     add, list, update grouped plugin bundles
 openroutines credentials <cmd>    set, list, remove
 openroutines supervise            run the scheduler (container entrypoint)
 openroutines update               bump the pinned framework version
@@ -85,9 +85,11 @@ openroutines skills remove <name>        refuses while any routine declares it
 
 ```
 openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir] [--yes]
+openroutines plugin list
+openroutines plugin update <name> [--yes]
 ```
 
-Shows the bundle's declared authority and installs after you confirm. Installed routines land inactive. `--yes` is required when stdin is not interactive.
+`add` shows the bundle's declared authority and vendors it under `plugins/<name>/` after you confirm; installed routines land inactive. `list` shows installed plugins. `update` fetches the recorded source and three-way merges upstream changes against your vendored copy. `--yes` is required when stdin is not interactive.
 
 ## credentials
 

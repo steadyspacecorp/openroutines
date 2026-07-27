@@ -28,9 +28,11 @@ deployed container runs whatever routine is due.
   frontmatter declares. When adding a capability, add the grant in the same
   change so the diff shows what the routine can now touch.
 - A whole capability can arrive as a plugin (`openroutines plugin add
-  <repo>`): routines and skills copied in behind a grant summary, installed
-  inactive. After install the files are ordinary repo content -- review and
-  edit them like anything else here.
+  <repo>`): its routines and skills stay grouped under `plugins/<name>/`
+  with their source and revision, behind a grant summary and installed
+  inactive. They are ordinary repo content -- review and edit them like
+  anything else here. `openroutines plugin update <name>` three-way merges
+  a reviewed upstream update with those local edits.
 - **Validate after every change**: `openroutines check`. Run a routine once
   with `openroutines routines test <name>` (discards memory writes) or
   `openroutines routines run <name>` (keeps them).

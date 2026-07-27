@@ -204,7 +204,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		}
 	}
 
-	routines, parseErrs := routine.LoadDir(filepath.Join(s.Dir, "routines"))
+	routines, parseErrs := routine.LoadAgent(s.Dir)
 	for _, e := range parseErrs {
 		s.Log.Printf("routine parse error: %v", e)
 	}
