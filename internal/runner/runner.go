@@ -395,7 +395,7 @@ func Run(dir, name string, keep bool) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("not an agent repository: %w", err)
 	}
-	r, err := routine.Parse(filepath.Join(dir, "routines", name+".md"))
+	r, err := routine.Find(dir, name)
 	if err != nil {
 		return nil, err
 	}
@@ -636,39 +636,23 @@ func buildWorkspace(dir, workspace string) error {
 			return err
 		}
 	}
-	return copyTree(filepath.Join(dir, "routines"), filepath.Join(workspace, "routines"))
-}
-
-// copyTree copies a directory of regular files (no symlinks, no metadata).
-// A missing source is an empty tree, not an error.
-func copyTree(src, dst string) error {
-	if _, err := os.Stat(src); os.IsNotExist(err) {
-		return nil
+	routines, errs := routine.LoadAgent(dir)
+	if len(errs) > 0 {
+		return errs[0]
 	}
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+	for _, r := range routines {
+		raw, err := os.ReadFile(r.Path)
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil || rel == "." {
+		if err := os.MkdirAll(filepath.Join(workspace, "routines"), 0o755); err != nil {
 			return err
 		}
-		dest := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(dest, 0o755)
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
+		if err := os.WriteFile(filepath.Join(workspace, "routines", r.Name+".md"), raw, 0o644); err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(dest, raw, 0o644)
-	})
+	}
+	return nil
 }
 
 // copyDeclaredSkills places exactly the routine's declared skills into the
@@ -681,12 +665,13 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 		if !skill.NamePattern.MatchString(name) {
 			return fmt.Errorf("declared skill %q is not a valid Agent Skills name", name)
 		}
-		src := filepath.Join(dir, "skills", name)
-		if _, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil {
+		found, err := skill.Find(dir, name)
+		if err != nil {
 			return fmt.Errorf("declared skill %q not found in skills/", name)
 		}
+		src := found.Dir
 		dest := filepath.Join(workspace, ".opencode", "skills", name)
-		err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		err = filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

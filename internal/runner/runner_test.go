@@ -68,20 +68,21 @@ func TestRealRunDefinitionAllowsActing(t *testing.T) {
 func TestBuildWorkspaceAllowList(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
-		"openroutines.yaml":     "name: t\n",
-		"opencode.json":         "{}",
-		"routines/daily.md":     "---\nschedule: \"0 9 * * *\"\n---\nwork",
-		"credentials.yml.enc":   "ORV1:ciphertext",
-		"master.key":            "hex",
-		"agent_deploy_key":      "PRIVATE KEY",
-		"AGENTS.md":             "dev rules",
-		"CLAUDE.md":             "dev rules",
-		"README.md":             "docs",
-		"Dockerfile":            "FROM x",
-		".openroutines-version": "v0",
-		"skills/s1/SKILL.md":    "skill",
-		"memory/events.md":      "events",
-		".git/config":           "git",
+		"openroutines.yaml":                     "name: t\n",
+		"opencode.json":                         "{}",
+		"routines/daily.md":                     "---\nschedule: \"0 9 * * *\"\n---\nwork",
+		"plugins/demo/routines/plugin-daily.md": "---\nschedule: \"0 10 * * *\"\n---\nplugin work",
+		"credentials.yml.enc":                   "ORV1:ciphertext",
+		"master.key":                            "hex",
+		"agent_deploy_key":                      "PRIVATE KEY",
+		"AGENTS.md":                             "dev rules",
+		"CLAUDE.md":                             "dev rules",
+		"README.md":                             "docs",
+		"Dockerfile":                            "FROM x",
+		".openroutines-version":                 "v0",
+		"skills/s1/SKILL.md":                    "skill",
+		"memory/events.md":                      "events",
+		".git/config":                           "git",
 	}
 	for name, content := range files {
 		path := filepath.Join(dir, name)
@@ -96,7 +97,7 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 	if err := buildWorkspace(dir, workspace); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"openroutines.yaml", "opencode.json", "routines/daily.md"} {
+	for _, f := range []string{"openroutines.yaml", "opencode.json", "routines/daily.md", "routines/plugin-daily.md"} {
 		if _, err := os.Stat(filepath.Join(workspace, f)); err != nil {
 			t.Errorf("%s should travel into the workspace: %v", f, err)
 		}

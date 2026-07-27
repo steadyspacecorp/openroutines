@@ -63,7 +63,7 @@ func cmdStatus(_ []string) int {
 	if loc, err := time.LoadLocation(agent.Timezone); err == nil {
 		now = now.In(loc)
 	}
-	routines, parseErrs := routine.LoadDir(filepath.Join(dir, "routines"))
+	routines, parseErrs := routine.LoadAgent(dir)
 	fmt.Printf("\nroutines (%d):\n", len(routines))
 	for _, r := range routines {
 		state := "inactive"
@@ -85,7 +85,7 @@ func cmdStatus(_ []string) int {
 	}
 
 	// Skills.
-	skills, skillErrs := skill.List(filepath.Join(dir, "skills"))
+	skills, skillErrs := skill.ListAgent(dir)
 	fmt.Printf("\nskills (%d):\n", len(skills))
 	for _, s := range skills {
 		fmt.Printf("  %-20s %s\n", s.Name, firstLine(s.Description))

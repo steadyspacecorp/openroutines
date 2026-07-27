@@ -17,6 +17,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/plugin"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
@@ -63,8 +64,46 @@ func cmdCheck(_ []string) int {
 	}
 
 	// Routines
+	fmt.Println("plugins/")
+	pluginEntries, pluginDirErr := os.ReadDir(filepath.Join(dir, "plugins"))
+	if pluginDirErr != nil && !os.IsNotExist(pluginDirErr) {
+		failf("%v", pluginDirErr)
+	}
+	allSkills, _ := skill.ListAgent(dir)
+	agentSkills := map[string]bool{}
+	for _, s := range allSkills {
+		agentSkills[s.Name] = true
+	}
+	pluginCount := 0
+	for _, entry := range pluginEntries {
+		if !entry.IsDir() {
+			failf("plugins/%s is not a plugin directory", entry.Name())
+			continue
+		}
+		pluginCount++
+		pluginDir := filepath.Join(dir, "plugins", entry.Name())
+		p, err := plugin.Load(pluginDir, agentSkills)
+		if err != nil {
+			failf("%s: %v", entry.Name(), err)
+			continue
+		}
+		if p.Manifest.Name != entry.Name() {
+			failf("%s: manifest name is %q", entry.Name(), p.Manifest.Name)
+		}
+		source, err := plugin.ReadSource(pluginDir)
+		if err != nil {
+			failf("%s: %v", entry.Name(), err)
+		} else {
+			okf("%s (%s @ %s)", entry.Name(), source.Repository, shortRevision(source.Revision))
+		}
+	}
+	if pluginCount == 0 {
+		okf("no plugins installed")
+	}
+
+	// Routines
 	fmt.Println("routines/")
-	routines, parseErrs := routine.LoadDir(filepath.Join(dir, "routines"))
+	routines, parseErrs := routine.LoadAgent(dir)
 	for _, e := range parseErrs {
 		failf("%v", e)
 	}
@@ -130,7 +169,7 @@ func cmdCheck(_ []string) int {
 				errs = append(errs, fmt.Sprintf("skill name %q is not a valid Agent Skills name", s))
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(dir, "skills", s, "SKILL.md")); err != nil {
+			if _, err := skill.Find(dir, s); err != nil {
 				errs = append(errs, fmt.Sprintf("skill %q not found in skills/", s))
 			}
 		}

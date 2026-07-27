@@ -75,3 +75,58 @@ func List(dir string) ([]*Skill, []error) {
 	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
 	return skills, errs
 }
+
+// ListAgent reads agent-owned skills plus every installed plugin's skills.
+// Skill names are global because routine grants name them without a path.
+func ListAgent(root string) ([]*Skill, []error) {
+	skills, errs := List(filepath.Join(root, "skills"))
+	pluginDirs, err := os.ReadDir(filepath.Join(root, "plugins"))
+	if err != nil && !os.IsNotExist(err) {
+		errs = append(errs, err)
+	}
+	for _, entry := range pluginDirs {
+		if !entry.IsDir() {
+			continue
+		}
+		found, foundErrs := List(filepath.Join(root, "plugins", entry.Name(), "skills"))
+		skills = append(skills, found...)
+		errs = append(errs, foundErrs...)
+	}
+	seen := map[string]string{}
+	duplicates := map[string]bool{}
+	for _, s := range skills {
+		if prior, ok := seen[s.Name]; ok {
+			errs = append(errs, fmt.Errorf("duplicate skill %q: %s and %s", s.Name, prior, s.Dir))
+			duplicates[s.Name] = true
+		} else {
+			seen[s.Name] = s.Dir
+		}
+	}
+	if len(duplicates) > 0 {
+		filtered := skills[:0]
+		for _, s := range skills {
+			if !duplicates[s.Name] {
+				filtered = append(filtered, s)
+			}
+		}
+		skills = filtered
+	}
+	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
+	return skills, errs
+}
+
+// Find returns one globally named skill from an agent repository.
+func Find(root, name string) (*Skill, error) {
+	skills, errs := ListAgent(root)
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "duplicate skill "+fmt.Sprintf("%q", name)) {
+			return nil, err
+		}
+	}
+	for _, s := range skills {
+		if s.Name == name {
+			return s, nil
+		}
+	}
+	return nil, fmt.Errorf("no skill %q", name)
+}

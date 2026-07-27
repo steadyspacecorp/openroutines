@@ -168,46 +168,46 @@ func TestCollisionsAndInstall(t *testing.T) {
 	}
 
 	// No memory worktree yet: stubs go pending, the rest installs.
-	installed, pending, err := p.Install(agent)
+	installed, pending, err := p.Install(agent, Source{Repository: "example.test/demo.git", Revision: "abc123"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pending) != 1 || !strings.Contains(pending[0], "demo.md") {
 		t.Fatalf("stub should be pending without a worktree: %v", pending)
 	}
-	for _, rel := range []string{"routines/demo.md", "skills/demo-skill/SKILL.md"} {
+	for _, rel := range []string{"plugins/demo/routines/demo.md", "plugins/demo/skills/demo-skill/SKILL.md", "plugins/demo/" + SourceFileName} {
 		if _, err := os.Stat(filepath.Join(agent, rel)); err != nil {
 			t.Fatalf("%s not installed: %v", rel, err)
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(agent, "routines", "demo.md"))
+	raw, err := os.ReadFile(filepath.Join(agent, "plugins", "demo", "routines", "demo.md"))
 	if err != nil || !strings.Contains(string(raw), "active: false") {
 		t.Fatalf("installed routine must be explicitly inactive: %v\n%s", err, raw)
 	}
-	if len(installed) != 2 {
-		t.Fatalf("installed %v, want the routine and the skill", installed)
+	if len(installed) != 1 || installed[0] != filepath.Join("plugins", "demo") {
+		t.Fatalf("installed %v, want the grouped plugin directory", installed)
 	}
 
 	// Now everything collides.
-	if got := p.Collisions(agent); len(got) != 2 {
-		t.Fatalf("want 2 collisions after install, got %v", got)
+	if got := p.Collisions(agent); len(got) != 3 {
+		t.Fatalf("want plugin, routine, and skill collisions after install, got %v", got)
 	}
 
 	// With a worktree, the stub lands -- unless the ledger already exists,
 	// which is live memory and never clobbered.
 	agent2 := t.TempDir()
 	os.MkdirAll(filepath.Join(agent2, "memory", "ledgers"), 0o755)
-	installed, pending, err = p.Install(agent2)
+	installed, pending, err = p.Install(agent2, Source{Repository: "example.test/demo.git", Revision: "abc123"})
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("stub should install into an existing worktree: pending=%v err=%v", pending, err)
 	}
-	if len(installed) != 3 {
-		t.Fatalf("installed %v, want routine, skill, and stub", installed)
+	if len(installed) != 2 {
+		t.Fatalf("installed %v, want plugin directory and stub", installed)
 	}
 	agent3 := t.TempDir()
 	os.MkdirAll(filepath.Join(agent3, "memory", "ledgers"), 0o755)
 	os.WriteFile(filepath.Join(agent3, "memory", "ledgers", "demo.md"), []byte("live state\n"), 0o644)
-	_, pending, err = p.Install(agent3)
+	_, pending, err = p.Install(agent3, Source{Repository: "example.test/demo.git", Revision: "abc123"})
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("existing ledger must go pending, not be clobbered: pending=%v err=%v", pending, err)
 	}
@@ -234,13 +234,13 @@ func TestInstallRollsBackOnCopyFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent := t.TempDir()
-	if _, _, err := p.Install(agent); err == nil || !strings.Contains(err.Error(), "nested .git") {
+	if _, _, err := p.Install(agent, Source{Repository: "example.test/demo.git", Revision: "abc123"}); err == nil || !strings.Contains(err.Error(), "nested .git") {
 		t.Fatalf("want nested .git copy refusal, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(agent, "routines", "demo.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(agent, "plugins", "demo", "routines", "demo.md")); !os.IsNotExist(err) {
 		t.Fatalf("partial routine survived rollback: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(agent, "skills", "demo-skill")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(agent, "plugins", "demo", "skills", "demo-skill")); !os.IsNotExist(err) {
 		t.Fatalf("partial skill survived rollback: %v", err)
 	}
 }
@@ -261,5 +261,53 @@ func TestManifestAcceptsAllDerivedTypes(t *testing.T) {
 	dir := write(t, map[string]string{"PLUGIN.md": manifest("aws_sts")})
 	if _, err := Load(dir, nil); err == nil || !strings.Contains(err.Error(), strings.Join(creds.DerivedTypes, ", ")) {
 		t.Fatalf("unknown type must be refused naming the known set, got %v", err)
+	}
+}
+
+func TestMergeTreesPreservesLocalEditsAndReportsConflicts(t *testing.T) {
+	base := t.TempDir()
+	ours := t.TempDir()
+	theirs := t.TempDir()
+	dest := t.TempDir()
+	writeFile := func(root, rel, content string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(base, "routines/demo.md", "schedule: old\nunchanged: one\nunchanged: two\nprompt: old\n")
+	writeFile(ours, "routines/demo.md", "schedule: local\nunchanged: one\nunchanged: two\nprompt: old\n")
+	writeFile(theirs, "routines/demo.md", "schedule: old\nunchanged: one\nunchanged: two\nprompt: upstream\n")
+	writeFile(theirs, "skills/new/SKILL.md", "new\n")
+
+	conflicts, err := MergeTrees(base, ours, theirs, dest)
+	if err != nil || len(conflicts) != 0 {
+		t.Fatalf("clean merge: conflicts=%v err=%v", conflicts, err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dest, "routines", "demo.md"))
+	if !strings.Contains(string(raw), "schedule: local") || !strings.Contains(string(raw), "prompt: upstream") {
+		t.Fatalf("merge did not preserve both sides:\n%s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "skills", "new", "SKILL.md")); err != nil {
+		t.Fatalf("upstream addition missing: %v", err)
+	}
+
+	conflictDest := t.TempDir()
+	writeFile(ours, "routines/demo.md", "schedule: ours\nunchanged: one\nunchanged: two\nprompt: old\n")
+	writeFile(theirs, "routines/demo.md", "schedule: theirs\nunchanged: one\nunchanged: two\nprompt: old\n")
+	conflicts, err = MergeTrees(base, ours, theirs, conflictDest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conflicts) != 1 || conflicts[0] != filepath.Join("routines", "demo.md") {
+		t.Fatalf("want routine conflict, got %v", conflicts)
+	}
+	raw, _ = os.ReadFile(filepath.Join(conflictDest, "routines", "demo.md"))
+	if !strings.Contains(string(raw), "<<<<<<< local") {
+		t.Fatalf("conflict markers missing:\n%s", raw)
 	}
 }

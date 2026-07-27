@@ -78,19 +78,20 @@ step "check accepts provider config and flags unreferenced ids"
 
 # Plugins install from local paths too (the fixture and development path).
 # All three reference plugins go in: the grant summary must state what each
-# asks for, nothing lands outside routines/ and skills/, ledger stubs wait
+# asks for, each stays grouped under plugins/<name>/, ledger stubs wait
 # for the memory worktree, and a reinstall is refused, not overwritten.
 if run plugin add "$repo/examples/plugins/steady"; then
   die "non-interactive plugin add should require --yes"
 fi
 grep -q 'rerun with --yes' "$work/out" || die "non-interactive plugin refusal did not explain --yes"
-[[ ! -e routines/steady-check-in.md ]] || die "plugin installed without non-interactive consent"
+[[ ! -e plugins/steady/routines/steady-check-in.md ]] || die "plugin installed without non-interactive consent"
 for p in steady slack github-docs; do
   run plugin add "$repo/examples/plugins/$p" --yes || die "plugin add $p"
 done
 grep -q 'trigger: polls' "$work/out" && die "github-docs declares no active trigger, summary invented one"
-[[ -f routines/steady-check-in.md && -d skills/slack-webhook && -f routines/doc-watch.md ]] || die "plugin files missing"
-grep -q '^active: false$' routines/steady-check-in.md || die "installed plugin routine is active"
+[[ -f plugins/steady/routines/steady-check-in.md && -d plugins/slack/skills/slack-webhook && -f plugins/github-docs/routines/doc-watch.md ]] || die "plugin files missing"
+[[ -f plugins/steady/.openroutines-source.yaml ]] || die "plugin provenance missing"
+grep -q '^active: false$' plugins/steady/routines/steady-check-in.md || die "installed plugin routine is active"
 [[ -e memory/ledgers/doc-watch.md ]] && die "ledger stub installed with no memory worktree"
 grep -q 'seed memory/ledgers/doc-watch.md' "$work/out" || die "pending stub not surfaced as a next step"
 grep -q 'credentials set github_app_private_key' "$work/out" || die "credential next-step missing"
@@ -100,6 +101,45 @@ if run plugin add "$repo/examples/plugins/steady" --yes; then
 fi
 grep -q 'refusing to replace' "$work/out" || die "collision refusal message missing"
 step "plugin add installs all three reference plugins, refuses reinstall"
+
+# A local upstream exercises the update contract: provenance supplies the
+# merge base, a local schedule edit survives, and an upstream prompt edit
+# lands without flattening the plugin.
+mkdir -p "$work/update-source/routines"
+cat > "$work/update-source/PLUGIN.md" <<'EOF'
+---
+name: update-demo
+description: Smoke-test plugin updates.
+---
+EOF
+cat > "$work/update-source/routines/update-demo.md" <<'EOF'
+---
+schedule: "0 9 * * *"
+timeout: 10m
+---
+Original prompt.
+EOF
+git -C "$work/update-source" init -q
+git -C "$work/update-source" add .
+git -C "$work/update-source" -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm initial
+run plugin add "$work/update-source" --yes || die "plugin add update fixture"
+sed -i.bak 's/0 9/0 8/' plugins/update-demo/routines/update-demo.md
+rm plugins/update-demo/routines/update-demo.md.bak
+cat > "$work/update-source/routines/update-demo.md" <<'EOF'
+---
+schedule: "0 9 * * *"
+timeout: 10m
+---
+Updated upstream prompt.
+EOF
+git -C "$work/update-source" add .
+git -C "$work/update-source" -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm update
+run plugin update update-demo --yes || die "plugin update"
+grep -q 'schedule: "0 8 ' plugins/update-demo/routines/update-demo.md || die "plugin update lost local schedule edit"
+grep -q 'Updated upstream prompt' plugins/update-demo/routines/update-demo.md || die "plugin update missed upstream prompt edit"
+run plugin list || die "plugin list"
+grep -q 'update-demo' "$work/out" || die "plugin list omitted installed plugin"
+step "plugin update merges upstream with local edits and advances provenance"
 
 # The installed routines must satisfy check once their credentials exist and
 # the typed entry is declared (values are fake; check only wires names).
