@@ -67,7 +67,13 @@ func cmdUsage(args []string) int {
 		// usage yet". Records that carry no tokens are the confusing case:
 		// runs did happen, so telling someone to wait for them is wrong.
 		if records == 0 {
-			fmt.Println("no runs recorded yet -- records accumulate as routines run")
+			// So is a fresh clone of a running agent: the records exist on
+			// origin, and no amount of waiting materializes them locally.
+			if st := memory.Status("."); !st.Materialized && st.RemoteMemory {
+				fmt.Println("memory is not materialized in this checkout -- run openroutines sync to adopt the agent's records from origin")
+			} else {
+				fmt.Println("no runs recorded yet -- records accumulate as routines run")
+			}
 		} else {
 			fmt.Printf("%d run(s) recorded, none reported token usage -- absent usage means the runtime did not report it, never zero\n", records)
 		}

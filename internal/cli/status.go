@@ -98,7 +98,11 @@ func cmdStatus(_ []string) int {
 	fmt.Printf("\nmemory:\n")
 	ms := memory.Status(dir)
 	if !ms.Materialized {
-		fmt.Printf("  not materialized yet -- appears on first run\n")
+		if ms.RemoteMemory {
+			fmt.Printf("  ! not materialized in this checkout -- origin has the agent's memory; run openroutines sync to adopt it\n")
+		} else {
+			fmt.Printf("  not materialized yet -- appears on first run\n")
+		}
 	} else {
 		fmt.Printf("  last commit: %s\n", ms.LastCommit)
 		if ms.Uncommitted > 0 {
