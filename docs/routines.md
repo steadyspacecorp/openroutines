@@ -31,6 +31,7 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 | `credentials` | The credentials injected into this run's environment -- and only these. `steady_token` arrives as `$STEADY_TOKEN`. |
 | `webfetch` | `true` grants the webfetch tool. Denied by default: fetched pages become model context, making web access a prompt-injection vector you opt into per routine. |
 | `websearch` | `true` grants the websearch tool. Denied by default, same reason. Search runs through Exa -- keyless out of the box; grant an `exa_api_key` credential for keyed use. |
+| `mcp` | Names of MCP servers (defined in `opencode.json`'s `mcp` block) whose tools this routine may call. Denied by default: an MCP server's tool descriptions are third-party text entering model context, and its tools act on external systems -- a grant to review like a skill or credential. Auth headers reference run env (`{env:STEADY_TOKEN}`), so a server is only reachable by routines that also grant the matching credential. |
 | `model` | Provider/model override of the agent default, e.g. `anthropic/claude-sonnet-5`. |
 | `effort` | Provider-specific reasoning effort. |
 | `events` | `false` opts this routine out of recording events -- for reporting routines, where checking in is not work. See [Your agent on the team](teamwork.md). |

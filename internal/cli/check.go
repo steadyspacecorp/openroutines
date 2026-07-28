@@ -189,6 +189,13 @@ func cmdCheck(_ []string) int {
 				errs = append(errs, err.Error())
 			}
 		}
+		for _, m := range r.FM.MCP {
+			// A grant must name a server opencode will actually connect --
+			// an unknown name is a silent no-op at run time, so fail loudly.
+			if !slices.Contains(config.MCPServers(dir), m) {
+				errs = append(errs, fmt.Sprintf("mcp server %q is not defined in opencode.json's mcp block", m))
+			}
+		}
 		if !routine.NamePattern.MatchString(r.Name) {
 			errs = append(errs, fmt.Sprintf("routine filename %q: names must be lowercase alphanumerics with hyphens/underscores (the filename is the routine's identity and becomes paths)", r.Name))
 		}
@@ -310,7 +317,7 @@ func cmdCheck(_ []string) int {
 		var cfg map[string]any
 		if json.Unmarshal(raw, &cfg) == nil {
 			for _, key := range slices.Sorted(maps.Keys(cfg)) {
-				if key != "$schema" && key != "permission" && key != "provider" && key != "agent" {
+				if key != "$schema" && key != "permission" && key != "provider" && key != "agent" && key != "mcp" {
 					warnf("opencode.json contains %q -- model choice belongs in openroutines.yaml and frontmatter, not here", key)
 				}
 			}
