@@ -54,12 +54,25 @@ type Variable struct {
 	Description string `yaml:"description"`
 }
 
+// MCPServer is one MCP server the bundle's routines grant. A declaration of
+// need, never configuration: the server is defined in the agent's
+// opencode.json by a person, because an MCP entry is an endpoint plus auth
+// headers -- exactly what a plugin must not be able to write or update
+// (see the forbidden list). The URL and credential here are what the
+// install prints for the person to review and paste.
+type MCPServer struct {
+	Description string `yaml:"description"`
+	URL         string `yaml:"url"`
+	Credential  string `yaml:"credential,omitempty"` // manifest credential its auth header references
+}
+
 // Manifest is PLUGIN.md's frontmatter.
 type Manifest struct {
 	Name        string                `yaml:"name"`
 	Description string                `yaml:"description"`
 	Credentials map[string]Credential `yaml:"credentials,omitempty"`
 	Variables   map[string]Variable   `yaml:"variables,omitempty"`
+	MCP         map[string]MCPServer  `yaml:"mcp,omitempty"`
 }
 
 // Plugin is a validated bundle, ready to summarize and install.
@@ -142,6 +155,25 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		}
 		if strings.TrimSpace(p.Manifest.Variables[vname].Description) == "" {
 			badf("variable %q needs a description", vname)
+		}
+	}
+	for _, mname := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
+		m := p.Manifest.MCP[mname]
+		// Server names become opencode tool prefixes ("<name>_*") and land
+		// in a person's opencode.json -- same grammar as credentials.
+		if !creds.NamePattern.MatchString(mname) {
+			badf("mcp server name %q must be lowercase snake_case", mname)
+		}
+		if strings.TrimSpace(m.Description) == "" {
+			badf("mcp server %q needs a description -- someone has to know what they are connecting", mname)
+		}
+		if strings.TrimSpace(m.URL) == "" {
+			badf("mcp server %q needs a url -- the declaration is what the person reviews and pastes into opencode.json", mname)
+		}
+		if m.Credential != "" {
+			if _, declared := p.Manifest.Credentials[m.Credential]; !declared {
+				badf("mcp server %q names credential %q, missing from the PLUGIN.md credentials block", mname, m.Credential)
+			}
 		}
 	}
 
@@ -249,6 +281,14 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		for _, c := range r.FM.Credentials {
 			if _, declared := p.Manifest.Credentials[c]; !declared {
 				badf("routine %s declares credential %q, missing from the PLUGIN.md credentials block", r.Name, c)
+			}
+		}
+		// Strict like credentials, not lenient like skills: the manifest
+		// tells the whole story the grant summary prints, so a grant on an
+		// agent-defined server still needs the plugin's own declaration.
+		for _, m := range r.FM.MCP {
+			if _, declared := p.Manifest.MCP[m]; !declared {
+				badf("routine %s grants mcp server %q, missing from the PLUGIN.md mcp block", r.Name, m)
 			}
 		}
 		if t := r.FM.Trigger; t != nil && t.Credential != "" {
@@ -363,6 +403,9 @@ func (p *Plugin) Summary() string {
 			if len(r.FM.Skills) > 0 {
 				w("    skills: %s\n", strings.Join(r.FM.Skills, ", "))
 			}
+			if len(r.FM.MCP) > 0 {
+				w("    mcp: %s\n", strings.Join(r.FM.MCP, ", "))
+			}
 			if t := r.FM.Trigger; t != nil {
 				w("    trigger: polls %s", t.Poll)
 				if t.Credential != "" {
@@ -389,6 +432,14 @@ func (p *Plugin) Summary() string {
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.Variables)) {
 		w("Variable to set: %s -- %s\n", name, p.Manifest.Variables[name].Description)
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
+		m := p.Manifest.MCP[name]
+		w("MCP server to define: %s -- %s (%s", name, m.Description, m.URL)
+		if m.Credential != "" {
+			w("; auth via credential %s", m.Credential)
+		}
+		w(") -- needs an opencode.json mcp entry\n")
 	}
 	for _, s := range p.Stubs {
 		w("Ledger stub: %s\n", s)

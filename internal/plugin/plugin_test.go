@@ -114,6 +114,21 @@ func TestLoadRefusals(t *testing.T) {
 		"credential variable collision": {map[string]string{
 			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: token\nvariables:\n  demo_token:\n    description: non-secret token\n---\n",
 		}, "collides with a credential"},
+		"undeclared mcp grant": {map[string]string{
+			"routines/other.md": "---\nschedule: \"0 9 * * *\"\nmcp: [ghost]\n---\nx\n",
+		}, "missing from the PLUGIN.md mcp block"},
+		"mcp missing url": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: token\nmcp:\n  steady:\n    description: Steady's server\n---\n",
+		}, "needs a url"},
+		"mcp missing description": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: token\nmcp:\n  steady:\n    url: https://example.test/mcp\n---\n",
+		}, "needs a description"},
+		"mcp undeclared credential": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: token\nmcp:\n  steady:\n    description: Steady's server\n    url: https://example.test/mcp\n    credential: ghost_token\n---\n",
+		}, "missing from the PLUGIN.md credentials block"},
+		"mcp bad server name": {map[string]string{
+			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: token\nmcp:\n  Steady-Prod:\n    description: Steady's server\n    url: https://example.test/mcp\n---\n",
+		}, "lowercase snake_case"},
 	}
 	for name, c := range cases {
 		if _, err := Load(write(t, c.extra), nil); err == nil || !strings.Contains(err.Error(), c.want) {
@@ -149,6 +164,31 @@ func TestLoadRefusals(t *testing.T) {
 	})
 	if _, err := Load(dir, nil); err == nil || !strings.Contains(err.Error(), "typed") {
 		t.Fatalf("typed trigger credential should be refused, got %v", err)
+	}
+}
+
+// A declared MCP server loads, and the grant summary states both halves of
+// the authority: the routine's grant and the endpoint the person must
+// define. The summary is the review gate -- an MCP grant it omitted would
+// be an authority the person never saw.
+func TestMCPDeclarationLoadsAndSummarizes(t *testing.T) {
+	dir := write(t, map[string]string{
+		"PLUGIN.md":        "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: A demo token\nmcp:\n  steady:\n    description: Steady's MCP server\n    url: https://example.test/mcp\n    credential: demo_token\n---\nBody.\n",
+		"routines/demo.md": "---\nschedule: \"0 9 * * *\"\ncredentials: [demo_token]\nmcp: [steady]\n---\nDo the demo.\n",
+	})
+	p, err := Load(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := p.Summary()
+	for _, want := range []string{
+		"mcp: steady",
+		"MCP server to define: steady -- Steady's MCP server (https://example.test/mcp; auth via credential demo_token)",
+		"opencode.json mcp entry",
+	} {
+		if !strings.Contains(sum, want) {
+			t.Fatalf("summary missing %q:\n%s", want, sum)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -123,6 +124,36 @@ func pluginAdd(args []string) int {
 	}
 	fmt.Println()
 
+	// Declared MCP servers: offer to write each entry, one consent per
+	// endpoint, showing the exact bytes. Only a live interactive answer
+	// writes harness config -- --yes covers the install, never an endpoint
+	// definition, and a non-interactive run only prints the snippet. An
+	// already-defined name is the person's entry and is left untouched.
+	mcpHandled := map[string]bool{}
+	if interactive && !yes && len(p.Manifest.MCP) > 0 {
+		defined := config.MCPServers(".")
+		reader := bufio.NewReader(os.Stdin)
+		for _, name := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
+			if slices.Contains(defined, name) {
+				fmt.Printf("  mcp server %q is already defined in opencode.json -- left untouched; review that it matches the plugin's declaration\n", name)
+				mcpHandled[name] = true
+				continue
+			}
+			m := p.Manifest.MCP[name]
+			fmt.Printf("Define mcp server %q in opencode.json? This connects runs that grant it to an external endpoint.\n  %s\n  [y/N] ", name, mcpSnippet(name, m))
+			line, _ := reader.ReadString('\n')
+			if strings.TrimSpace(strings.ToLower(line)) != "y" {
+				continue // stays a printed next step
+			}
+			if err := config.AddMCPServer(".", name, mcpEntry(m)); err != nil {
+				return fail(err)
+			}
+			fmt.Printf("  wrote mcp server %q to opencode.json\n", name)
+			mcpHandled[name] = true
+		}
+		fmt.Println()
+	}
+
 	fmt.Println("Next steps:")
 	step := 0
 	stepf := func(format string, args ...any) {
@@ -139,6 +170,15 @@ func pluginAdd(args []string) int {
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.Variables)) {
 		stepf("set the %s variable in openroutines.yaml  # %s", name, firstLine(p.Manifest.Variables[name].Description))
 	}
+	for _, name := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
+		// The plugin declares the server; only a person puts the endpoint
+		// into opencode.json -- via the interactive consent above, or by
+		// pasting this snippet. A plugin can never author harness config.
+		if mcpHandled[name] {
+			continue
+		}
+		stepf("add to opencode.json's mcp block:  %s  # %s", mcpSnippet(name, p.Manifest.MCP[name]), firstLine(p.Manifest.MCP[name].Description))
+	}
 	for _, s := range pendingStubs {
 		stepf("seed %s after the memory worktree exists (first run creates it)", s)
 	}
@@ -148,6 +188,25 @@ func pluginAdd(args []string) int {
 	}
 	stepf("review the diff and commit -- suggested message: \"Install plugin %s (from %s @ %s)\"", p.Manifest.Name, provenance.Repository, shortRevision(provenance.Revision))
 	return 0
+}
+
+// mcpEntry renders a declared server as the opencode.json entry a person
+// consents to. Always remote (the framework's only supported transport); a
+// named credential becomes the standard bearer header referencing the
+// credential's run-environment name.
+func mcpEntry(m plugin.MCPServer) map[string]any {
+	entry := map[string]any{"type": "remote", "url": m.URL}
+	if m.Credential != "" {
+		entry["headers"] = map[string]any{"Authorization": "Bearer {env:" + strings.ToUpper(m.Credential) + "}"}
+	}
+	return entry
+}
+
+// mcpSnippet is mcpEntry as the exact JSON shown at the consent prompt and
+// in the paste step -- what you read is what lands.
+func mcpSnippet(name string, m plugin.MCPServer) string {
+	entry, _ := json.Marshal(mcpEntry(m))
+	return fmt.Sprintf("%q: %s", name, entry)
 }
 
 func resolvePluginSource(source, subPath, revision string) (string, plugin.Source, func(), error) {
