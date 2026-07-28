@@ -832,7 +832,8 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 	// regardless of grant -- the tools act on external systems, which a
 	// rehearsal must not do (credentials are withheld anyway; this makes
 	// the denial structural rather than an auth failure).
-	for _, server := range config.MCPServers(workspace) {
+	oc, _ := config.LoadOpenCode(workspace)
+	for _, server := range oc.MCPServers() {
 		action := "deny"
 		if !meta.DryRun && slices.Contains(r.FM.MCP, server) {
 			action = "allow"

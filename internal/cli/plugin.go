@@ -111,7 +111,11 @@ func pluginAdd(args []string) int {
 	// already-defined name is the person's entry and is left untouched.
 	mcpHandled := map[string]bool{}
 	if interactive && !yes && len(p.Manifest.MCP) > 0 {
-		defined := config.MCPServers(".")
+		oc, err := config.LoadOpenCode(".")
+		if err != nil {
+			return fail(err)
+		}
+		defined := oc.MCPServers()
 		reader := bufio.NewReader(os.Stdin)
 		for _, name := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
 			if slices.Contains(defined, name) {
