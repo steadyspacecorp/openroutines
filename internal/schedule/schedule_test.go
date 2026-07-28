@@ -142,3 +142,50 @@ func TestBreakerTripAndReset(t *testing.T) {
 		t.Fatalf("success must fully reset the breaker: %+v", s)
 	}
 }
+
+func TestNextFiresBoundedByCountAndHorizon(t *testing.T) {
+	weekdays := spec(t, "0 9 * * 1-5")
+	// Tue 2026-07-28 07:00.
+	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
+	fires := NextFires(weekdays, now, now.AddDate(0, 0, 14), 3)
+	if len(fires) != 3 {
+		t.Fatalf("expected 3 fires, got %d", len(fires))
+	}
+	if fires[0].Day() != 28 || fires[1].Day() != 29 || fires[2].Day() != 30 {
+		t.Fatalf("wrong fires: %v", fires)
+	}
+	monthly := spec(t, "0 9 1 * *")
+	if got := NextFires(monthly, now, now.AddDate(0, 0, 2), 2); len(got) != 0 {
+		t.Fatalf("horizon must bound the scan, got %v", got)
+	}
+}
+
+func TestWindowEndSkipsSameDayRetrySlot(t *testing.T) {
+	checkIn := spec(t, "0 7,8 * * 1-5")
+	// Running at Tue 07:00: the 08:00 slot is today's retry, not the close.
+	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
+	end := WindowEnd(checkIn, now, now.AddDate(0, 0, 14))
+	want := time.Date(2026, 7, 29, 7, 0, 0, 0, time.UTC)
+	if !end.Equal(want) {
+		t.Fatalf("window end = %v, want %v", end, want)
+	}
+}
+
+func TestWindowEndCrossesWeekend(t *testing.T) {
+	checkIn := spec(t, "0 7,8 * * 1-5")
+	// Friday morning: the next fire-day is Monday.
+	now := time.Date(2026, 7, 31, 8, 30, 0, 0, time.UTC)
+	end := WindowEnd(checkIn, now, now.AddDate(0, 0, 14))
+	want := time.Date(2026, 8, 3, 7, 0, 0, 0, time.UTC)
+	if !end.Equal(want) {
+		t.Fatalf("window end = %v, want %v", end, want)
+	}
+}
+
+func TestWindowEndZeroBeyondHorizon(t *testing.T) {
+	monthly := spec(t, "0 9 1 * *")
+	now := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
+	if end := WindowEnd(monthly, now, now.AddDate(0, 0, 14)); !end.IsZero() {
+		t.Fatalf("expected zero beyond horizon, got %v", end)
+	}
+}

@@ -1,0 +1,106 @@
+package runner
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/routine"
+)
+
+func boolPtr(v bool) *bool { return &v }
+
+func scheduleFixture() []*routine.Routine {
+	return []*routine.Routine{
+		{Name: "steady-check-in", FM: routine.Frontmatter{Schedule: "0 7,8 * * 1-5", Events: boolPtr(false), Consumes: "memory"}},
+		{Name: "steady-inbox", FM: routine.Frontmatter{Schedule: "45 8-17/3 * * 1-5", Events: boolPtr(false)}},
+		{Name: "doc-drift", FM: routine.Frontmatter{Schedule: "0 9 * * 1-5"}},
+		{Name: "roadmap-groomer", FM: routine.Frontmatter{Schedule: "0 17 * * 2"}},
+		{Name: "a11y-sweep", FM: routine.Frontmatter{Schedule: "30 9 * * 3"}},
+		{Name: "release-notes", FM: routine.Frontmatter{Schedule: "0 21 * * 1"}},
+		{Name: "retired", FM: routine.Frontmatter{Schedule: "0 9 * * *", Active: boolPtr(false)}},
+	}
+}
+
+// Tuesday 07:00 with a same-day retry slot and a Tue 17:00 near-miss: the
+// exact shape a daily reporting routine reads every morning.
+func TestRenderScheduleWindowSplit(t *testing.T) {
+	all := scheduleFixture()
+	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC) // Tuesday
+	got := RenderSchedule(all, all[0], now)
+
+	for _, want := range []string{
+		"now: Tue 2026-07-28 07:00 (UTC)",
+		// The 08:00 retry slot is skipped; the window closes Wednesday.
+		"window: now → Wed 2026-07-29 07:00 (steady-check-in's next fire on its next fire-day)",
+		"eventless: steady-inbox next Tue 2026-07-28 08:45",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+
+	in := section(got, "in-window", "out (after window)")
+	out := section(got, "out (after window)", "")
+	for name, wantIn := range map[string]bool{
+		"doc-drift":       true,  // Tue 09:00, later today
+		"roadmap-groomer": true,  // Tue 17:00, before Wed 07:00
+		"a11y-sweep":      false, // Wed 09:30, after the close
+		"release-notes":   false, // next Monday
+	} {
+		if strings.Contains(in, name) != wantIn {
+			t.Fatalf("%s in-window=%v, want %v:\n%s", name, !wantIn, wantIn, got)
+		}
+		if strings.Contains(out, name) == wantIn {
+			t.Fatalf("%s misplaced in out table:\n%s", name, got)
+		}
+	}
+	if strings.Contains(got, "retired") {
+		t.Fatalf("inactive routine must not render:\n%s", got)
+	}
+}
+
+// A trigger-only or unscheduled self gets facts, not a window.
+func TestRenderScheduleDegradesWithoutSelfSchedule(t *testing.T) {
+	all := scheduleFixture()
+	unscheduled := &routine.Routine{Name: "on-demand", FM: routine.Frontmatter{}}
+	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
+	got := RenderSchedule(all, unscheduled, now)
+	if strings.Contains(got, "window:") || strings.Contains(got, "in-window") {
+		t.Fatalf("no window without a self schedule:\n%s", got)
+	}
+	if !strings.Contains(got, "routine") || !strings.Contains(got, "doc-drift") {
+		t.Fatalf("facts table must still render:\n%s", got)
+	}
+}
+
+// An inactive self (a manually-run probe) still anchors a window: its
+// schedule is the stand-in for the routine it mirrors.
+func TestRenderScheduleInactiveSelfKeepsWindow(t *testing.T) {
+	probe := &routine.Routine{Name: "check-in-probe", FM: routine.Frontmatter{
+		Schedule: "0 7 * * 1-5", Active: boolPtr(false), Events: boolPtr(false),
+	}}
+	all := append(scheduleFixture(), probe)
+	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
+	got := RenderSchedule(all, probe, now)
+	if !strings.Contains(got, "window: now → Wed 2026-07-29 07:00") {
+		t.Fatalf("inactive self must still compute its window:\n%s", got)
+	}
+}
+
+// section returns got between the line starting the `from` table and the
+// `to` marker ("" = end).
+func section(got, from, to string) string {
+	start := strings.Index(got, from)
+	if start < 0 {
+		return ""
+	}
+	rest := got[start:]
+	if to == "" {
+		return rest
+	}
+	if end := strings.Index(rest, to); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
