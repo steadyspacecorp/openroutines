@@ -26,9 +26,9 @@ const (
 )
 
 // Paths computes the rule sets for one attempt: read on the workspace, the
-// OS, and the opencode installation; read-write on staged memory, the run
-// tmp, and the attempt's disposable HOME -- all inside the workspace -- plus
-// /dev.
+// OS, and the opencode installation; read-write on the staged memory the
+// runner names, the run tmp, and the attempt's disposable HOME -- all inside
+// the workspace -- plus /dev.
 //
 // Landlock rules are additive: a grant on a parent subsumes everything
 // beneath it. That is why /tmp is conspicuously absent -- the workspace
@@ -43,14 +43,14 @@ const (
 // /proc dangerous are protected at the source instead -- the supervisor is
 // non-dumpable (ProtectProcess) and keys are file-delivered, so
 // /proc/<supervisor>/environ is both unreadable and empty of secrets.
-func Paths(workspace, runTmp, home, attemptHome string) (ro, rw []string) {
+func Paths(workspace, memoryDir, runTmp, home, attemptHome string) (ro, rw []string) {
 	ro = []string{
 		workspace,
 		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/etc", "/proc",
 		filepath.Join(home, ".opencode"), // the opencode binary itself
 	}
 	rw = []string{
-		filepath.Join(workspace, "memory"),
+		memoryDir,
 		runTmp,
 		attemptHome,
 		"/dev",
