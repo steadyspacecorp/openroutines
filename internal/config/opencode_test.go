@@ -91,9 +91,8 @@ func TestOpenCodeDrift(t *testing.T) {
 // absent, and never overwrites -- an existing entry is the person's.
 func TestAddMCPServer(t *testing.T) {
 	dir := t.TempDir()
-	entry := map[string]any{"type": "remote", "url": "https://example.test/mcp"}
 
-	if err := AddMCPServer(dir, "steady", entry); err == nil {
+	if err := AddMCPServer(dir, "steady", "https://example.test/mcp", ""); err == nil {
 		t.Fatal("no opencode.json should refuse, not create harness config")
 	}
 
@@ -101,7 +100,7 @@ func TestAddMCPServer(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"permission": {"question": "deny"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := AddMCPServer(dir, "steady", entry); err != nil {
+	if err := AddMCPServer(dir, "steady", "https://example.test/mcp", "steady_token"); err != nil {
 		t.Fatal(err)
 	}
 	oc, err := LoadOpenCode(dir)
@@ -112,16 +111,35 @@ func TestAddMCPServer(t *testing.T) {
 		t.Fatalf("server not inserted: %v", got)
 	}
 	raw, _ := os.ReadFile(path)
-	for _, want := range []string{`"question": "deny"`, `"url": "https://example.test/mcp"`} {
+	for _, want := range []string{
+		`"question": "deny"`,
+		`"type": "remote"`,
+		`"url": "https://example.test/mcp"`,
+		`"Authorization": "Bearer {env:STEADY_TOKEN}"`,
+	} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("rewritten opencode.json missing %q:\n%s", want, raw)
 		}
 	}
 
-	if err := AddMCPServer(dir, "steady", map[string]any{"url": "https://evil.test"}); err == nil || !strings.Contains(err.Error(), "already defined") {
+	if err := AddMCPServer(dir, "steady", "https://evil.test", ""); err == nil || !strings.Contains(err.Error(), "already defined") {
 		t.Fatalf("existing entry must be refused, got %v", err)
 	}
 	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "evil.test") {
 		t.Fatal("refused insert must not touch the file")
+	}
+}
+
+// The snippet shown at the consent prompt is the entry AddMCPServer lands --
+// what you read is what you get.
+func TestMCPSnippetMatchesWhatLands(t *testing.T) {
+	snippet := MCPSnippet("steady", "https://example.test/mcp", "steady_token")
+	for _, want := range []string{`"steady":`, `"type":"remote"`, `"url":"https://example.test/mcp"`, `"Authorization":"Bearer {env:STEADY_TOKEN}"`} {
+		if !strings.Contains(snippet, want) {
+			t.Fatalf("snippet missing %s:\n%s", want, snippet)
+		}
+	}
+	if snippet := MCPSnippet("open", "https://example.test/open", ""); strings.Contains(snippet, "headers") {
+		t.Fatalf("credential-less snippet must carry no auth header:\n%s", snippet)
 	}
 }

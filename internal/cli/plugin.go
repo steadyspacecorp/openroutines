@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -124,12 +123,12 @@ func pluginAdd(args []string) int {
 				continue
 			}
 			m := p.Manifest.MCP[name]
-			fmt.Printf("Define mcp server %q in opencode.json? This connects runs that grant it to an external endpoint.\n  %s\n  [y/N] ", name, mcpSnippet(name, m))
+			fmt.Printf("Define mcp server %q in opencode.json? This connects runs that grant it to an external endpoint.\n  %s\n  [y/N] ", name, config.MCPSnippet(name, m.URL, m.Credential))
 			line, _ := reader.ReadString('\n')
 			if strings.TrimSpace(strings.ToLower(line)) != "y" {
 				continue // stays a printed next step
 			}
-			if err := config.AddMCPServer(".", name, mcpEntry(m)); err != nil {
+			if err := config.AddMCPServer(".", name, m.URL, m.Credential); err != nil {
 				return fail(err)
 			}
 			fmt.Printf("  wrote mcp server %q to opencode.json\n", name)
@@ -161,7 +160,7 @@ func pluginAdd(args []string) int {
 		if mcpHandled[name] {
 			continue
 		}
-		stepf("add to opencode.json's mcp block:  %s  # %s", mcpSnippet(name, p.Manifest.MCP[name]), firstLine(p.Manifest.MCP[name].Description))
+		stepf("add to opencode.json's mcp block:  %s  # %s", config.MCPSnippet(name, p.Manifest.MCP[name].URL, p.Manifest.MCP[name].Credential), firstLine(p.Manifest.MCP[name].Description))
 	}
 	for _, s := range pendingStubs {
 		stepf("seed %s after the memory worktree exists (first run creates it)", s)
@@ -172,25 +171,6 @@ func pluginAdd(args []string) int {
 	}
 	stepf("review the diff and commit -- suggested message: \"Install plugin %s (from %s @ %s)\"", p.Manifest.Name, provenance.Repository, shortRevision(provenance.Revision))
 	return 0
-}
-
-// mcpEntry renders a declared server as the opencode.json entry a person
-// consents to. Always remote (the framework's only supported transport); a
-// named credential becomes the standard bearer header referencing the
-// credential's run-environment name.
-func mcpEntry(m plugin.MCPServer) map[string]any {
-	entry := map[string]any{"type": "remote", "url": m.URL}
-	if m.Credential != "" {
-		entry["headers"] = map[string]any{"Authorization": "Bearer {env:" + strings.ToUpper(m.Credential) + "}"}
-	}
-	return entry
-}
-
-// mcpSnippet is mcpEntry as the exact JSON shown at the consent prompt and
-// in the paste step -- what you read is what lands.
-func mcpSnippet(name string, m plugin.MCPServer) string {
-	entry, _ := json.Marshal(mcpEntry(m))
-	return fmt.Sprintf("%q: %s", name, entry)
 }
 
 func shortRevision(revision string) string {
