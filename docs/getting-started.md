@@ -5,10 +5,12 @@ From nothing to a running agent: install the CLI, scaffold an agent, configure i
 ## Prerequisites
 
 - **git**
-- **Docker** -- routines run locally in the same container they run in when deployed
+- **Docker** -- needed by `routines run` and `routines test`, which execute in the same container they run in when deployed; `scaffold`, `configure`, `check`, and `routines new` don't need it
 - **An API key for at least one model provider** (Anthropic, OpenAI, ...) -- `configure` encrypts it into the agent's credentials
 
 That's the whole list. You don't install opencode or any language runtime -- everything the agent runs on ships inside the container.
+
+None of it is private, either. The image your routines run in locally builds from public bases, so you can scaffold an agent, write routines, and run and test them against the real model without any registry access at all. GHCR is a deploy-time dependency only -- see [Operating in production](operating.md).
 
 ## Install the CLI
 
