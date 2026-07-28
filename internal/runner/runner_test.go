@@ -22,7 +22,7 @@ func genDef(t *testing.T, meta Meta, fm ...routine.Frontmatter) string {
 		front = fm[0]
 	}
 	r := &routine.Routine{Name: "x", FM: front}
-	if err := writeAgentDefinition(ws, agent, r, meta); err != nil {
+	if err := writeAgentDefinition(ws, agent, r, nil, meta); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(ws, ".opencode", "agents", "routine.md"))
@@ -213,7 +213,7 @@ func TestInstructionRendering(t *testing.T) {
 		t.Helper()
 		ws := t.TempDir()
 		r := &routine.Routine{Name: "sample", FM: fm}
-		if err := writeAgentDefinition(ws, agent, r, Meta{RunID: "run_x", DryRun: dry}); err != nil {
+		if err := writeAgentDefinition(ws, agent, r, nil, Meta{RunID: "run_x", DryRun: dry}); err != nil {
 			t.Fatal(err)
 		}
 		raw, err := os.ReadFile(filepath.Join(ws, ".opencode", "agents", "routine.md"))

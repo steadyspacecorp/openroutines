@@ -176,6 +176,14 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		return nil, nil, err
 	}
 	timeout := EffectiveTimeout(agent, r)
+	// The harness config is parsed from the agent repository, not the
+	// workspace copy buildWorkspace makes later: MCP permission rules must
+	// never depend on pipeline ordering to see the server list. A file
+	// opencode could not parse fails the attempt here, before anything runs.
+	oc, err := config.LoadOpenCode(dir)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	secrets, err := resolveCredentials(dir, agent, r, model, meta.DryRun)
 	if err != nil {
@@ -220,7 +228,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	if err := prepareSchedule(dir, workspace, r, agent.Timezone, time.Now()); err != nil {
 		return nil, nil, fmt.Errorf("forward schedule: %w", err)
 	}
-	if err := writeAgentDefinition(workspace, agent, r, meta); err != nil {
+	if err := writeAgentDefinition(workspace, agent, r, oc.MCPServers(), meta); err != nil {
 		return nil, nil, err
 	}
 	runTmp := filepath.Join(workspace, ".runtmp")
@@ -687,7 +695,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 // missed exactly one entry, credentials.yml.enc; allow-lists don't have
 // that failure mode.)
 func buildWorkspace(dir, workspace string) error {
-	for _, name := range []string{filepath.Base(config.Path(dir)), "opencode.json"} {
+	for _, name := range []string{filepath.Base(config.Path(dir)), config.OpenCodeFileName} {
 		raw, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -788,10 +796,26 @@ type instructionData struct {
 	Variables     string // "$PRODUCT_REPO, $DOCS_URL" -- empty when none configured
 }
 
-// writeAgentDefinition generates the opencode agent for this run: default-deny
-// skills with the routine's declared skills allowed, and the standing
-// instruction that frames memory as records, never instructions.
-func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Routine, meta Meta) error {
+// writeAgentDefinition places the generated opencode agent for this run at
+// the harness's discovery path in the workspace.
+func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Routine, servers []string, meta Meta) error {
+	def, err := renderDefinition(agent, r, servers, meta)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(workspace, ".opencode", "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "routine.md"), []byte(def), 0o644)
+}
+
+// renderDefinition generates the opencode agent for this run: default-deny
+// skills with the routine's declared skills allowed, an explicit rule per
+// configured MCP server (servers is the agent's opencode.json server list --
+// passed in, so rule generation can never silently see an empty config), and
+// the standing instruction that frames memory as records, never instructions.
+func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string, meta Meta) (string, error) {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "description: Generated for routine %s -- derived from frontmatter, do not edit\n", r.Name)
@@ -832,8 +856,7 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 	// regardless of grant -- the tools act on external systems, which a
 	// rehearsal must not do (credentials are withheld anyway; this makes
 	// the denial structural rather than an auth failure).
-	oc, _ := config.LoadOpenCode(workspace)
-	for _, server := range oc.MCPServers() {
+	for _, server := range servers {
 		action := "deny"
 		if !meta.DryRun && slices.Contains(r.FM.MCP, server) {
 			action = "allow"
@@ -859,31 +882,17 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 		Marker:        memory.ConsumeMarker,
 		Variables:     variablesLine(agent),
 	}); err != nil {
-		return err
+		return "", err
 	}
-
-	dir := filepath.Join(workspace, ".opencode", "agents")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "routine.md"), []byte(b.String()), 0o644)
+	return b.String(), nil
 }
 
 // RenderDefinition generates a routine's opencode agent definition exactly
 // as a run would, without running anything. check uses it to validate
-// routine wiring -- frontmatter through generated definition -- offline,
-// with no provider key and no Docker.
-func RenderDefinition(agent *config.Agent, r *routine.Routine, dryRun bool) (string, error) {
-	ws, err := os.MkdirTemp("", "openroutines-render-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(ws)
-	if err := writeAgentDefinition(ws, agent, r, Meta{RunID: "run_check", AttemptID: "attempt_00", DryRun: dryRun}); err != nil {
-		return "", err
-	}
-	raw, err := os.ReadFile(filepath.Join(ws, ".opencode", "agents", "routine.md"))
-	return string(raw), err
+// routine wiring -- frontmatter through generated definition, MCP rules
+// included -- offline, with no provider key and no Docker.
+func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string, dryRun bool) (string, error) {
+	return renderDefinition(agent, r, servers, Meta{RunID: "run_check", AttemptID: "attempt_00", DryRun: dryRun})
 }
 
 // variablesLine renders the agent's variable names for the standing
