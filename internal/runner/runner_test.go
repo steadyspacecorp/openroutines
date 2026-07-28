@@ -2,6 +2,7 @@ package runner
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -289,7 +290,7 @@ func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 	off := false
 	dir, staging := setup(t)
 	r := &routine.Routine{Name: "quiet", FM: routine.Frontmatter{Events: &off}}
-	discarded, err := ImportMemory(dir, r, staging)
+	discarded, err := importMemory(dir, r, staging)
 	if err != nil || !discarded {
 		t.Fatalf("discarded=%v err=%v, want true nil", discarded, err)
 	}
@@ -303,13 +304,100 @@ func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 
 	dir, staging = setup(t)
 	r = &routine.Routine{Name: "loud", FM: routine.Frontmatter{}}
-	discarded, err = ImportMemory(dir, r, staging)
+	discarded, err = importMemory(dir, r, staging)
 	if err != nil || discarded {
 		t.Fatalf("discarded=%v err=%v, want false nil", discarded, err)
 	}
 	wt = filepath.Join(dir, memory.Dir)
 	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "base\n- sneaky event\n" {
 		t.Fatalf("events.md = %q, want staged change imported for a recording routine", got)
+	}
+}
+
+// settleFixture builds a real agent repo with a materialized memory worktree:
+// Settle's commit step needs actual git.
+func settleFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init", "-q", "-b", "main", ".")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := memory.At(dir).Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// A completed attempt whose staged memory is rejected settles as crashed --
+// in the returned outcome, the failure event, the run record, and the
+// settlement commit alike. The run record saying "completed" while the run
+// was reported crashed is the divergence Settle exists to prevent.
+func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
+	dir := settleFixture(t)
+	staging := &Staging{MemoryDir: t.TempDir()}
+	os.WriteFile(filepath.Join(staging.MemoryDir, ".gitignore"), []byte("x"), 0o644)
+
+	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{}}
+	settlement, err := Settle(dir, r, staging, &ExecResult{Outcome: Completed}, Meta{RunID: "run_reject", AttemptID: "attempt_01"}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settlement.Outcome != Crashed || !strings.Contains(settlement.Detail, "memory rejected") {
+		t.Fatalf("settlement = %+v, want crashed with memory-rejected detail", settlement)
+	}
+	if settlement.Commit == "" {
+		t.Fatal("settlement should have committed the record and event")
+	}
+	wt := filepath.Join(dir, memory.Dir)
+	records, _ := os.ReadFile(filepath.Join(wt, "runs.jsonl"))
+	if !strings.Contains(string(records), `"outcome":"crashed"`) {
+		t.Fatalf("run record should carry the settled outcome: %s", records)
+	}
+	events, _ := os.ReadFile(filepath.Join(wt, "events.md"))
+	if !strings.Contains(string(events), "run_reject attempt_01) memory rejected") {
+		t.Fatalf("failure event missing: %s", events)
+	}
+}
+
+// A clean completion imports staged memory, runs the caller's stage hook
+// before the settlement commit (so its writes ride along), and commits.
+func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
+	dir := settleFixture(t)
+	mem := memory.At(dir)
+	staging := &Staging{MemoryDir: t.TempDir()}
+	if err := mem.Snapshot(staging.MemoryDir); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(staging.MemoryDir, "ledgers", "x.md"), []byte("worked\n"), 0o644)
+
+	staged := false
+	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{}}
+	settlement, err := Settle(dir, r, staging, &ExecResult{Outcome: Completed}, Meta{RunID: "run_ok", AttemptID: "attempt_01"}, "", func(fin *Settlement) {
+		staged = fin.Outcome == Completed
+		os.WriteFile(filepath.Join(mem.StateDir(), "x.json"), []byte("{}\n"), 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settlement.Outcome != Completed || settlement.Detail != "" || settlement.Commit == "" {
+		t.Fatalf("settlement = %+v, want clean completion with a commit", settlement)
+	}
+	if !staged {
+		t.Fatal("stage hook should see the settled outcome")
+	}
+	wt := filepath.Join(dir, memory.Dir)
+	if got, _ := os.ReadFile(filepath.Join(wt, "ledgers", "x.md")); string(got) != "worked\n" {
+		t.Fatalf("staged memory not imported: %q", got)
+	}
+	// The stage hook's write is inside the settlement commit, not left dirty.
+	if changed, _ := exec.Command("git", "-C", wt, "status", "--porcelain").Output(); len(changed) != 0 {
+		t.Fatalf("worktree dirty after settlement: %s", changed)
+	}
+	records, _ := os.ReadFile(filepath.Join(wt, "runs.jsonl"))
+	if !strings.Contains(string(records), `"outcome":"completed"`) || !strings.Contains(string(records), `"manual":true`) {
+		t.Fatalf("run record wrong: %s", records)
 	}
 }
 
@@ -345,7 +433,7 @@ func TestConsumeMarkerLivesInStagedMemory(t *testing.T) {
 	}
 	// It is a receipt for the runtime, not memory content: import drops it.
 	r := &routine.Routine{Name: "report", FM: routine.Frontmatter{Consumes: "memory"}}
-	if _, err := ImportMemory(dir, r, staging); err != nil {
+	if _, err := importMemory(dir, r, staging); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(wt, memory.ConsumeMarker)); !os.IsNotExist(err) {
