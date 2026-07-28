@@ -69,7 +69,7 @@ func cmdUsage(args []string) int {
 		if records == 0 {
 			// So is a fresh clone of a running agent: the records exist on
 			// origin, and no amount of waiting materializes them locally.
-			if st := memory.Status("."); !st.Materialized && st.RemoteMemory {
+			if st := memory.At(".").Status(); !st.Materialized && st.RemoteMemory {
 				fmt.Println("memory is not materialized in this checkout -- run openroutines sync to adopt the agent's records from origin")
 			} else {
 				fmt.Println("no runs recorded yet -- records accumulate as routines run")
@@ -93,7 +93,7 @@ func cmdUsage(args []string) int {
 // origin holds. usage reads only the worktree -- that is the contract, and
 // this is what keeps a stale worktree from reading as a quiet zero.
 func printMemoryLag(dir string) {
-	if st := memory.Status(dir); st.Behind > 0 {
+	if st := memory.At(dir).Status(); st.Behind > 0 {
 		fmt.Printf("\nmemory/ is %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to get the latest memory from origin\n", st.Behind, memory.Branch)
 	}
 }
@@ -104,7 +104,7 @@ func printMemoryLag(dir string) {
 // skipped -- absence is not zero -- so the count is what distinguishes an
 // agent that has never run from one whose runs carry no usage.
 func aggregateUsage(dir string) ([]usageRow, int) {
-	raw, err := os.ReadFile(filepath.Join(memory.WorktreePath(dir), "runs.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(memory.At(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
 		return nil, 0
 	}

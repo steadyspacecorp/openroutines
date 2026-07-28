@@ -492,7 +492,7 @@ func (p *Plugin) Install(agentDir string, source Source) (installed, pendingStub
 		return nil, nil, err
 	}
 	installed = append(installed, filepath.Join("plugins", p.Manifest.Name))
-	wt := memory.WorktreePath(agentDir)
+	wt := memory.At(agentDir).Worktree()
 	haveWorktree := false
 	if fi, err := os.Stat(wt); err == nil && fi.IsDir() {
 		haveWorktree = true

@@ -184,7 +184,8 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	// Derived material (installation tokens) is revoked when the attempt
 	// ends, success or failure; a fresh attempt derives fresh material.
 	defer secrets.release()
-	if err := memory.EnsureWorktree(dir); err != nil {
+	mem := memory.At(dir)
+	if err := mem.Ensure(); err != nil {
 		return nil, nil, err
 	}
 
@@ -206,7 +207,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	if err := copyDeclaredSkills(dir, workspace, r.FM.Skills); err != nil {
 		return nil, nil, err
 	}
-	if err := memory.Snapshot(dir, staging.MemoryDir); err != nil {
+	if err := mem.Snapshot(staging.MemoryDir); err != nil {
 		return nil, nil, err
 	}
 	if r.FM.IsConsumer() {
@@ -429,20 +430,21 @@ func Run(dir, name string, keep bool) (*Result, error) {
 		return res, nil // test: discard staging, record nothing
 	}
 
+	mem := memory.At(dir)
 	if res.Outcome == Completed {
 		if _, err := ImportMemory(dir, r, staging); err != nil {
 			res.Outcome = Crashed
-			_ = memory.AppendEvent(dir, fmt.Sprintf("%s supervisor: routine %s (%s) memory rejected: %v", datestamp(), r.Name, runID, err))
+			_ = mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s) memory rejected: %v", datestamp(), r.Name, runID, err))
 		} else {
 			AdvanceConsumer(dir, r, staging, runID)
 		}
 	} else {
-		_ = memory.AppendEvent(dir, fmt.Sprintf("%s supervisor: routine %s (%s) %s after %s (exit %d)", datestamp(), r.Name, runID, res.Outcome, res.Duration, res.ExitCode))
+		_ = mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s) %s after %s (exit %d)", datestamp(), r.Name, runID, res.Outcome, res.Duration, res.ExitCode))
 	}
-	if err := memory.AppendRunRecord(dir, RecordJSON(r, Meta{RunID: runID, AttemptID: "attempt_01"}, 1, exec, true)); err != nil {
+	if err := mem.AppendRunRecord(RecordJSON(r, Meta{RunID: runID, AttemptID: "attempt_01"}, 1, exec, true)); err != nil {
 		return res, err
 	}
-	commit, err := memory.Commit(dir, fmt.Sprintf("Run %s (%s): %s", r.Name, runID, res.Outcome))
+	commit, err := mem.Commit(fmt.Sprintf("Run %s (%s): %s", r.Name, runID, res.Outcome))
 	if err != nil {
 		return res, err
 	}
@@ -455,14 +457,15 @@ func Run(dir, name string, keep bool) (*Result, error) {
 // to events.md is discarded -- the worktree copy wins, the rest of the tree
 // imports normally. Reports whether such a change was discarded.
 func ImportMemory(dir string, r *routine.Routine, staging *Staging) (bool, error) {
+	mem := memory.At(dir)
 	discarded := false
 	if !r.FM.RecordsEvents() {
 		var err error
-		if discarded, err = memory.RestoreFile(dir, staging.MemoryDir, "events.md"); err != nil {
+		if discarded, err = mem.RestoreFile(staging.MemoryDir, "events.md"); err != nil {
 			return false, err
 		}
 	}
-	return discarded, memory.Import(dir, staging.MemoryDir)
+	return discarded, mem.Import(staging.MemoryDir)
 }
 
 // prepareInbox fixes the delivery boundary at the memory branch's current
@@ -471,11 +474,12 @@ func ImportMemory(dir string, r *routine.Routine, staging *Staging) (bool, error
 // cursor starts at the current state: nothing to replay, first consume
 // initializes the cursor.
 func prepareInbox(dir, workspace, consumer string) (string, error) {
-	through, err := memory.Head(dir)
+	mem := memory.At(dir)
+	through, err := mem.Head()
 	if err != nil {
 		return "", err
 	}
-	cursor, err := memory.LoadCursor(dir, consumer)
+	cursor, err := mem.LoadCursor(consumer)
 	if err != nil {
 		return "", err
 	}
@@ -483,7 +487,7 @@ func prepareInbox(dir, workspace, consumer string) (string, error) {
 	var changes []memory.CommitChange
 	if cursor != nil {
 		from = cursor.ConsumedThrough
-		if changes, err = memory.Changes(dir, from, through); err != nil {
+		if changes, err = mem.Changes(from, through); err != nil {
 			return "", err
 		}
 	}
@@ -499,7 +503,7 @@ func AdvanceConsumer(dir string, r *routine.Routine, staging *Staging, runID str
 	if !r.FM.IsConsumer() || staging.ConsumerThrough == "" || !staging.Consumed() {
 		return
 	}
-	_ = memory.SaveCursor(dir, r.Name, memory.Cursor{
+	_ = memory.At(dir).SaveCursor(r.Name, memory.Cursor{
 		ConsumedThrough: staging.ConsumerThrough,
 		ByRun:           runID,
 		At:              time.Now().UTC(),

@@ -9,7 +9,7 @@ import (
 )
 
 // cmdSync reconciles the memory worktree with origin from a person's
-// checkout. The supervisor already runs memory.Sync every tick on the
+// checkout. The supervisor already syncs memory every tick on the
 // deployed side; locally there was no way to reach it, so `git pull` on
 // main -- which moves origin/memory without touching the worktree -- left
 // status, usage, and the ledgers reading old memory with no way to fix it
@@ -28,18 +28,19 @@ func cmdSync(args []string) int {
 		return fail(fmt.Errorf("usage: openroutines sync [--push]"))
 	}
 
-	// EnsureWorktree mints a memory branch when none exists, so make sure
-	// this is an agent repository before touching anything.
+	// Ensure mints a memory branch when none exists, so make sure this is
+	// an agent repository before touching anything.
 	if _, err := os.Stat(config.Path(".")); err != nil {
 		return fail(fmt.Errorf("run sync from inside an agent repository"))
 	}
 
 	// A fresh clone has no memory worktree at all -- the exact checkout most
 	// likely to be reaching for sync. Materialize it the way the supervisor
-	// does at boot: EnsureWorktree adopts the branch from origin and refuses
-	// a tip that does not descend from the accepted baseline.
-	materialized := !memory.Status(".").Materialized
-	if err := memory.EnsureWorktree("."); err != nil {
+	// does at boot: Ensure adopts the branch from origin and refuses a tip
+	// that does not descend from the accepted baseline.
+	mem := memory.At(".")
+	materialized := !mem.Status().Materialized
+	if err := mem.Ensure(); err != nil {
 		return fail(err)
 	}
 	if materialized {
@@ -47,9 +48,9 @@ func cmdSync(args []string) int {
 	}
 
 	// Counted before the sync, while it is still true.
-	behind := memory.Status(".").Behind
+	behind := mem.Status().Behind
 
-	rep := memory.Sync(".")
+	rep := mem.Sync()
 	switch {
 	case rep.NoOrigin:
 		fmt.Println("no origin -- memory is local only, nothing to reconcile")
@@ -78,7 +79,7 @@ func cmdSync(args []string) int {
 		fmt.Printf("memory is up to date with origin/%s\n", memory.Branch)
 	}
 
-	st := memory.Status(".")
+	st := mem.Status()
 	if st.Uncommitted > 0 {
 		fmt.Printf("  ! %d file(s) with uncommitted changes in memory/ -- commit them before they can be published\n", st.Uncommitted)
 	}
@@ -89,7 +90,7 @@ func cmdSync(args []string) int {
 		fmt.Printf("  %d local commit(s) not on origin -- openroutines sync --push to publish\n", st.Unpushed)
 		return 0
 	}
-	if err := memory.Push("."); err != nil {
+	if err := mem.Push(); err != nil {
 		return fail(fmt.Errorf("publishing memory: %w", err))
 	}
 	fmt.Printf("  published %d commit(s) to origin/%s\n", st.Unpushed, memory.Branch)

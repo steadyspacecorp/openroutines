@@ -72,7 +72,7 @@ func fixture(t *testing.T, mode string) string {
 
 func newSupervisor(t *testing.T, dir string) *Supervisor {
 	t.Helper()
-	if err := memory.EnsureWorktree(dir); err != nil {
+	if err := memory.At(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	s, err := New(dir)
@@ -283,7 +283,7 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	if !strings.Contains(inbox, "first run") || !strings.Contains(inbox, "No pending changes") {
 		t.Fatalf("first inbox should be empty-at-current-state: %q", inbox)
 	}
-	c1, err := memory.LoadCursor(dir, "every-minute")
+	c1, err := memory.At(dir).LoadCursor("every-minute")
 	if err != nil || c1 == nil {
 		t.Fatalf("cursor should exist after consume: %+v, %v", c1, err)
 	}
@@ -293,7 +293,7 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	if !strings.Contains(inbox, "Run every-minute") {
 		t.Fatalf("second inbox should carry run 1's completion commit: %q", inbox)
 	}
-	c2, err := memory.LoadCursor(dir, "every-minute")
+	c2, err := memory.At(dir).LoadCursor("every-minute")
 	if err != nil || c2 == nil || c2.ConsumedThrough == c1.ConsumedThrough {
 		t.Fatalf("cursor should have advanced: %+v -> %+v, %v", c1, c2, err)
 	}
