@@ -70,22 +70,25 @@ func newGitCmd(dir string, args []string) *exec.Cmd {
 	return cmd
 }
 
+// hermeticConfig is the -c configuration every git invocation carries: no
+// hooks, no file-protocol tricks, a fixed commit identity. No background
+// writers either: auto-gc detaches from the invoking command and keeps
+// writing .git/objects after it returns -- racing test TempDir cleanup (the
+// supervisor suite's flake) and, in production, container shutdown.
+// Repacking is origin's concern, not a run's.
+var hermeticConfig = []string{
+	"-c", "core.hooksPath=/dev/null",
+	"-c", "protocol.file.allow=user",
+	"-c", "user.name=openroutines",
+	"-c", "user.email=agent@openroutines.dev",
+	"-c", "gc.auto=0",
+	"-c", "maintenance.auto=false",
+}
+
 // git runs a git command against the repo with hermetic configuration:
-// no system/global config, no hooks, no file-protocol tricks.
+// no system/global config leaks in.
 func git(dir string, args ...string) (string, error) {
-	base := []string{
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "protocol.file.allow=user",
-		"-c", "user.name=openroutines",
-		"-c", "user.email=agent@openroutines.dev",
-		// No background writers: auto-gc detaches from the invoking command
-		// and keeps writing .git/objects after it returns -- racing test
-		// TempDir cleanup (the supervisor suite's flake) and, in production,
-		// container shutdown. Repacking is origin's concern, not a run's.
-		"-c", "gc.auto=0",
-		"-c", "maintenance.auto=false",
-	}
-	cmd := newGitCmd(dir, append(base, args...))
+	cmd := newGitCmd(dir, append(hermeticConfig, args...))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
@@ -141,7 +144,7 @@ func EnsureWorktree(repoDir string) error {
 		if err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)
 		}
-		commit, err := git(repoDir, "-c", "user.name=openroutines", "-c", "user.email=agent@openroutines.dev", "commit-tree", tree, "-m", "Memory branch root")
+		commit, err := git(repoDir, "commit-tree", tree, "-m", "Memory branch root")
 		if err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)
 		}
