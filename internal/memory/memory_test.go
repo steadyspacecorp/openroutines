@@ -156,6 +156,56 @@ func TestRestoreFileDiscardsStagedChange(t *testing.T) {
 	}
 }
 
+// Removing a routine must remove every per-routine state file, subdirectories
+// included: a leftover trigger baseline means a re-created routine with the
+// same name never fires on its first genuine change, and a leftover cursor
+// replays or skips an inbox.
+func TestRemoveRoutineStateCoversAllSubtrees(t *testing.T) {
+	dir := t.TempDir()
+	mem := At(dir)
+	sd := mem.StateDir()
+	for _, p := range []string{
+		filepath.Join(sd, "x.json"),
+		filepath.Join(sd, "triggers", "x.json"),
+		filepath.Join(sd, "cursors", "x.json"),
+		filepath.Join(sd, "y.json"),
+		filepath.Join(sd, "triggers", "y.json"),
+	} {
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte("{}"), 0o644)
+	}
+
+	removed, err := mem.RemoveRoutineState("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 3 {
+		t.Fatalf("expected 3 removed paths, got %v", removed)
+	}
+	for _, p := range []string{
+		filepath.Join(sd, "x.json"),
+		filepath.Join(sd, "triggers", "x.json"),
+		filepath.Join(sd, "cursors", "x.json"),
+	} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s should be gone", p)
+		}
+	}
+	for _, p := range []string{filepath.Join(sd, "y.json"), filepath.Join(sd, "triggers", "y.json")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s should survive: %v", p, err)
+		}
+	}
+
+	// Idempotent, and quiet when there is no state at all.
+	if removed, err := mem.RemoveRoutineState("x"); err != nil || len(removed) != 0 {
+		t.Fatalf("second removal: %v, %v", removed, err)
+	}
+	if removed, err := At(t.TempDir()).RemoveRoutineState("x"); err != nil || removed != nil {
+		t.Fatalf("no state dir: %v, %v", removed, err)
+	}
+}
+
 // A second clone (a new container generation) must adopt the existing memory
 // branch from origin instead of minting a fresh root.
 func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {

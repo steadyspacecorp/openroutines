@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 )
@@ -209,11 +210,13 @@ func routinesRemove(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("Removed %s\n", path)
-	// Best effort: clean up the routine's scheduling state so the memory
-	// branch doesn't accumulate orphans. Its ledger stays -- that's memory.
-	statePath := filepath.Join("memory", "state", r.Name+".json")
-	if err := os.Remove(statePath); err == nil {
-		fmt.Printf("Removed scheduling state %s (commit inside memory/ to record it)\n", statePath)
+	// Best effort: clean up the routine's state on the memory branch --
+	// scheduling state, trigger baseline, consumer cursor -- so the branch
+	// doesn't accumulate orphans that misfire a later routine with the same
+	// name. Its ledger stays -- that's memory.
+	removed, _ := memory.At(".").RemoveRoutineState(r.Name)
+	for _, p := range removed {
+		fmt.Printf("Removed %s (commit inside memory/ to record it)\n", p)
 	}
 	return 0
 }
