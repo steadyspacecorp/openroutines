@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 // OpenCodeFileName is the harness's config file, named for opencode.
@@ -84,14 +85,34 @@ func (o *OpenCode) Drift(modelPrefixes []string) []string {
 	return warnings
 }
 
-// AddMCPServer inserts one server entry into opencode.json's mcp block.
+// mcpEntry renders a declared server as the opencode.json entry a person
+// consents to. Always remote (the framework's only supported transport); a
+// named credential becomes the standard bearer header referencing the
+// credential's run-environment name.
+func mcpEntry(url, credential string) map[string]any {
+	entry := map[string]any{"type": "remote", "url": url}
+	if credential != "" {
+		entry["headers"] = map[string]any{"Authorization": "Bearer {env:" + strings.ToUpper(credential) + "}"}
+	}
+	return entry
+}
+
+// MCPSnippet is a declared server's entry as the exact JSON shown at the
+// consent prompt and in the paste step -- what you read is what AddMCPServer
+// lands.
+func MCPSnippet(name, url, credential string) string {
+	entry, _ := json.Marshal(mcpEntry(url, credential))
+	return fmt.Sprintf("%q: %s", name, entry)
+}
+
+// AddMCPServer inserts one declared server into opencode.json's mcp block.
 // Refuses to overwrite: an existing entry is the person's. The caller is
 // responsible for the consent gate -- this writes an endpoint definition
 // into harness config, which is why plugins may only ever declare servers
 // and a person confirms each insertion interactively. Rewrites the file
 // with two-space indentation; encoding/json sorts object keys, so hand
 // ordering is not preserved.
-func AddMCPServer(dir, name string, entry map[string]any) error {
+func AddMCPServer(dir, name, url, credential string) error {
 	path := filepath.Join(dir, OpenCodeFileName)
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -108,7 +129,7 @@ func AddMCPServer(dir, name string, entry map[string]any) error {
 	if _, exists := mcp[name]; exists {
 		return fmt.Errorf("mcp server %q is already defined in %s", name, OpenCodeFileName)
 	}
-	mcp[name] = entry
+	mcp[name] = mcpEntry(url, credential)
 	cfg["mcp"] = mcp
 	out, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
