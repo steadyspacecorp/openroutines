@@ -430,33 +430,82 @@ func Run(dir, name string, keep bool) (*Result, error) {
 		return res, nil // test: discard staging, record nothing
 	}
 
-	mem := memory.At(dir)
-	if res.Outcome == Completed {
-		if _, err := ImportMemory(dir, r, staging); err != nil {
-			res.Outcome = Crashed
-			_ = mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s) memory rejected: %v", datestamp(), r.Name, runID, err))
-		} else {
-			AdvanceConsumer(dir, r, staging, runID)
-		}
-	} else {
-		_ = mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s) %s after %s (exit %d)", datestamp(), r.Name, runID, res.Outcome, res.Duration, res.ExitCode))
-	}
-	if err := mem.AppendRunRecord(RecordJSON(r, Meta{RunID: runID, AttemptID: "attempt_01"}, 1, exec, true)); err != nil {
-		return res, err
-	}
-	commit, err := mem.Commit(fmt.Sprintf("Run %s (%s): %s", r.Name, runID, res.Outcome))
-	if err != nil {
-		return res, err
-	}
-	res.Commit = commit
-	return res, nil
+	settlement, err := Settle(dir, r, staging, exec, Meta{RunID: runID, AttemptID: "attempt_01"}, "", nil)
+	res.Outcome = settlement.Outcome
+	res.Commit = settlement.Commit
+	return res, err
 }
 
-// ImportMemory applies routine-level memory policy, then imports the staged
+// Settlement is one attempt's settled, durable outcome.
+type Settlement struct {
+	Outcome   Outcome // downgraded to Crashed when staged memory was rejected
+	Detail    string  // the failure description recorded; "" for clean completions
+	Discarded bool    // staged events.md change discarded (events: false)
+	Commit    string  // settlement commit hash, "" when nothing changed
+}
+
+// Settle makes one attempt's end durable in memory -- the single settlement
+// path for manual and scheduled runs. A completed attempt's staged memory is
+// imported under routine policy and its consumer cursor advanced; a rejected
+// import downgrades the outcome to Crashed. Any failure is recorded as an
+// event, every attempt as a run record, and the whole settlement commits as
+// one memory commit. stage, when set, runs before that commit so caller
+// bookkeeping (scheduling state, abandonment tasks) rides the same commit.
+// detail overrides the derived failure description -- for attempts that
+// failed before producing a result; pass it pre-redacted. A Canceled attempt
+// gets only its run record: nothing settled -- the same logical run retries
+// -- and no commit of its own (the shutdown commit carries the record).
+func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, meta Meta, detail string, stage func(*Settlement)) (*Settlement, error) {
+	mem := memory.At(dir)
+	s := &Settlement{Outcome: res.Outcome, Detail: detail}
+	if res.Outcome == Completed {
+		discarded, err := importMemory(dir, r, staging)
+		if err != nil {
+			s.Outcome = Crashed
+			s.Detail = "memory rejected: " + err.Error()
+		} else {
+			s.Discarded = discarded
+			advanceConsumer(dir, r, staging, meta.RunID)
+		}
+	} else if s.Detail == "" && res.Outcome != Canceled {
+		s.Detail = fmt.Sprintf("%s after %s (exit %d)", res.Outcome, res.Duration, res.ExitCode)
+		if res.Hint != "" {
+			s.Detail += " -- " + res.Hint
+		}
+	}
+	if s.Outcome != Completed && s.Outcome != Canceled {
+		_ = mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.AttemptID, s.Detail))
+	}
+	if stage != nil {
+		stage(s)
+	}
+	rec := *res
+	rec.Outcome = s.Outcome
+	if err := mem.AppendRunRecord(recordJSON(r, meta, parseAttempt(meta.AttemptID), &rec, meta.ScheduledFor == "")); err != nil {
+		return s, err
+	}
+	if s.Outcome == Canceled {
+		return s, nil
+	}
+	commit, err := mem.Commit(fmt.Sprintf("Run %s (%s): %s", r.Name, meta.RunID, s.Outcome))
+	if err != nil {
+		return s, err
+	}
+	s.Commit = commit
+	return s, nil
+}
+
+func parseAttempt(attemptID string) int {
+	var n int
+	_, _ = fmt.Sscanf(attemptID, "attempt_%d", &n)
+	return n
+}
+
+// importMemory applies routine-level memory policy, then imports the staged
 // tree. A routine with events: false cannot record events: a staged change
 // to events.md is discarded -- the worktree copy wins, the rest of the tree
 // imports normally. Reports whether such a change was discarded.
-func ImportMemory(dir string, r *routine.Routine, staging *Staging) (bool, error) {
+func importMemory(dir string, r *routine.Routine, staging *Staging) (bool, error) {
 	mem := memory.At(dir)
 	discarded := false
 	if !r.FM.RecordsEvents() {
@@ -495,11 +544,11 @@ func prepareInbox(dir, workspace, consumer string) (string, error) {
 	return through, os.WriteFile(filepath.Join(workspace, memory.InboxFileName), []byte(inbox), 0o644)
 }
 
-// AdvanceConsumer moves a consumer routine's cursor through the inbox it just
-// consumed. Call after a successful import, before the completion commit, so
+// advanceConsumer moves a consumer routine's cursor through the inbox it just
+// consumed. Runs after a successful import, before the completion commit, so
 // consumption and results land in the same commit. No marker, no advance:
 // completing a run does not imply consuming its inbox.
-func AdvanceConsumer(dir string, r *routine.Routine, staging *Staging, runID string) {
+func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID string) {
 	if !r.FM.IsConsumer() || staging.ConsumerThrough == "" || !staging.Consumed() {
 		return
 	}
@@ -510,10 +559,10 @@ func AdvanceConsumer(dir string, r *routine.Routine, staging *Staging, runID str
 	})
 }
 
-// RecordJSON formats one run record line for runs.jsonl. Usage fields are
+// recordJSON formats one run record line for runs.jsonl. Usage fields are
 // per attempt (spend happens per attempt; retries would double-count a
 // run-level figure) and absent means the runtime didn't report, never zero.
-func RecordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, manual bool) string {
+func recordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, manual bool) string {
 	fields := map[string]any{
 		"run_id":          meta.RunID,
 		"routine":         r.Name,

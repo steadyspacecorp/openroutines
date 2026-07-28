@@ -375,87 +375,67 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	s.Log.Printf("%s: %s %s starting (scheduled %s)", r.Name, p.RunID, meta.AttemptID, meta.ScheduledFor)
 
 	res, staging, err := runner.Execute(ctx, s.Dir, agent, r, meta)
+	detail := ""
 	if err != nil {
 		s.Log.Printf("%s: %s failed to start: %v", r.Name, p.RunID, err)
-		s.settleFailure(r, st, &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}, meta, now, err.Error())
-		return
+		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
+		// Start-failure text quotes raw errors (git, provider); memory events
+		// are committed and pushed, so redact before recording.
+		detail = scrub.Redact(err.Error(), s.secrets)
+	} else {
+		defer staging.Cleanup()
 	}
-	defer staging.Cleanup()
 
-	switch res.Outcome {
-	case runner.Completed:
-		discarded, err := runner.ImportMemory(s.Dir, r, staging)
-		if err != nil {
-			s.settleFailure(r, st, res, meta, now, "memory rejected: "+err.Error())
-			return
+	// The settlement commit carries this attempt's scheduling consequences:
+	// success clears pending and advances the watermark; the final failed
+	// attempt abandons the run -- a human-owned task (someone must act)
+	// alongside the advanced watermark; shutdown undoes the attempt
+	// increment so an interrupted attempt doesn't count toward abandonment
+	// and the same logical run retries on next boot.
+	abandoned := false
+	settlement, serr := runner.Settle(s.Dir, r, staging, res, meta, detail, func(fin *runner.Settlement) {
+		date := now.UTC().Format("2006-01-02")
+		switch {
+		case fin.Outcome == runner.Canceled:
+			p.Attempts--
+		case fin.Outcome == runner.Completed:
+			st.Watermark = p.CoveredThrough
+			st.Pending = nil
+			st.RecordSuccess()
+		case p.Attempts >= MaxAttempts:
+			abandoned = true
+			_ = s.mem.AppendHumanTask("task-"+p.RunID,
+				fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, fin.Detail, date))
+			st.Watermark = p.CoveredThrough
+			st.Pending = nil
+			if cooldown := st.RecordAbandonment(now); cooldown > 0 {
+				_ = s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown))
+				s.Log.Printf("%s: circuit breaker tripped -- cooling down for %s", r.Name, cooldown)
+			}
 		}
-		if discarded {
-			s.Log.Printf("%s: discarded staged events.md change (events: false)", r.Name)
-		}
-		runner.AdvanceConsumer(s.Dir, r, staging, p.RunID)
-		st.Watermark = p.CoveredThrough
-		st.Pending = nil
-		st.RecordSuccess()
 		if err := st.Save(s.stateDir()); err != nil {
 			s.Log.Printf("%s: %v", r.Name, err)
 		}
-		_ = s.mem.AppendRunRecord(runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
-		if _, err := s.mem.Commit(fmt.Sprintf("Run %s (%s): completed", r.Name, p.RunID)); err != nil {
-			s.Log.Printf("%s: commit: %v", r.Name, err)
-		}
+	})
+	if serr != nil {
+		s.Log.Printf("%s: %s settle: %v", r.Name, p.RunID, serr)
+	}
+	if settlement.Discarded {
+		s.Log.Printf("%s: discarded staged events.md change (events: false)", r.Name)
+	}
+	switch {
+	case settlement.Outcome == runner.Canceled:
+		s.Log.Printf("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
+		return // no push: shutdown's final commit and push carry the record
+	case settlement.Outcome == runner.Completed:
 		s.pushBestEffort()
 		s.Log.Printf("%s: %s completed in %s", r.Name, p.RunID, res.Duration)
-	case runner.Canceled:
-		// Shutdown killed the attempt: pending survives untouched (the same
-		// logical run retries on next boot); undo the attempt increment so
-		// an interrupted attempt doesn't count toward abandonment.
-		p.Attempts--
-		_ = st.Save(s.stateDir())
-		_ = s.mem.AppendRunRecord(runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
-		s.Log.Printf("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
-	default:
-		detail := fmt.Sprintf("%s after %s (exit %d)", res.Outcome, res.Duration, res.ExitCode)
-		if res.Hint != "" {
-			detail += " -- " + res.Hint
-		}
-		s.settleFailure(r, st, res, meta, now, detail)
-	}
-}
-
-// settleFailure records a failed attempt: an event (it happened), a run
-// record, and -- past the attempt cap -- abandonment, which is a human-owned
-// task (someone must act) alongside the advanced watermark.
-func (s *Supervisor) settleFailure(r *routine.Routine, st *schedule.State, res *runner.ExecResult, meta runner.Meta, now time.Time, detail string) {
-	// Failure detail often quotes raw errors (git, provider); memory events
-	// are committed and pushed, so redact before recording.
-	detail = scrub.Redact(detail, s.secrets)
-	p := st.Pending
-	date := now.UTC().Format("2006-01-02")
-	_ = s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", date, r.Name, p.RunID, meta.AttemptID, detail))
-	_ = s.mem.AppendRunRecord(runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
-	abandoned := false
-	if p.Attempts >= MaxAttempts {
-		abandoned = true
-		_ = s.mem.AppendHumanTask("task-"+p.RunID,
-			fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, detail, date))
-		st.Watermark = p.CoveredThrough
-		st.Pending = nil
-		if cooldown := st.RecordAbandonment(now); cooldown > 0 {
-			_ = s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown))
-			s.Log.Printf("%s: circuit breaker tripped -- cooling down for %s", r.Name, cooldown)
-		}
-	}
-	if err := st.Save(s.stateDir()); err != nil {
-		s.Log.Printf("%s: %v", r.Name, err)
-	}
-	if _, err := s.mem.Commit(fmt.Sprintf("Run %s (%s): %s", r.Name, p.RunID, res.Outcome)); err != nil {
-		s.Log.Printf("%s: commit: %v", r.Name, err)
-	}
-	s.pushBestEffort()
-	if abandoned {
+	case abandoned:
+		s.pushBestEffort()
 		s.Log.Printf("%s: %s abandoned after %d attempts", r.Name, p.RunID, MaxAttempts)
-	} else {
-		s.Log.Printf("%s: %s attempt failed (%s) -- will retry", r.Name, p.RunID, detail)
+	default:
+		s.pushBestEffort()
+		s.Log.Printf("%s: %s attempt failed (%s) -- will retry", r.Name, p.RunID, settlement.Detail)
 	}
 }
 
@@ -619,10 +599,4 @@ func (s *Supervisor) renewLease(now time.Time) bool {
 	}
 	s.Log.Printf("lease renewal failed -- pausing dispatch this tick")
 	return false
-}
-
-func parseAttempt(attemptID string) int {
-	var n int
-	_, _ = fmt.Sscanf(attemptID, "attempt_%d", &n)
-	return n
 }
