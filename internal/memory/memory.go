@@ -498,19 +498,26 @@ func AppendRunRecord(repoDir, record string) error {
 // status` -- root `git status` never shows memory churn, so this must.
 type WorktreeStatus struct {
 	Materialized bool
+	RemoteMemory bool   // origin/memory ref exists locally: the agent has history even if this checkout hasn't adopted it
 	Uncommitted  int    // files with uncommitted changes (human curation in progress)
 	LastCommit   string // subject of the latest memory commit
 	Unpushed     int    // commits origin hasn't seen yet
 	Behind       int    // commits on origin this worktree has not taken
 }
 
-// Status inspects the memory worktree; zero value when not yet materialized.
+// Status inspects the memory worktree; only RemoteMemory is set when not
+// yet materialized -- it distinguishes a fresh clone of a running agent
+// (adopt with sync) from an agent that has never run.
 func Status(repoDir string) WorktreeStatus {
+	var st WorktreeStatus
+	if _, err := git(repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch); err == nil {
+		st.RemoteMemory = true
+	}
 	wt := WorktreePath(repoDir)
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err != nil {
-		return WorktreeStatus{}
+		return st
 	}
-	st := WorktreeStatus{Materialized: true}
+	st.Materialized = true
 	if out, err := git(wt, "status", "--porcelain"); err == nil && out != "" {
 		st.Uncommitted = len(strings.Split(out, "\n"))
 	}
