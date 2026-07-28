@@ -2,7 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 )
 
@@ -24,6 +26,24 @@ func cmdSync(args []string) int {
 			continue
 		}
 		return fail(fmt.Errorf("usage: openroutines sync [--push]"))
+	}
+
+	// EnsureWorktree mints a memory branch when none exists, so make sure
+	// this is an agent repository before touching anything.
+	if _, err := os.Stat(config.Path(".")); err != nil {
+		return fail(fmt.Errorf("run sync from inside an agent repository"))
+	}
+
+	// A fresh clone has no memory worktree at all -- the exact checkout most
+	// likely to be reaching for sync. Materialize it the way the supervisor
+	// does at boot: EnsureWorktree adopts the branch from origin and refuses
+	// a tip that does not descend from the accepted baseline.
+	materialized := !memory.Status(".").Materialized
+	if err := memory.EnsureWorktree("."); err != nil {
+		return fail(err)
+	}
+	if materialized {
+		fmt.Printf("materialized memory/ from the %s branch\n", memory.Branch)
 	}
 
 	// Counted before the sync, while it is still true.
