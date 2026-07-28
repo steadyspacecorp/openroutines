@@ -36,6 +36,8 @@ type Frontmatter struct {
 	Effort      string        `yaml:"effort,omitempty"` // provider-specific reasoning effort (opencode --variant)
 	Events      *bool         `yaml:"events,omitempty"`
 	Consumes    string        `yaml:"consumes,omitempty"` // "memory": this routine consumes the memory change feed
+	Webfetch    bool          `yaml:"webfetch,omitempty"`  // grants the webfetch tool; external content is an injection vector, so off by default
+	Websearch   bool          `yaml:"websearch,omitempty"` // grants the websearch tool (and enables its search backend)
 }
 
 // IsActive applies the default: routines are active unless explicitly not.
