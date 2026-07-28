@@ -351,7 +351,7 @@ func cmdCheck(_ []string) int {
 
 	// Memory hygiene: task discipline is convention, not schema -- warn, never
 	// rewrite. The supervisor does not interpret model-authored memory.
-	if raw, err := os.ReadFile(filepath.Join(memory.WorktreePath(dir), "tasks.md")); err == nil {
+	if raw, err := os.ReadFile(filepath.Join(memory.At(dir).Worktree(), "tasks.md")); err == nil {
 		inFence := false
 		for _, line := range strings.Split(string(raw), "\n") {
 			t := strings.TrimSpace(line)

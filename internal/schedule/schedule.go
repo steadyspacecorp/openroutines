@@ -15,9 +15,6 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// StateDirName is the supervisor-owned directory inside memory/.
-const StateDirName = "state"
-
 // Pending is a logical run that exists durably before it is allowed to act.
 type Pending struct {
 	RunID          string    `json:"run_id"`

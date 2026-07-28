@@ -19,7 +19,7 @@ func deliveryFixture(t *testing.T) string {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
-	if err := EnsureWorktree(dir); err != nil {
+	if err := At(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -27,7 +27,7 @@ func deliveryFixture(t *testing.T) string {
 
 func appendMemory(t *testing.T, dir, file, line string) {
 	t.Helper()
-	p := filepath.Join(WorktreePath(dir), file)
+	p := filepath.Join(At(dir).Worktree(), file)
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -40,13 +40,13 @@ func appendMemory(t *testing.T, dir, file, line string) {
 
 func TestChangesWalksCommitByCommit(t *testing.T) {
 	dir := deliveryFixture(t)
-	from, err := Head(dir)
+	from, err := At(dir).Head()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: opened PR #1")
-	if _, err := Commit(dir, "Run doc-drift (run_a): completed"); err != nil {
+	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
 	appendMemory(t, dir, "events.md", "- 2026-07-21 a11y-sweep NO-OP: all clean")
@@ -54,15 +54,15 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 	// Ledger and supervisor-owned writes must never reach a consumer.
 	appendMemory(t, dir, "ledgers/doc-drift.md", "- private cursor note")
 	appendMemory(t, dir, "runs.jsonl", `{"run_id":"run_b"}`)
-	if _, err := Commit(dir, "Run a11y-sweep (run_b): completed"); err != nil {
+	if _, err := At(dir).Commit("Run a11y-sweep (run_b): completed"); err != nil {
 		t.Fatal(err)
 	}
 
-	through, err := Head(dir)
+	through, err := At(dir).Head()
 	if err != nil {
 		t.Fatal(err)
 	}
-	changes, err := Changes(dir, from, through)
+	changes, err := At(dir).Changes(from, through)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,22 +95,22 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 // endpoint diff.
 func TestChangesSurvivePruning(t *testing.T) {
 	dir := deliveryFixture(t)
-	from, _ := Head(dir)
+	from, _ := At(dir).Head()
 
 	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
-	if _, err := Commit(dir, "Run doc-drift (run_a): completed"); err != nil {
+	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate retention pruning the line.
-	p := filepath.Join(WorktreePath(dir), "events.md")
+	p := filepath.Join(At(dir).Worktree(), "events.md")
 	raw, _ := os.ReadFile(p)
 	os.WriteFile(p, []byte(strings.ReplaceAll(string(raw), "- 2026-07-21 doc-drift: ephemeral fact\n", "")), 0o644)
-	if _, err := Commit(dir, "Trim memory to retention window"); err != nil {
+	if _, err := At(dir).Commit("Trim memory to retention window"); err != nil {
 		t.Fatal(err)
 	}
 
-	through, _ := Head(dir)
-	changes, err := Changes(dir, from, through)
+	through, _ := At(dir).Head()
+	changes, err := At(dir).Changes(from, through)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,25 +127,25 @@ func TestChangesSurvivePruning(t *testing.T) {
 
 func TestCursorRoundTripAndListing(t *testing.T) {
 	dir := deliveryFixture(t)
-	head, _ := Head(dir)
-	if c, err := LoadCursor(dir, "check-in"); err != nil || c != nil {
+	head, _ := At(dir).Head()
+	if c, err := At(dir).LoadCursor("check-in"); err != nil || c != nil {
 		t.Fatalf("expected no cursor yet, got %+v, %v", c, err)
 	}
 	want := Cursor{ConsumedThrough: head, ByRun: "run_x", At: time.Now().UTC().Truncate(time.Second)}
-	if err := SaveCursor(dir, "check-in", want); err != nil {
+	if err := At(dir).SaveCursor("check-in", want); err != nil {
 		t.Fatal(err)
 	}
-	got, err := LoadCursor(dir, "check-in")
+	got, err := At(dir).LoadCursor("check-in")
 	if err != nil || got == nil || got.ConsumedThrough != head || got.ByRun != "run_x" {
 		t.Fatalf("cursor round trip failed: %+v, %v", got, err)
 	}
-	all, err := Cursors(dir)
+	all, err := At(dir).Cursors()
 	if err != nil || len(all) != 1 {
 		t.Fatalf("cursor listing failed: %+v, %v", all, err)
 	}
 	// Cursors live under state/: supervisor-owned, never staged into a run.
 	staging := t.TempDir()
-	if err := Snapshot(dir, staging); err != nil {
+	if err := At(dir).Snapshot(staging); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(staging, "state", "cursors", "check-in.json")); !os.IsNotExist(err) {
@@ -172,13 +172,13 @@ func TestRenderInboxShapes(t *testing.T) {
 
 func TestAppendHumanTaskSectionsAndDedup(t *testing.T) {
 	dir := deliveryFixture(t)
-	if err := AppendHumanTask(dir, "task-run_a", "Investigate routine x (source: supervisor; added 2026-07-21)"); err != nil {
+	if err := At(dir).AppendHumanTask("task-run_a", "Investigate routine x (source: supervisor; added 2026-07-21)"); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendHumanTask(dir, "task-run_a", "Investigate routine x (source: supervisor; added 2026-07-21)"); err != nil {
+	if err := At(dir).AppendHumanTask("task-run_a", "Investigate routine x (source: supervisor; added 2026-07-21)"); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := os.ReadFile(filepath.Join(WorktreePath(dir), "tasks.md"))
+	raw, _ := os.ReadFile(filepath.Join(At(dir).Worktree(), "tasks.md"))
 	text := string(raw)
 	if got := strings.Count(text, "task-run_a"); got != 1 {
 		t.Fatalf("expected exactly one task-run_a entry, got %d: %s", got, text)
@@ -195,15 +195,15 @@ func TestAppendHumanTaskSectionsAndDedup(t *testing.T) {
 func TestLoadCursorRejectsNonSHA(t *testing.T) {
 	dir := t.TempDir()
 	for _, bad := range []string{"--output=/tmp/evil", "HEAD", "refs/heads/main", "abc", ""} {
-		path := cursorPath(dir, "c")
+		path := At(dir).cursorPath("c")
 		os.MkdirAll(filepath.Dir(path), 0o755)
 		os.WriteFile(path, []byte(`{"consumed_through":"`+bad+`"}`), 0o644)
-		if _, err := LoadCursor(dir, "c"); err == nil {
+		if _, err := At(dir).LoadCursor("c"); err == nil {
 			t.Errorf("cursor value %q should be rejected", bad)
 		}
 	}
-	os.WriteFile(cursorPath(dir, "c"), []byte(`{"consumed_through":"0123456789abcdef0123456789abcdef01234567"}`), 0o644)
-	if _, err := LoadCursor(dir, "c"); err != nil {
+	os.WriteFile(At(dir).cursorPath("c"), []byte(`{"consumed_through":"0123456789abcdef0123456789abcdef01234567"}`), 0o644)
+	if _, err := At(dir).LoadCursor("c"); err != nil {
 		t.Fatalf("full SHA should load: %v", err)
 	}
 }
@@ -211,26 +211,26 @@ func TestLoadCursorRejectsNonSHA(t *testing.T) {
 func TestSupervisorEntriesFlattenAndResolve(t *testing.T) {
 	dir := deliveryFixture(t)
 	raw := "intent push failed: exit status 128: Permission denied (publickey).\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights"
-	if err := AppendEvent(dir, "2026-07-24 supervisor: "+raw); err != nil {
+	if err := At(dir).AppendEvent("2026-07-24 supervisor: " + raw); err != nil {
 		t.Fatal(err)
 	}
-	events, _ := os.ReadFile(filepath.Join(WorktreePath(dir), "events.md"))
+	events, _ := os.ReadFile(filepath.Join(At(dir).Worktree(), "events.md"))
 	if strings.Contains(string(events), "\nfatal:") {
 		t.Fatalf("multi-line error not flattened in events.md: %s", events)
 	}
-	if err := AppendHumanTask(dir, "task-push-20260724", raw+" (source: supervisor; added 2026-07-24)"); err != nil {
+	if err := At(dir).AppendHumanTask("task-push-20260724", raw+" (source: supervisor; added 2026-07-24)"); err != nil {
 		t.Fatal(err)
 	}
-	tasks, _ := os.ReadFile(filepath.Join(WorktreePath(dir), "tasks.md"))
+	tasks, _ := os.ReadFile(filepath.Join(At(dir).Worktree(), "tasks.md"))
 	if strings.Contains(string(tasks), "\nfatal:") {
 		t.Fatalf("multi-line error not flattened in tasks.md: %s", tasks)
 	}
 
-	changed, err := ResolveHumanTasks(dir, "task-push-", "done 2026-07-25 -- push to origin recovered")
+	changed, err := At(dir).ResolveHumanTasks("task-push-", "done 2026-07-25 -- push to origin recovered")
 	if err != nil || !changed {
 		t.Fatalf("resolve: changed=%v err=%v, want true nil", changed, err)
 	}
-	tasks, _ = os.ReadFile(filepath.Join(WorktreePath(dir), "tasks.md"))
+	tasks, _ = os.ReadFile(filepath.Join(At(dir).Worktree(), "tasks.md"))
 	text := string(tasks)
 	if strings.Contains(text, "- [ ] `task-push-") || !strings.Contains(text, "- [x] `task-push-20260724`") {
 		t.Fatalf("task not resolved in place: %s", text)
@@ -238,7 +238,7 @@ func TestSupervisorEntriesFlattenAndResolve(t *testing.T) {
 	if !strings.Contains(text, "; done 2026-07-25 -- push to origin recovered)") {
 		t.Fatalf("resolution not folded into the trailing parens: %s", text)
 	}
-	if changed, err = ResolveHumanTasks(dir, "task-push-", "done again"); err != nil || changed {
+	if changed, err = At(dir).ResolveHumanTasks("task-push-", "done again"); err != nil || changed {
 		t.Fatalf("second resolve: changed=%v err=%v, want false nil", changed, err)
 	}
 }

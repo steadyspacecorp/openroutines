@@ -25,13 +25,13 @@ type Cursor struct {
 	At              time.Time `json:"at"`
 }
 
-func cursorPath(repoDir, consumer string) string {
-	return filepath.Join(WorktreePath(repoDir), "state", "cursors", consumer+".json")
+func (m *Memory) cursorPath(consumer string) string {
+	return filepath.Join(m.StateDir(), "cursors", consumer+".json")
 }
 
 // LoadCursor returns nil when the consumer has no cursor yet (first run).
-func LoadCursor(repoDir, consumer string) (*Cursor, error) {
-	raw, err := os.ReadFile(cursorPath(repoDir, consumer))
+func (m *Memory) LoadCursor(consumer string) (*Cursor, error) {
+	raw, err := os.ReadFile(m.cursorPath(consumer))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -56,8 +56,8 @@ var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
 // SaveCursor writes the cursor into the worktree; the caller's next Commit
 // carries it, so consumption is recorded in the run's completion commit.
-func SaveCursor(repoDir, consumer string, c Cursor) error {
-	p := cursorPath(repoDir, consumer)
+func (m *Memory) SaveCursor(consumer string, c Cursor) error {
+	p := m.cursorPath(consumer)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
@@ -69,8 +69,8 @@ func SaveCursor(repoDir, consumer string, c Cursor) error {
 }
 
 // Cursors lists every consumer with a cursor, for `openroutines status`.
-func Cursors(repoDir string) (map[string]Cursor, error) {
-	dir := filepath.Join(WorktreePath(repoDir), "state", "cursors")
+func (m *Memory) Cursors() (map[string]Cursor, error) {
+	dir := filepath.Join(m.StateDir(), "cursors")
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -84,7 +84,7 @@ func Cursors(repoDir string) (map[string]Cursor, error) {
 		if !ok {
 			continue
 		}
-		if c, err := LoadCursor(repoDir, name); err == nil && c != nil {
+		if c, err := m.LoadCursor(name); err == nil && c != nil {
 			out[name] = *c
 		}
 	}
@@ -93,8 +93,8 @@ func Cursors(repoDir string) (map[string]Cursor, error) {
 
 // Head returns the memory branch's current commit: the fixed `through`
 // boundary an inbox is prepared against.
-func Head(repoDir string) (string, error) {
-	return git(WorktreePath(repoDir), "rev-parse", "HEAD")
+func (m *Memory) Head() (string, error) {
+	return git(m.Worktree(), "rev-parse", "HEAD")
 }
 
 // CommitChange is one memory commit's model-facing changes.
@@ -120,7 +120,7 @@ var deliveryExcludes = []string{":(exclude)state", ":(exclude)runs.jsonl", ":(ex
 // additions and removals. Commit-by-commit, never a net endpoint diff: an
 // event added and later pruned by retention must still reach a consumer that
 // hasn't seen it.
-func Changes(repoDir, from, through string) ([]CommitChange, error) {
+func (m *Memory) Changes(from, through string) ([]CommitChange, error) {
 	if from == "" || through == "" {
 		return nil, fmt.Errorf("delivery changes: empty commit range")
 	}
@@ -131,7 +131,7 @@ func Changes(repoDir, from, through string) ([]CommitChange, error) {
 		"--format=%x00%H%x1f%ad%x1f%s", "-p", "-U0", "--no-color",
 		from + ".." + through, "--", ".",
 	}, deliveryExcludes...)
-	out, err := git(WorktreePath(repoDir), args...)
+	out, err := git(m.Worktree(), args...)
 	if err != nil {
 		return nil, err
 	}

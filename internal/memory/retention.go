@@ -49,8 +49,8 @@ func ParseRetention(s string) (time.Duration, error) {
 // own documentation -- headings, prose, blanks, and fenced format examples --
 // and always survives, as do uncommitted lines.
 // Returns whether anything changed; the caller commits.
-func Trim(repoDir string, keep time.Duration, now time.Time) (bool, error) {
-	wt := WorktreePath(repoDir)
+func (m *Memory) Trim(keep time.Duration, now time.Time) (bool, error) {
+	wt := m.Worktree()
 	cutoff := now.Add(-keep)
 	changed := false
 

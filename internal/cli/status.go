@@ -96,7 +96,8 @@ func cmdStatus(_ []string) int {
 
 	// Memory.
 	fmt.Printf("\nmemory:\n")
-	ms := memory.Status(dir)
+	mem := memory.At(dir)
+	ms := mem.Status()
 	if !ms.Materialized {
 		if ms.RemoteMemory {
 			fmt.Printf("  ! not materialized in this checkout -- origin has the agent's memory; run openroutines sync to adopt it\n")
@@ -114,12 +115,12 @@ func cmdStatus(_ []string) int {
 		if ms.Behind > 0 {
 			fmt.Printf("  ! %d commit(s) behind origin/%s -- this checkout is reading old memory; run openroutines sync to get the latest from origin\n", ms.Behind, memory.Branch)
 		}
-		if cursors, err := memory.Cursors(dir); err == nil && len(cursors) > 0 {
-			head, _ := memory.Head(dir)
+		if cursors, err := mem.Cursors(); err == nil && len(cursors) > 0 {
+			head, _ := mem.Head()
 			for name, c := range cursors {
 				lag := ""
 				if head != "" && !strings.HasPrefix(head, c.ConsumedThrough) && head != c.ConsumedThrough {
-					if changes, err := memory.Changes(dir, c.ConsumedThrough, head); err == nil && len(changes) > 0 {
+					if changes, err := mem.Changes(c.ConsumedThrough, head); err == nil && len(changes) > 0 {
 						lag = fmt.Sprintf(" -- %d change(s) pending", len(changes))
 					}
 				}
@@ -127,7 +128,7 @@ func cmdStatus(_ []string) int {
 			}
 		}
 	}
-	if !memory.HasOrigin(dir) {
+	if !mem.HasOrigin() {
 		fmt.Printf("  ! no git origin -- memory is not durable until one is set\n")
 	}
 
