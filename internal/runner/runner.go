@@ -216,6 +216,9 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		}
 		staging.ConsumerThrough = through
 	}
+	if err := prepareSchedule(dir, workspace, r, agent.Timezone, time.Now()); err != nil {
+		return nil, nil, fmt.Errorf("forward schedule: %w", err)
+	}
 	if err := writeAgentDefinition(workspace, agent, r, meta); err != nil {
 		return nil, nil, err
 	}

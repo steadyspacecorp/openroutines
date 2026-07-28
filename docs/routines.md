@@ -38,6 +38,8 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 
 The supervisor wakes every minute, re-reads routine frontmatter, and dispatches whatever is due -- the files are the schedule; there is no registration step. Missed firings collapse into one catch-up run: an agent down for a week owes one run per routine, not seven. Runs are serial, one at a time; a routine still running is never dispatched again in parallel, and repeated failures trip a per-routine circuit breaker instead of retrying forever. [docs/design.md](design.md) has the full semantics ("Scheduling", "Overlap").
 
+Every run also receives the schedule as data: a read-only `./schedule.md` in the workspace listing each active routine's next fires, computed by the scheduler's own parser. When the running routine is itself scheduled, the file fixes its **window** -- now through its next fire-day's first fire -- and splits the other routines in-window (they fire before this routine runs again) and out. Routine prompts should read the file, never re-derive fire times from cron frontmatter: forecasting ("release notes run tonight") becomes transcription, which models get right.
+
 ## Triggers
 
 A routine can declare a `trigger` alongside or instead of its `schedule`: a cheap, outbound change-detection poll that makes the routine due.
