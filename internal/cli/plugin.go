@@ -14,8 +14,6 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/plugin"
-	"github.com/steadyspacecorp/openroutines/internal/routine"
-	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
 func cmdPlugin(args []string) int {
@@ -243,62 +241,23 @@ func pluginUpdate(args []string) int {
 		return fail(fmt.Errorf("usage: openroutines plugin update <name> [--yes]"))
 	}
 	name := rest[0]
-	if !skill.NamePattern.MatchString(name) {
-		return fail(fmt.Errorf("invalid plugin name %q", name))
-	}
-	ours := filepath.Join("plugins", name)
-	oldSource, err := plugin.ReadSource(ours)
+	upd, err := plugin.PrepareUpdate(".", name)
 	if err != nil {
-		return fail(fmt.Errorf("plugin %s: %w", name, err))
+		return fail(err)
 	}
-	base, _, cleanupBase, err := plugin.Fetch(oldSource.Repository, oldSource.Path, oldSource.Revision)
-	if err != nil {
-		return fail(fmt.Errorf("load recorded revision: %w", err))
-	}
-	defer cleanupBase()
-	theirs, newSource, cleanupTheirs, err := plugin.Fetch(oldSource.Repository, oldSource.Path, "")
-	if err != nil {
-		return fail(fmt.Errorf("load upstream: %w", err))
-	}
-	defer cleanupTheirs()
-	if newSource.Revision == oldSource.Revision {
-		fmt.Printf("Plugin %s is already current at %s.\n", name, shortRevision(oldSource.Revision))
+	defer upd.Close()
+	if upd.Current() {
+		fmt.Printf("Plugin %s is already current at %s.\n", name, shortRevision(upd.Old.Revision))
 		return 0
 	}
-	_, existingSkills, err := plugin.AgentNamespace(".")
-	if err != nil {
-		return fail(err)
-	}
-	agentSkills := map[string]bool{}
-	for _, s := range existingSkills {
-		agentSkills[s.Name] = true
-	}
-	upstream, err := plugin.Load(theirs, agentSkills)
-	if err != nil {
-		return fail(fmt.Errorf("new upstream revision is invalid: %w", err))
-	}
-	if upstream.Manifest.Name != name {
-		return fail(fmt.Errorf("upstream plugin name changed from %q to %q", name, upstream.Manifest.Name))
-	}
-	collisions, err := pluginExternalCollisions(name, upstream)
-	if err != nil {
-		return fail(err)
-	}
-	if len(collisions) > 0 {
-		return fail(fmt.Errorf("updated plugin collides with agent content: %s", strings.Join(collisions, ", ")))
-	}
-	fmt.Printf("Update plugin %q: %s -> %s\n\n", name, shortRevision(oldSource.Revision), shortRevision(newSource.Revision))
-	changes, err := plugin.Changes(base, theirs)
-	if err != nil {
-		return fail(err)
-	}
+	fmt.Printf("Update plugin %q: %s -> %s\n\n", name, shortRevision(upd.Old.Revision), shortRevision(upd.New.Revision))
 	fmt.Println("Upstream files:")
-	for _, change := range changes {
+	for _, change := range upd.Changes {
 		fmt.Printf("  %s\n", change)
 	}
 	fmt.Println()
 	fmt.Println("The updated bundle asks for:")
-	fmt.Println(indent(strings.TrimRight(upstream.Summary(), "\n"), "  "))
+	fmt.Println(indent(strings.TrimRight(upd.Upstream.Summary(), "\n"), "  "))
 	fmt.Println()
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
 	if !interactive && !yes {
@@ -312,112 +271,15 @@ func pluginUpdate(args []string) int {
 			return 0
 		}
 	}
-	merged, err := os.MkdirTemp(".", ".openroutines-plugin-update-*")
+	conflicts, err := upd.Apply()
 	if err != nil {
-		return fail(err)
-	}
-	defer os.RemoveAll(merged)
-	conflicts, err := plugin.MergeTrees(base, ours, theirs, merged)
-	if err != nil {
-		return fail(err)
-	}
-	basePlugin, err := plugin.Load(base, agentSkills)
-	if err != nil {
-		return fail(fmt.Errorf("recorded upstream revision is invalid: %w", err))
-	}
-	baseRoutines := map[string]bool{}
-	for _, r := range basePlugin.Routines {
-		baseRoutines[r.Name] = true
-	}
-	for _, r := range upstream.Routines {
-		if baseRoutines[r.Name] {
-			continue
-		}
-		path := filepath.Join(merged, "routines", r.Name+".md")
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return fail(err)
-		}
-		raw, err = routine.WithActive(raw, false)
-		if err != nil {
-			return fail(err)
-		}
-		if err := os.WriteFile(path, raw, 0o644); err != nil {
-			return fail(err)
-		}
-	}
-	sourceToWrite := newSource
-	if len(conflicts) > 0 {
-		sourceToWrite = oldSource
-	}
-	if err := plugin.WriteSource(merged, sourceToWrite); err != nil {
-		return fail(err)
-	}
-	if len(conflicts) == 0 {
-		mergedPlugin, err := plugin.Load(merged, agentSkills)
-		if err != nil {
-			return fail(fmt.Errorf("merged plugin is invalid: %w", err))
-		}
-		mergedCollisions, err := pluginExternalCollisions(name, mergedPlugin)
-		if err != nil {
-			return fail(err)
-		}
-		if len(mergedCollisions) > 0 {
-			return fail(fmt.Errorf("merged plugin collides with agent content: %s", strings.Join(mergedCollisions, ", ")))
-		}
-	}
-	backup := ours + ".update-backup"
-	if err := os.Rename(ours, backup); err != nil {
-		return fail(err)
-	}
-	if err := os.Rename(merged, ours); err != nil {
-		_ = os.Rename(backup, ours)
-		return fail(err)
-	}
-	if err := os.RemoveAll(backup); err != nil {
 		return fail(err)
 	}
 	if len(conflicts) > 0 {
-		return fail(fmt.Errorf("plugin update has conflicts in %s; resolve the markers and rerun update (recorded revision remains %s)", strings.Join(conflicts, ", "), shortRevision(oldSource.Revision)))
+		return fail(fmt.Errorf("plugin update has conflicts in %s; resolve the markers and rerun update (recorded revision remains %s)", strings.Join(conflicts, ", "), shortRevision(upd.Old.Revision)))
 	}
-	fmt.Printf("Updated plugins/%s to %s. Review the diff, run openroutines check, and commit.\n", name, shortRevision(newSource.Revision))
+	fmt.Printf("Updated plugins/%s to %s. Review the diff, run openroutines check, and commit.\n", name, shortRevision(upd.New.Revision))
 	return 0
-}
-
-func pluginExternalCollisions(name string, candidate *plugin.Plugin) ([]string, error) {
-	routines, skills, err := plugin.AgentNamespace(".")
-	if err != nil {
-		return nil, fmt.Errorf("agent routines and skills must be valid before updating: %w", err)
-	}
-	ownPrefix := filepath.Clean(filepath.Join("plugins", name)) + string(filepath.Separator)
-	routineNames := map[string]bool{}
-	for _, r := range routines {
-		clean := filepath.Clean(r.Path)
-		if clean == filepath.Clean(filepath.Join("plugins", name)) || strings.HasPrefix(clean, ownPrefix) {
-			continue
-		}
-		routineNames[r.Name] = true
-	}
-	skillNames := map[string]bool{}
-	for _, s := range skills {
-		clean := filepath.Clean(s.Dir)
-		if clean == filepath.Clean(filepath.Join("plugins", name)) || strings.HasPrefix(clean, ownPrefix) {
-			continue
-		}
-		skillNames[s.Name] = true
-	}
-	var collisions []string
-	for _, r := range candidate.Routines {
-		if routineNames[r.Name] {
-			collisions = append(collisions, "routine "+r.Name)
-		}
-	}
-	for _, s := range candidate.Skills {
-		if skillNames[s.Name] {
-			collisions = append(collisions, "skill "+s.Name)
-		}
-	}
-	return collisions, nil
 }
 
 func indent(s, prefix string) string {

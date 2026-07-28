@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -330,12 +329,12 @@ func parseManifestFile(path string) (*Manifest, string, error) {
 	return &m, strings.TrimSpace(rest[end+len("\n---\n"):]), nil
 }
 
-// AgentNamespace returns the agent's global routine and skill namespaces, or
+// agentNamespace returns the agent's global routine and skill namespaces, or
 // an error if that namespace is already invalid. Duplicate names are dropped
 // from the lists LoadAgent/ListAgent return, so a caller that ignored the
 // errors would check collisions against a namespace missing exactly the names
 // already in conflict -- and install on top of them. Fail closed instead.
-func AgentNamespace(agentDir string) ([]*routine.Routine, []*skill.Skill, error) {
+func agentNamespace(agentDir string) ([]*routine.Routine, []*skill.Skill, error) {
 	routines, routineErrs := routine.LoadAgent(agentDir)
 	skills, skillErrs := skill.ListAgent(agentDir)
 	if errs := slices.Concat(routineErrs, skillErrs); len(errs) > 0 {
@@ -426,14 +425,14 @@ func ReadSource(dir string) (Source, error) {
 	if err := dec.Decode(&source); err != nil {
 		return source, fmt.Errorf("%s: %w", SourceFileName, err)
 	}
-	return source, source.Validate()
+	return source, source.validate()
 }
 
-// Validate reports whether provenance is usable: a repository, a full commit
+// validate reports whether provenance is usable: a repository, a full commit
 // hash, and a path that stays inside the source repository. Both ReadSource
-// and Install enforce it, so the recorded identity means the same thing
-// whether it was just written or read back later.
-func (s Source) Validate() error {
+// and PrepareInstall enforce it, so the recorded identity means the same
+// thing whether it was just written or read back later.
+func (s Source) validate() error {
 	if s.Repository == "" || s.Revision == "" {
 		return fmt.Errorf("%s needs repository and revision", SourceFileName)
 	}
@@ -445,172 +444,4 @@ func (s Source) Validate() error {
 		return fmt.Errorf("%s revision must be a full git commit hash", SourceFileName)
 	}
 	return nil
-}
-
-// WriteSource replaces framework-owned provenance after a clean update.
-func WriteSource(dir string, source Source) error {
-	raw, err := yaml.Marshal(source)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, SourceFileName), raw, 0o644)
-}
-
-// Changes summarizes upstream file additions, modifications, and removals.
-func Changes(base, next string) ([]string, error) {
-	files := map[string]bool{}
-	for _, root := range []string{base, next} {
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(root, path)
-			if rel == "." || rel == SourceFileName {
-				return nil
-			}
-			if rel == ".git" || rel == ".github" {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !d.IsDir() {
-				files[rel] = true
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	var changes []string
-	for _, rel := range slices.Sorted(maps.Keys(files)) {
-		before, beforeOK, err := readOptional(filepath.Join(base, rel))
-		if err != nil {
-			return nil, err
-		}
-		after, afterOK, err := readOptional(filepath.Join(next, rel))
-		if err != nil {
-			return nil, err
-		}
-		switch {
-		case !beforeOK && afterOK:
-			changes = append(changes, "A "+rel)
-		case beforeOK && !afterOK:
-			changes = append(changes, "D "+rel)
-		case !bytes.Equal(before, after):
-			changes = append(changes, "M "+rel)
-		}
-	}
-	return changes, nil
-}
-
-// MergeTrees performs a file-wise three-way merge into dest. It intentionally
-// excludes provenance: the caller advances that only after a clean merge.
-func MergeTrees(base, ours, theirs, dest string) ([]string, error) {
-	files := map[string]bool{}
-	for _, root := range []string{base, ours, theirs} {
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(root, path)
-			if rel == "." || rel == SourceFileName {
-				return nil
-			}
-			if rel == ".git" || rel == ".github" {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.IsDir() {
-				return nil
-			}
-			if !d.Type().IsRegular() {
-				return fmt.Errorf("%s: not a regular file", path)
-			}
-			files[rel] = true
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	var conflicts []string
-	for _, rel := range slices.Sorted(maps.Keys(files)) {
-		baseRaw, baseOK, err := readOptional(filepath.Join(base, rel))
-		if err != nil {
-			return nil, err
-		}
-		oursRaw, oursOK, err := readOptional(filepath.Join(ours, rel))
-		if err != nil {
-			return nil, err
-		}
-		theirsRaw, theirsOK, err := readOptional(filepath.Join(theirs, rel))
-		if err != nil {
-			return nil, err
-		}
-		var out []byte
-		write := true
-		switch {
-		case oursOK == baseOK && bytes.Equal(oursRaw, baseRaw):
-			out, write = theirsRaw, theirsOK
-		case theirsOK == baseOK && bytes.Equal(theirsRaw, baseRaw):
-			out, write = oursRaw, oursOK
-		case oursOK && theirsOK && bytes.Equal(oursRaw, theirsRaw):
-			out = oursRaw
-		default:
-			var conflict bool
-			out, conflict, err = mergeFile(oursRaw, baseRaw, theirsRaw)
-			if err != nil {
-				return nil, fmt.Errorf("merge %s: %w", rel, err)
-			}
-			if conflict {
-				conflicts = append(conflicts, rel)
-			}
-		}
-		if !write {
-			continue
-		}
-		target := filepath.Join(dest, rel)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(target, out, 0o644); err != nil {
-			return nil, err
-		}
-	}
-	return conflicts, nil
-}
-
-func readOptional(path string) ([]byte, bool, error) {
-	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil, false, nil
-	}
-	return raw, err == nil, err
-}
-
-func mergeFile(ours, base, theirs []byte) ([]byte, bool, error) {
-	tmp, err := os.MkdirTemp("", "openroutines-plugin-merge-*")
-	if err != nil {
-		return nil, false, err
-	}
-	defer os.RemoveAll(tmp)
-	paths := []string{filepath.Join(tmp, "ours"), filepath.Join(tmp, "base"), filepath.Join(tmp, "theirs")}
-	for i, raw := range [][]byte{ours, base, theirs} {
-		if err := os.WriteFile(paths[i], raw, 0o644); err != nil {
-			return nil, false, err
-		}
-	}
-	cmd := exec.Command("git", "merge-file", "-p", "-L", "local", "-L", "upstream base", "-L", "upstream", paths[0], paths[1], paths[2])
-	out, runErr := cmd.Output()
-	if exit, ok := runErr.(*exec.ExitError); ok && exit.ExitCode() == 1 {
-		return out, true, nil
-	}
-	if runErr != nil {
-		return nil, false, runErr
-	}
-	return out, false, nil
 }

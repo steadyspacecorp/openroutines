@@ -32,10 +32,10 @@ func PrepareInstall(agentDir, bundleDir string, source Source) (*Install, error)
 	// Provenance is validated as strictly as ReadSource validates it later:
 	// an installed plugin whose metadata later commands reject is worse than
 	// a refused install.
-	if err := source.Validate(); err != nil {
+	if err := source.validate(); err != nil {
 		return nil, err
 	}
-	routines, skills, err := AgentNamespace(agentDir)
+	routines, skills, err := agentNamespace(agentDir)
 	if err != nil {
 		return nil, fmt.Errorf("agent routines and skills must be valid before installing: %w", err)
 	}
@@ -51,7 +51,7 @@ func PrepareInstall(agentDir, bundleDir string, source Source) (*Install, error)
 	if _, err := os.Stat(filepath.Join(agentDir, "plugins", p.Manifest.Name)); err == nil {
 		taken = append(taken, filepath.Join("plugins", p.Manifest.Name))
 	}
-	taken = append(taken, p.collisions(routines, skills)...)
+	taken = append(taken, p.collisions(routines, skills, "")...)
 	if len(taken) > 0 {
 		return nil, fmt.Errorf("already present, refusing to replace: %s -- remove them first to reinstall", strings.Join(taken, ", "))
 	}
@@ -59,15 +59,28 @@ func PrepareInstall(agentDir, bundleDir string, source Source) (*Install, error)
 }
 
 // collisions reports the bundle's routine and skill names already taken in
-// the agent namespace.
-func (p *Plugin) collisions(routines []*routine.Routine, skills []*skill.Skill) []string {
+// the agent namespace. Content under ownDir is the bundle's own installed
+// copy, not a collision; ownDir is empty for a fresh install, where nothing
+// is owned yet.
+func (p *Plugin) collisions(routines []*routine.Routine, skills []*skill.Skill, ownDir string) []string {
+	own := func(path string) bool {
+		if ownDir == "" {
+			return false
+		}
+		clean := filepath.Clean(path)
+		return clean == filepath.Clean(ownDir) || strings.HasPrefix(clean, filepath.Clean(ownDir)+string(filepath.Separator))
+	}
 	routineNames := map[string]bool{}
 	for _, r := range routines {
-		routineNames[r.Name] = true
+		if !own(r.Path) {
+			routineNames[r.Name] = true
+		}
 	}
 	skillNames := map[string]bool{}
 	for _, s := range skills {
-		skillNames[s.Name] = true
+		if !own(s.Dir) {
+			skillNames[s.Name] = true
+		}
 	}
 	var taken []string
 	for _, r := range p.Routines {
