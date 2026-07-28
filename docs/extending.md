@@ -47,4 +47,14 @@ openroutines plugin update steady
 
 `plugin update <name>` fetches the recorded source, validates and summarizes the new bundle, then merges it against your vendored copy using the recorded revision as the base. Local schedule, prompt, skill, and activation edits survive clean updates; ordinary conflict markers are left for you when both sides changed the same lines, and the recorded revision does not advance until the merge is clean. Newly added routines always land inactive. Updates never touch live memory: ledger stubs are install-time seeds only. A plugin can also be skills-only (you write the routines) -- see [design.md](design.md) for the format and boundaries.
 
-To author one, copy a reference plugin from [`examples/plugins/`](../examples/plugins/) and edit: the `PLUGIN.md` manifest names the bundle and the credentials and variables it needs; `routines/`, `skills/`, and `memory/ledgers/` stubs are the payload.
+A plugin whose routines use an [MCP server](routines.md#mcp-servers) declares it in the manifest -- description, URL, and the credential its auth header references -- and never ships `opencode.json`, which stays yours. An interactive `plugin add` offers to write each declared server's entry, showing the exact JSON and defaulting to no; `--yes` and non-interactive installs only print the snippet to paste, an entry you already have is never touched, and `plugin update` never writes `opencode.json` -- so a plugin update can propose a new endpoint but only you can make one live:
+
+```yaml
+mcp:
+  steady:
+    description: Steady's MCP server -- check-ins, goals, action items
+    url: https://app.steady.space/mcp
+    credential: steady_token
+```
+
+To author one, copy a reference plugin from [`examples/plugins/`](../examples/plugins/) and edit: the `PLUGIN.md` manifest names the bundle and the credentials, variables, and MCP servers it needs; `routines/`, `skills/`, and `memory/ledgers/` stubs are the payload.

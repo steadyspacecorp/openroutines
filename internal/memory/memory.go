@@ -78,6 +78,12 @@ func git(dir string, args ...string) (string, error) {
 		"-c", "protocol.file.allow=user",
 		"-c", "user.name=openroutines",
 		"-c", "user.email=agent@openroutines.dev",
+		// No background writers: auto-gc detaches from the invoking command
+		// and keeps writing .git/objects after it returns -- racing test
+		// TempDir cleanup (the supervisor suite's flake) and, in production,
+		// container shutdown. Repacking is origin's concern, not a run's.
+		"-c", "gc.auto=0",
+		"-c", "maintenance.auto=false",
 	}
 	cmd := newGitCmd(dir, append(base, args...))
 	out, err := cmd.CombinedOutput()
