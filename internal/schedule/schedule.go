@@ -131,6 +131,41 @@ func Occurrences(spec cron.Schedule, after, until time.Time) (first, last time.T
 	return
 }
 
+// NextFires returns up to n firing times strictly after `after` and no
+// later than `until`, in `after`'s location.
+func NextFires(spec cron.Schedule, after, until time.Time, n int) []time.Time {
+	var fires []time.Time
+	t := after
+	for len(fires) < n {
+		t = spec.Next(t)
+		if t.IsZero() || t.After(until) {
+			break
+		}
+		fires = append(fires, t)
+	}
+	return fires
+}
+
+// WindowEnd returns the spec's first firing on its next fire-day -- the
+// first calendar day after `after`'s (in `after`'s location) with any
+// firing. Later same-day firings (retry slots) are skipped: a routine's
+// window closes when it next runs fresh, not when it retries. Zero when no
+// such firing lands by `until`.
+func WindowEnd(spec cron.Schedule, after, until time.Time) time.Time {
+	y0, d0 := after.Year(), after.YearDay()
+	t := after
+	for i := 0; i < 100000; i++ {
+		t = spec.Next(t)
+		if t.IsZero() || t.After(until) {
+			break
+		}
+		if y, d := t.Year(), t.YearDay(); y != y0 || d != d0 {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
 // NextRetryAt implements attempt backoff: 1, 2, 4, 8... minutes after the
 // last attempt, capped at 16 minutes. A pending run with no attempts yet is
 // runnable immediately.

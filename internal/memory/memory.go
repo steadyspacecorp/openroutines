@@ -501,6 +501,7 @@ type WorktreeStatus struct {
 	Uncommitted  int    // files with uncommitted changes (human curation in progress)
 	LastCommit   string // subject of the latest memory commit
 	Unpushed     int    // commits origin hasn't seen yet
+	Behind       int    // commits on origin this worktree has not taken
 }
 
 // Status inspects the memory worktree; zero value when not yet materialized.
@@ -518,6 +519,14 @@ func Status(repoDir string) WorktreeStatus {
 	}
 	if out, err := git(wt, "rev-list", "--count", "refs/remotes/origin/"+Branch+"..HEAD"); err == nil {
 		_, _ = fmt.Sscanf(out, "%d", &st.Unpushed)
+	}
+	// Behind is as of the last fetch: the remote-tracking ref is local, so
+	// this stays offline. A deployed agent writes memory that only reaches
+	// this checkout when someone pulls, and every command reading the
+	// worktree -- status, usage, ledgers -- silently reports the old state
+	// until then.
+	if out, err := git(wt, "rev-list", "--count", "HEAD..refs/remotes/origin/"+Branch); err == nil {
+		_, _ = fmt.Sscanf(out, "%d", &st.Behind)
 	}
 	return st
 }

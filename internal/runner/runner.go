@@ -216,6 +216,9 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		}
 		staging.ConsumerThrough = through
 	}
+	if err := prepareSchedule(dir, workspace, r, agent.Timezone, time.Now()); err != nil {
+		return nil, nil, fmt.Errorf("forward schedule: %w", err)
+	}
 	if err := writeAgentDefinition(workspace, agent, r, meta); err != nil {
 		return nil, nil, err
 	}
@@ -237,6 +240,13 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	}
 	if meta.ScheduledFor != "" {
 		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor)
+	}
+	if r.FM.Websearch {
+		// The websearch tool only registers when a search backend is enabled;
+		// the permission rule in the generated definition is the actual gate.
+		// Exa works keyless; a granted exa_api_key credential lands as
+		// EXA_API_KEY, which the backend picks up for keyed use.
+		env = append(env, "OPENCODE_ENABLE_EXA=1")
 	}
 	if meta.CoveredThrough != "" {
 		env = append(env, "OPENROUTINES_COVERED_THROUGH="+meta.CoveredThrough)
@@ -745,6 +755,22 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 		for _, tool := range []string{"read", "grep", "glob", "list", "edit", "write", "patch", "todowrite", "todoread"} {
 			fmt.Fprintf(&b, "  %s: allow\n", tool)
 		}
+	}
+	// Web access is a grant, not a default: opencode allows webfetch out of
+	// the box, and fetched content is model context -- a prompt-injection
+	// vector. Both web tools get an explicit rule every run, deny unless the
+	// routine's frontmatter opts in. Emitted after the dry-run wildcard so
+	// an opted-in routine can rehearse its reads (last matching rule wins);
+	// everything a dry run must not do stays closed by deny-all.
+	for _, w := range []struct {
+		tool    string
+		granted bool
+	}{{"webfetch", r.FM.Webfetch}, {"websearch", r.FM.Websearch}} {
+		action := "deny"
+		if w.granted {
+			action = "allow"
+		}
+		fmt.Fprintf(&b, "  %s: %s\n", w.tool, action)
 	}
 	b.WriteString("  skill:\n")
 	b.WriteString("    \"*\": deny\n") // order matters: last matching rule wins

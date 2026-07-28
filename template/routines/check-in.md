@@ -12,9 +12,9 @@ goes to the container logs.
 
 2. Compose a plain, scannable check-in with three short sections:
    - What I did -- compress the inbox's new events; group related items
-   - What I intend to do -- open Agent-owned tasks in memory/tasks.md, plus
-     what the frontmatter of the files in routines/ says is scheduled to
-     run before the next check-in
+   - What I intend to do -- ./schedule.md's in-window routines (they run
+     before the next check-in), with open Agent-owned tasks from
+     memory/tasks.md attached to their routine
    - Where I need a human -- every open Human-owned task in memory/tasks.md,
      and any task that names something it is waiting on
 

@@ -29,6 +29,8 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 | `active` | `false` parks the routine; the supervisor skips it. `routines activate` / `deactivate` flip it. |
 | `skills` | The skills this routine may load -- and only these. See [Extending your agent](extending.md). |
 | `credentials` | The credentials injected into this run's environment -- and only these. `steady_token` arrives as `$STEADY_TOKEN`. |
+| `webfetch` | `true` grants the webfetch tool. Denied by default: fetched pages become model context, making web access a prompt-injection vector you opt into per routine. |
+| `websearch` | `true` grants the websearch tool. Denied by default, same reason. Search runs through Exa -- keyless out of the box; grant an `exa_api_key` credential for keyed use. |
 | `model` | Provider/model override of the agent default, e.g. `anthropic/claude-sonnet-5`. |
 | `effort` | Provider-specific reasoning effort. |
 | `events` | `false` opts this routine out of recording events -- for reporting routines, where checking in is not work. See [Your agent on the team](teamwork.md). |
@@ -37,6 +39,8 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 ## Scheduling
 
 The supervisor wakes every minute, re-reads routine frontmatter, and dispatches whatever is due -- the files are the schedule; there is no registration step. Missed firings collapse into one catch-up run: an agent down for a week owes one run per routine, not seven. Runs are serial, one at a time; a routine still running is never dispatched again in parallel, and repeated failures trip a per-routine circuit breaker instead of retrying forever. [docs/design.md](design.md) has the full semantics ("Scheduling", "Overlap").
+
+Every run also receives the schedule as data: a read-only `./schedule.md` in the workspace listing each active routine's next fires, computed by the scheduler's own parser. When the running routine is itself scheduled, the file fixes its **window** -- now through its next fire-day's first fire -- and splits the other routines in-window (they fire before this routine runs again) and out. Routine prompts should read the file, never re-derive fire times from cron frontmatter: forecasting ("release notes run tonight") becomes transcription, which models get right.
 
 ## Triggers
 

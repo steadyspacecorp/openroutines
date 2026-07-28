@@ -12,11 +12,15 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-func genDef(t *testing.T, meta Meta) string {
+func genDef(t *testing.T, meta Meta, fm ...routine.Frontmatter) string {
 	t.Helper()
 	ws := t.TempDir()
 	agent := &config.Agent{Name: "a", Description: "d"}
-	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Skills: []string{"s1"}}}
+	front := routine.Frontmatter{Skills: []string{"s1"}}
+	if len(fm) > 0 {
+		front = fm[0]
+	}
+	r := &routine.Routine{Name: "x", FM: front}
 	if err := writeAgentDefinition(ws, agent, r, meta); err != nil {
 		t.Fatal(err)
 	}
@@ -50,13 +54,46 @@ func TestDryRunDefinitionDeniesAllToolsFirst(t *testing.T) {
 
 func TestRealRunDefinitionAllowsActing(t *testing.T) {
 	def := genDef(t, Meta{RunID: "run_t"})
-	for _, banned := range []string{"bash: deny", "webfetch: deny", "DRY RUN"} {
+	for _, banned := range []string{"bash: deny", "DRY RUN"} {
 		if strings.Contains(def, banned) {
 			t.Fatalf("real-run definition wrongly contains %q:\n%s", banned, def)
 		}
 	}
 	if !strings.Contains(def, `"*": deny`) || !strings.Contains(def, `"s1": allow`) {
 		t.Fatalf("skill scoping missing:\n%s", def)
+	}
+}
+
+// Web access is deny-by-default in every generated definition: opencode
+// allows webfetch out of the box, and fetched content is model context --
+// a prompt-injection vector. The rule must be explicit either way, so a
+// harness default change can never silently widen a routine's reach.
+func TestWebAccessDeniedByDefault(t *testing.T) {
+	for _, dry := range []bool{false, true} {
+		def := genDef(t, Meta{RunID: "run_t", DryRun: dry})
+		for _, want := range []string{"webfetch: deny", "websearch: deny"} {
+			if !strings.Contains(def, want) {
+				t.Fatalf("definition (dry=%v) missing %q:\n%s", dry, want, def)
+			}
+		}
+	}
+}
+
+// Frontmatter opt-in flips the explicit rule to allow -- in dry runs too
+// (reads are within a rehearsal's scope), where the allow must land after
+// the wildcard deny because the last matching rule wins.
+func TestWebAccessOptIn(t *testing.T) {
+	fm := routine.Frontmatter{Webfetch: true, Websearch: true}
+	for _, dry := range []bool{false, true} {
+		def := genDef(t, Meta{RunID: "run_t", DryRun: dry}, fm)
+		for _, want := range []string{"webfetch: allow", "websearch: allow"} {
+			if !strings.Contains(def, want) {
+				t.Fatalf("opted-in definition (dry=%v) missing %q:\n%s", dry, want, def)
+			}
+			if dry && strings.Index(def, `"*": deny`) > strings.Index(def, want) {
+				t.Fatalf("wildcard deny must precede %q (last match wins):\n%s", want, def)
+			}
+		}
 	}
 }
 

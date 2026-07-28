@@ -46,7 +46,7 @@ func cmdUsage(args []string) int {
 		}
 		return fail(fmt.Errorf("usage: openroutines usage [--json]"))
 	}
-	rows := aggregateUsage(".")
+	rows, records := aggregateUsage(".")
 
 	if asJSON {
 		out := struct {
@@ -63,7 +63,15 @@ func cmdUsage(args []string) int {
 	}
 
 	if len(rows) == 0 {
-		fmt.Println("no token usage recorded yet -- records accumulate as routines run")
+		// Three different situations reached this line as one silent "no
+		// usage yet". Records that carry no tokens are the confusing case:
+		// runs did happen, so telling someone to wait for them is wrong.
+		if records == 0 {
+			fmt.Println("no runs recorded yet -- records accumulate as routines run")
+		} else {
+			fmt.Printf("%d run(s) recorded, none reported token usage -- absent usage means the runtime did not report it, never zero\n", records)
+		}
+		printMemoryLag(".")
 		return 0
 	}
 	fmt.Println("token usage (retention window):")
@@ -71,17 +79,30 @@ func cmdUsage(args []string) int {
 		printUsageLine(r.Routine, r, true)
 	}
 	printUsageLine("total", totalUsage(rows), false)
+	printMemoryLag(".")
 	return 0
 }
 
-// aggregateUsage folds runs.jsonl into per-routine rows, sorted by name.
-// Records without a tokens object (older releases, native dev runs) are
-// skipped -- absence is not zero.
-func aggregateUsage(dir string) []usageRow {
+// printMemoryLag names the gap between what this checkout has and what
+// origin holds. usage reads only the worktree -- that is the contract, and
+// this is what keeps a stale worktree from reading as a quiet zero.
+func printMemoryLag(dir string) {
+	if st := memory.Status(dir); st.Behind > 0 {
+		fmt.Printf("\nmemory/ is %d commit(s) behind origin/%s as of your last fetch -- git -C memory pull\n", st.Behind, memory.Branch)
+	}
+}
+
+// aggregateUsage folds runs.jsonl into per-routine rows, sorted by name,
+// and returns how many records it read. Records without a tokens object
+// (older releases, native dev runs, a runtime that did not report) are
+// skipped -- absence is not zero -- so the count is what distinguishes an
+// agent that has never run from one whose runs carry no usage.
+func aggregateUsage(dir string) ([]usageRow, int) {
 	raw, err := os.ReadFile(filepath.Join(memory.WorktreePath(dir), "runs.jsonl"))
 	if err != nil {
-		return nil
+		return nil, 0
 	}
+	records := 0
 	byName := map[string]*usageRow{}
 	for _, line := range strings.Split(string(raw), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -94,7 +115,11 @@ func aggregateUsage(dir string) []usageRow {
 			Cost    float64      `json:"cost_reported"`
 			Tokens  *usageTokens `json:"tokens"`
 		}
-		if json.Unmarshal([]byte(line), &rec) != nil || rec.Tokens == nil {
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		records++
+		if rec.Tokens == nil {
 			continue
 		}
 		r := byName[rec.Routine]
@@ -117,7 +142,7 @@ func aggregateUsage(dir string) []usageRow {
 	for _, name := range slices.Sorted(maps.Keys(byName)) {
 		out = append(out, *byName[name])
 	}
-	return out
+	return out, records
 }
 
 func totalUsage(rows []usageRow) usageRow {

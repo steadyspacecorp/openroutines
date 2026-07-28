@@ -107,6 +107,9 @@ func cmdStatus(_ []string) int {
 		if ms.Unpushed > 0 {
 			fmt.Printf("  %d commit(s) not yet pushed to origin\n", ms.Unpushed)
 		}
+		if ms.Behind > 0 {
+			fmt.Printf("  ! %d commit(s) behind origin/%s -- this checkout is reading old memory (git -C memory pull)\n", ms.Behind, memory.Branch)
+		}
 		if cursors, err := memory.Cursors(dir); err == nil && len(cursors) > 0 {
 			head, _ := memory.Head(dir)
 			for name, c := range cursors {
@@ -140,7 +143,7 @@ func cmdStatus(_ []string) int {
 // `openroutines usage`. Silent when no record carries usage (older
 // releases, native dev runs) -- absence of bookkeeping is not news.
 func printTokenUsage(dir string) {
-	rows := aggregateUsage(dir)
+	rows, _ := aggregateUsage(dir)
 	if len(rows) == 0 {
 		return
 	}
