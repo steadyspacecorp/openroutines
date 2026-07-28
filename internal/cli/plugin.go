@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -64,9 +63,7 @@ func pluginAdd(args []string) int {
 		return fail(fmt.Errorf("run plugin add from inside an agent repository"))
 	}
 
-	// Local directories and remote sources both go through a temporary clone,
-	// so the vendored payload always corresponds to the recorded commit.
-	root, provenance, cleanup, err := resolvePluginSource(source, subPath, "")
+	root, provenance, cleanup, err := plugin.Fetch(source, subPath, "")
 	if err != nil {
 		return fail(err)
 	}
@@ -209,81 +206,6 @@ func mcpSnippet(name string, m plugin.MCPServer) string {
 	return fmt.Sprintf("%q: %s", name, entry)
 }
 
-func resolvePluginSource(source, subPath, revision string) (string, plugin.Source, func(), error) {
-	cleanup := func() {}
-	repository := source
-	cloneURL := ""
-	repoRoot := ""
-	if fi, err := os.Stat(source); err == nil && fi.IsDir() {
-		abs, err := filepath.Abs(source)
-		if err != nil {
-			return "", plugin.Source{}, cleanup, err
-		}
-		abs, err = filepath.EvalSymlinks(abs)
-		if err != nil {
-			return "", plugin.Source{}, cleanup, err
-		}
-		out, err := exec.Command("git", "-C", abs, "rev-parse", "--show-toplevel").Output()
-		if err != nil {
-			return "", plugin.Source{}, cleanup, fmt.Errorf("local plugin source must be inside a git repository: %w", err)
-		}
-		repoRoot, err = filepath.EvalSymlinks(strings.TrimSpace(string(out)))
-		if err != nil {
-			return "", plugin.Source{}, cleanup, err
-		}
-		cloneURL = repoRoot
-		localPath, err := filepath.Rel(repoRoot, abs)
-		if err != nil {
-			return "", plugin.Source{}, cleanup, err
-		}
-		if subPath != "" {
-			localPath = filepath.Join(localPath, subPath)
-		}
-		subPath = filepath.ToSlash(localPath)
-		repository = repoRoot
-	}
-	if cloneURL == "" {
-		cloneURL = repository
-	}
-	if !strings.Contains(repository, "://") && !strings.Contains(repository, "@") && strings.Count(repository, "/") == 1 {
-		cloneURL = "https://github.com/" + repository + ".git"
-		repository = cloneURL
-	}
-	tmp, err := os.MkdirTemp("", "openroutines-plugin-*")
-	if err != nil {
-		return "", plugin.Source{}, cleanup, err
-	}
-	cleanup = func() { _ = os.RemoveAll(tmp) }
-	clone := exec.Command("git", "-c", "protocol.ext.allow=never", "clone", "--quiet", "--", cloneURL, tmp)
-	clone.Stderr = os.Stderr
-	if err := clone.Run(); err != nil {
-		cleanup()
-		return "", plugin.Source{}, func() {}, fmt.Errorf("clone %s: %w", cloneURL, err)
-	}
-	if revision != "" {
-		checkout := exec.Command("git", "-C", tmp, "checkout", "--quiet", "--detach", revision)
-		checkout.Stderr = os.Stderr
-		if err := checkout.Run(); err != nil {
-			cleanup()
-			return "", plugin.Source{}, func() {}, fmt.Errorf("checkout %s: %w", revision, err)
-		}
-	}
-	revBytes, err := exec.Command("git", "-C", tmp, "rev-parse", "HEAD").Output()
-	if err != nil {
-		cleanup()
-		return "", plugin.Source{}, func() {}, err
-	}
-	root := tmp
-	if subPath != "" && subPath != "." {
-		root, err = pluginSubdir(tmp, filepath.FromSlash(subPath))
-		if err != nil {
-			cleanup()
-			return "", plugin.Source{}, func() {}, err
-		}
-	}
-	return root, plugin.Source{Repository: repository, Path: subPath, Revision: strings.TrimSpace(string(revBytes))}, cleanup, nil
-}
-
 func shortRevision(revision string) string {
 	if len(revision) > 12 {
 		return revision[:12]
@@ -344,12 +266,12 @@ func pluginUpdate(args []string) int {
 	if err != nil {
 		return fail(fmt.Errorf("plugin %s: %w", name, err))
 	}
-	base, _, cleanupBase, err := resolvePluginSource(oldSource.Repository, oldSource.Path, oldSource.Revision)
+	base, _, cleanupBase, err := plugin.Fetch(oldSource.Repository, oldSource.Path, oldSource.Revision)
 	if err != nil {
 		return fail(fmt.Errorf("load recorded revision: %w", err))
 	}
 	defer cleanupBase()
-	theirs, newSource, cleanupTheirs, err := resolvePluginSource(oldSource.Repository, oldSource.Path, "")
+	theirs, newSource, cleanupTheirs, err := plugin.Fetch(oldSource.Repository, oldSource.Path, "")
 	if err != nil {
 		return fail(fmt.Errorf("load upstream: %w", err))
 	}
@@ -511,26 +433,6 @@ func pluginExternalCollisions(name string, candidate *plugin.Plugin) ([]string, 
 		}
 	}
 	return collisions, nil
-}
-
-func pluginSubdir(root, subPath string) (string, error) {
-	clean := filepath.Clean(subPath)
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("--path %q escapes the plugin repository", subPath)
-	}
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", err
-	}
-	candidate, err := filepath.EvalSymlinks(filepath.Join(resolvedRoot, clean))
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(resolvedRoot, candidate)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("--path %q escapes the plugin repository", subPath)
-	}
-	return candidate, nil
 }
 
 func indent(s, prefix string) string {
