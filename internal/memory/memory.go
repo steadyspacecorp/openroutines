@@ -524,6 +524,46 @@ func (m *Memory) AppendRunRecord(record string) error {
 	return err
 }
 
+// RemoveRoutineState deletes every per-routine state file for name: the
+// scheduling state at state/<name>.json plus the entry in every state
+// subdirectory (trigger baselines, consumer cursors -- and whatever subtree
+// comes next, without this function having to learn about it). Filenames are
+// compared, never globbed, so name cannot alter the matching. Returns the
+// removed paths relative to the repository root; the caller commits.
+func (m *Memory) RemoveRoutineState(name string) ([]string, error) {
+	stateDir := m.StateDir()
+	entries, err := os.ReadDir(stateDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	remove := func(dir string) error {
+		p := filepath.Join(dir, name+".json")
+		switch err := os.Remove(p); {
+		case err == nil:
+			rel, _ := filepath.Rel(m.repoDir, p)
+			removed = append(removed, rel)
+		case !os.IsNotExist(err):
+			return err
+		}
+		return nil
+	}
+	if err := remove(stateDir); err != nil {
+		return removed, err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			if err := remove(filepath.Join(stateDir, e.Name())); err != nil {
+				return removed, err
+			}
+		}
+	}
+	return removed, nil
+}
+
 // WorktreeStatus reports the memory worktree's state for `openroutines
 // status` -- root `git status` never shows memory churn, so this must.
 type WorktreeStatus struct {
