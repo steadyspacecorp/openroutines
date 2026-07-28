@@ -5,5 +5,10 @@
       "*": "deny"
     },
     "question": "deny"
+  },
+  "agent": {
+    "title": {
+      "disable": true
+    }
   }
 }
