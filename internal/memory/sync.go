@@ -228,6 +228,8 @@ func gitStdin(dir, stdin string, args ...string) (string, error) {
 	base := []string{
 		"-c", "core.hooksPath=/dev/null",
 		"-c", "protocol.file.allow=user",
+		"-c", "gc.auto=0",
+		"-c", "maintenance.auto=false",
 	}
 	cmd := newGitCmd(dir, append(base, args...))
 	cmd.Stdin = strings.NewReader(stdin)
