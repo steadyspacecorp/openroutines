@@ -297,7 +297,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 			}
 			attemptHome := filepath.Join(workspace, attemptHomeName)
 			ocExec = hostOpencodeExec(workspace)
-			ro, rw := sandbox.Paths(workspace, runTmp, home, attemptHome)
+			ro, rw := sandbox.Paths(workspace, staging.MemoryDir, runTmp, home, attemptHome)
 			cmd = exec.Command(self, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
 			cmd.Env = append(env,
 				"PATH="+os.Getenv("PATH"),
