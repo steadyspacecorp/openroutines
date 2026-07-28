@@ -16,6 +16,7 @@ Usage:
   openroutines check                validate the agent; made for CI
   openroutines status               show what the agent has and still needs
   openroutines usage                token use and reported cost per routine (--json)
+  openroutines sync                 pull the agent's latest memory from origin (--push)
   openroutines routines <command>   new, list, run, test, edit, activate, deactivate, remove
   openroutines skills <command>     new, list, remove
   openroutines plugin <command>     add, list, update grouped plugin bundles
@@ -49,6 +50,8 @@ func Run(args []string) int {
 		return cmdStatus(rest)
 	case "usage":
 		return cmdUsage(rest)
+	case "sync":
+		return cmdSync(rest)
 	case "skills", "skill":
 		return cmdSkills(rest)
 	case "plugin", "plugins":

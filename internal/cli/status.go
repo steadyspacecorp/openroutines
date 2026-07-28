@@ -108,7 +108,7 @@ func cmdStatus(_ []string) int {
 			fmt.Printf("  %d commit(s) not yet pushed to origin\n", ms.Unpushed)
 		}
 		if ms.Behind > 0 {
-			fmt.Printf("  ! %d commit(s) behind origin/%s -- this checkout is reading old memory (git -C memory pull)\n", ms.Behind, memory.Branch)
+			fmt.Printf("  ! %d commit(s) behind origin/%s -- this checkout is reading old memory; run openroutines sync to get the latest from origin\n", ms.Behind, memory.Branch)
 		}
 		if cursors, err := memory.Cursors(dir); err == nil && len(cursors) > 0 {
 			head, _ := memory.Head(dir)

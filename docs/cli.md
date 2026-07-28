@@ -8,6 +8,7 @@ openroutines configure            fill in openroutines.yaml, generate the master
 openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
 openroutines usage                token use and reported cost per routine (--json)
+openroutines sync                 pull the agent's latest memory from origin (--push)
 openroutines routines <command>   new, list, run, test, edit, activate, deactivate, remove
 openroutines skills <command>     new, list, remove
 openroutines plugin <command>     add, list, update grouped plugin bundles
@@ -56,6 +57,18 @@ openroutines usage [--json]
 ```
 
 Token use and reported cost per routine. `--json` emits the machine-readable form for scripts and monitors.
+
+## sync
+
+```
+openroutines sync [--push]
+```
+
+Reconciles `memory/` with origin. A deployed agent writes its memory on the `memory` branch, and `git pull` in the agent repository moves the remote-tracking ref without touching the memory worktree -- so a checkout keeps reading old memory until you sync it. `status` and `usage` say when that has happened and name this command.
+
+Fast-forwards when behind, rebases local commits when both sides moved, and refuses rather than resolving anything itself: a conflict is left for you to resolve inside `memory/`, and rewritten upstream history is refused outright. `--push` also publishes local memory commits.
+
+`status` and `usage` never sync on their own. This command fetches, can rebase, and publishes the accepted-tip baseline that makes rewrite refusal durable -- none of which belongs in a command whose job is to report state.
 
 ## routines
 
