@@ -212,7 +212,7 @@ func cmdCheck(_ []string) int {
 		// (both modes) exactly as a run would -- no provider key, no Docker.
 		if agent != nil {
 			for _, dry := range []bool{false, true} {
-				if _, rerr := runner.RenderDefinition(agent, r, dry); rerr != nil {
+				if _, rerr := runner.RenderDefinition(agent, r, oc.MCPServers(), dry); rerr != nil {
 					errs = append(errs, fmt.Sprintf("generated definition: %v", rerr))
 					break
 				}
