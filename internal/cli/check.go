@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -48,6 +47,13 @@ func cmdCheck(_ []string) int {
 
 	configName := filepath.Base(config.Path(dir))
 	fmt.Println(configName)
+	// opencode.json is loaded alongside: routine MCP grants are validated
+	// against its server names, so a file opencode itself could not parse
+	// must fail here, not surface as every grant looking undefined.
+	oc, err := config.LoadOpenCode(dir)
+	if err != nil {
+		failf("%v", err)
+	}
 	agent, err := config.Load(dir)
 	if err != nil {
 		failf("%v", err)
@@ -192,7 +198,7 @@ func cmdCheck(_ []string) int {
 		for _, m := range r.FM.MCP {
 			// A grant must name a server opencode will actually connect --
 			// an unknown name is a silent no-op at run time, so fail loudly.
-			if !slices.Contains(config.MCPServers(dir), m) {
+			if !slices.Contains(oc.MCPServers(), m) {
 				errs = append(errs, fmt.Sprintf("mcp server %q is not defined in opencode.json's mcp block", m))
 			}
 		}
@@ -302,51 +308,20 @@ func cmdCheck(_ []string) int {
 		}
 	}
 
-	// opencode.json is the harness's config file: the permission policy,
-	// custom provider endpoint definitions (an AI gateway, a proxy), and
-	// harness-behavior agent overrides (the template disables the built-in
-	// title agent), all interpreted by opencode alone -- and update never
-	// rewrites the file. Model *choice* is framework config (the framework
-	// interprets it for per-routine resolution and provider-key injection),
-	// so a harness-side default model or anything else here is drift worth
-	// flagging (it has arrived via coding-agent sessions before) -- including
-	// a model pinned inside an agent override. Defined providers are
-	// cross-checked against model prefixes: an unreferenced id usually means
-	// a typo on one side.
-	if raw, err := os.ReadFile(filepath.Join(dir, "opencode.json")); err == nil {
-		var cfg map[string]any
-		if json.Unmarshal(raw, &cfg) == nil {
-			for _, key := range slices.Sorted(maps.Keys(cfg)) {
-				if key != "$schema" && key != "permission" && key != "provider" && key != "agent" && key != "mcp" {
-					warnf("opencode.json contains %q -- model choice belongs in openroutines.yaml and frontmatter, not here", key)
-				}
-			}
-			if agents, ok := cfg["agent"].(map[string]any); ok {
-				for _, name := range slices.Sorted(maps.Keys(agents)) {
-					if entry, ok := agents[name].(map[string]any); ok {
-						if _, has := entry["model"]; has {
-							warnf("agent %q in opencode.json sets a model -- model choice belongs in openroutines.yaml and frontmatter, not here", name)
-						}
-					}
-				}
-			}
-			if providers, ok := cfg["provider"].(map[string]any); ok {
-				prefixes := map[string]bool{}
-				if agent != nil && agent.Defaults.Model != "" {
-					prefixes[strings.SplitN(agent.Defaults.Model, "/", 2)[0]] = true
-				}
-				for _, r := range routines {
-					if r.FM.Model != "" {
-						prefixes[strings.SplitN(r.FM.Model, "/", 2)[0]] = true
-					}
-				}
-				for _, id := range slices.Sorted(maps.Keys(providers)) {
-					if !prefixes[id] {
-						warnf("provider %q in opencode.json is not referenced by any model in openroutines.yaml defaults or routine frontmatter", id)
-					}
-				}
-			}
+	// opencode.json belongs to the harness and update never rewrites it, so
+	// framework concerns that creep in stay until flagged; the schema
+	// knowledge of what counts as drift lives with config.OpenCode.
+	prefixes := map[string]bool{}
+	if agent != nil && agent.Defaults.Model != "" {
+		prefixes[strings.SplitN(agent.Defaults.Model, "/", 2)[0]] = true
+	}
+	for _, r := range routines {
+		if r.FM.Model != "" {
+			prefixes[strings.SplitN(r.FM.Model, "/", 2)[0]] = true
 		}
+	}
+	for _, w := range oc.Drift(slices.Sorted(maps.Keys(prefixes))) {
+		warnf("%s", w)
 	}
 
 	// Memory hygiene: task discipline is convention, not schema -- warn, never

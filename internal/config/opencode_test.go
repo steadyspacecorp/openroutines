@@ -8,23 +8,82 @@ import (
 	"testing"
 )
 
-func TestMCPServers(t *testing.T) {
+func writeOpenCode(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, OpenCodeFileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadOpenCode(t *testing.T) {
 	dir := t.TempDir()
-	if got := MCPServers(dir); got != nil {
+	oc, err := LoadOpenCode(dir)
+	if err != nil {
+		t.Fatalf("a missing opencode.json is an agent without harness config, got %v", err)
+	}
+	if got := oc.MCPServers(); got != nil {
 		t.Fatalf("no opencode.json should mean no servers, got %v", got)
 	}
-	write := func(body string) {
-		if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
+
+	writeOpenCode(t, dir, `{"permission": {}}`)
+	if oc, err = LoadOpenCode(dir); err != nil {
+		t.Fatal(err)
 	}
-	write(`{"permission": {}}`)
-	if got := MCPServers(dir); got != nil {
+	if got := oc.MCPServers(); got != nil {
 		t.Fatalf("no mcp block should mean no servers, got %v", got)
 	}
-	write(`{"mcp": {"steady": {"type": "remote"}, "acme": {"type": "remote"}}}`)
-	if got := MCPServers(dir); !slices.Equal(got, []string{"acme", "steady"}) {
+
+	writeOpenCode(t, dir, `{"mcp": {"steady": {"type": "remote"}, "acme": {"type": "remote"}}}`)
+	if oc, err = LoadOpenCode(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := oc.MCPServers(); !slices.Equal(got, []string{"acme", "steady"}) {
 		t.Fatalf("expected sorted server names, got %v", got)
+	}
+
+	// Unparseable is an error, never a silently empty view: no MCP rules
+	// would be generated, and opencode itself could not load the file.
+	writeOpenCode(t, dir, `{`)
+	oc, err = LoadOpenCode(dir)
+	if err == nil || !strings.Contains(err.Error(), OpenCodeFileName) {
+		t.Fatalf("corrupt opencode.json must be a named error, got %v", err)
+	}
+	if oc == nil || oc.MCPServers() != nil {
+		t.Fatalf("the errored view must be empty and usable, got %+v", oc)
+	}
+}
+
+// Drift flags framework concerns that crept into the harness's file: model
+// choice belongs in openroutines.yaml and frontmatter, and a defined provider
+// no model references usually means a typo on one side.
+func TestOpenCodeDrift(t *testing.T) {
+	dir := t.TempDir()
+	writeOpenCode(t, dir, `{
+		"$schema": "https://opencode.ai/config.json",
+		"permission": {},
+		"mcp": {"steady": {"type": "remote"}},
+		"model": "anthropic/claude-sonnet-5",
+		"agent": {"title": {"disable": true}, "build": {"model": "anthropic/claude-sonnet-5"}},
+		"provider": {"anthropic": {}, "openai": {}}
+	}`)
+	oc, err := LoadOpenCode(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(oc.Drift([]string{"anthropic"}), "\n")
+	for _, want := range []string{
+		`opencode.json contains "model"`,
+		`agent "build" in opencode.json sets a model`,
+		`provider "openai" in opencode.json is not referenced`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("drift missing %q:\n%s", want, got)
+		}
+	}
+	for _, quiet := range []string{`"title"`, `provider "anthropic"`, `"$schema"`, `"permission"`, `"mcp"`} {
+		if strings.Contains(got, quiet) {
+			t.Fatalf("drift wrongly flags %s:\n%s", quiet, got)
+		}
 	}
 }
 
@@ -38,14 +97,18 @@ func TestAddMCPServer(t *testing.T) {
 		t.Fatal("no opencode.json should refuse, not create harness config")
 	}
 
-	path := filepath.Join(dir, "opencode.json")
+	path := filepath.Join(dir, OpenCodeFileName)
 	if err := os.WriteFile(path, []byte(`{"permission": {"question": "deny"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := AddMCPServer(dir, "steady", entry); err != nil {
 		t.Fatal(err)
 	}
-	if got := MCPServers(dir); !slices.Equal(got, []string{"steady"}) {
+	oc, err := LoadOpenCode(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := oc.MCPServers(); !slices.Equal(got, []string{"steady"}) {
 		t.Fatalf("server not inserted: %v", got)
 	}
 	raw, _ := os.ReadFile(path)
