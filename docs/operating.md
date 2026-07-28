@@ -4,6 +4,14 @@ An ORA deploys as a plain Docker container. Anything that runs a container runs 
 
 The one prerequisite is a git origin the agent can push to -- GitHub, GitLab, Gitea, even a bare repo on a VPS -- since that's where memory durably lives. (Local development needs no origin, and `openroutines check` verifies one before you deploy.)
 
+```mermaid
+flowchart LR
+    you["You"] -->|"routines · git push"| repo["Git repository"]
+    repo -->|"deploy"| ora["Agent container"]
+    ora -->|"memory · git push"| repo
+    ora -->|"logs"| you
+```
+
 ## Deploying
 
 First, give the agent its own identity for pushing memory -- a deploy key scoped to this one repository. Generate it *outside* the agent repo (a private key must never sit in the repo or its image):
