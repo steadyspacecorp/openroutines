@@ -88,7 +88,7 @@ func cmdUsage(args []string) int {
 // this is what keeps a stale worktree from reading as a quiet zero.
 func printMemoryLag(dir string) {
 	if st := memory.Status(dir); st.Behind > 0 {
-		fmt.Printf("\nmemory/ is %d commit(s) behind origin/%s as of your last fetch -- git -C memory pull\n", st.Behind, memory.Branch)
+		fmt.Printf("\nmemory/ is %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to get the latest memory from origin\n", st.Behind, memory.Branch)
 	}
 }
 
