@@ -22,9 +22,14 @@ not json
 	if err := os.WriteFile(filepath.Join(dir, "memory", "runs.jsonl"), []byte(lines), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rows := aggregateUsage(dir)
+	rows, records := aggregateUsage(dir)
 	if len(rows) != 2 || rows[0].Routine != "a" || rows[1].Routine != "b" {
 		t.Fatalf("rows wrong: %+v", rows)
+	}
+	// Every parseable record counts, tokens or not: "old" has none, and the
+	// unparseable line is not a record at all.
+	if records != 4 {
+		t.Fatalf("records = %d, want 4", records)
 	}
 	a := rows[0]
 	if a.Runs != 2 || a.Tokens.Input != 150 || a.Tokens.Output != 15 || a.Tokens.Reasoning != 2 ||
@@ -38,7 +43,30 @@ not json
 	if tot.Runs != 3 || tot.Tokens.Input != 157 || tot.Tokens.Output != 18 {
 		t.Fatalf("total wrong: %+v", tot)
 	}
-	if none := aggregateUsage(t.TempDir()); none != nil {
-		t.Fatalf("no runs.jsonl should aggregate to nil, got %+v", none)
+	if none, records := aggregateUsage(t.TempDir()); none != nil || records != 0 {
+		t.Fatalf("no runs.jsonl should aggregate to nil/0, got %+v/%d", none, records)
+	}
+}
+
+// The case that reads as a silent zero: runs happened, none carried usage.
+// Telling someone to wait for records that already exist sends them looking
+// in the wrong place -- as a stale memory worktree did in practice.
+func TestAggregateUsageCountsRecordsWithoutTokens(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := `{"routine":"a","outcome":"completed","manual":true}
+{"routine":"b","outcome":"completed"}
+`
+	if err := os.WriteFile(filepath.Join(dir, "memory", "runs.jsonl"), []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows, records := aggregateUsage(dir)
+	if len(rows) != 0 {
+		t.Fatalf("records without tokens must not aggregate: %+v", rows)
+	}
+	if records != 2 {
+		t.Fatalf("records = %d, want 2 -- the count is what separates this from a fresh agent", records)
 	}
 }
