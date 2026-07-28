@@ -31,6 +31,7 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 | `credentials` | The credentials injected into this run's environment -- and only these. `steady_token` arrives as `$STEADY_TOKEN`. |
 | `webfetch` | `true` grants the webfetch tool. Denied by default: fetched pages become model context, making web access a prompt-injection vector you opt into per routine. |
 | `websearch` | `true` grants the websearch tool. Denied by default, same reason. Search runs through Exa -- keyless out of the box; grant an `exa_api_key` credential for keyed use. |
+| `mcp` | Names of MCP servers (defined in `opencode.json`) whose tools this routine may call. Denied by default: a server's tool descriptions are third-party text entering model context -- a grant to review like a skill or credential. See [MCP servers](#mcp-servers). |
 | `model` | Provider/model override of the agent default, e.g. `anthropic/claude-sonnet-5`. |
 | `effort` | Provider-specific reasoning effort. |
 | `events` | `false` opts this routine out of recording events -- for reporting routines, where checking in is not work. See [Your agent on the team](teamwork.md). |
@@ -59,6 +60,29 @@ trigger:
 - `interval` -- poll cadence (default 5m, floor one minute)
 
 A trigger carries no payload: when it fires, the routine runs exactly as it would from a schedule firing and pulls its actual work through its own skills. Triggers are best-effort latency reduction; the schedule remains the correctness backstop (`check` warns on a trigger-only routine with no heartbeat schedule). The reasoning -- and why there is no webhook receiver -- is in [docs/design.md](design.md) ("Triggers").
+
+## MCP servers
+
+A routine can call tools from a remote [MCP](https://modelcontextprotocol.io) server. The server is defined once in `opencode.json` -- transport, URL, auth headers, interpreted by opencode alone -- and granted per routine:
+
+```json
+"mcp": {
+  "steady": {
+    "type": "remote",
+    "url": "https://app.steady.space/mcp",
+    "headers": { "Authorization": "Bearer {env:STEADY_TOKEN}" }
+  }
+}
+```
+
+```yaml
+mcp: [steady]
+credentials: [steady_token]
+```
+
+The grant opens the server's tools to this routine's runs; every other routine keeps them denied, and dry runs deny them regardless -- MCP tools act on external systems, which a rehearsal must not do. Auth headers reference the run environment, so the server is only reachable when the routine also grants the credential that fills them: the `mcp` grant scopes the tool surface, the credential grant scopes the connection. `check` fails a grant naming a server `opencode.json` doesn't define.
+
+What works: remote servers with static-token or client-credentials auth (a typed `oauth2_client` credential mints the bearer at spawn). OAuth-interactive servers have no headless path, and local stdio servers are out of scope by design -- the runtime image ships no language runtimes.
 
 ## Running and testing
 

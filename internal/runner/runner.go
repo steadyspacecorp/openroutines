@@ -772,6 +772,20 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 		}
 		fmt.Fprintf(&b, "  %s: %s\n", w.tool, action)
 	}
+	// MCP servers are grants too: a configured server's tools reach a run
+	// only when the routine's frontmatter names the server. opencode
+	// registers MCP tools as <server>_<tool>, so one glob per configured
+	// server closes or opens its whole surface. Dry runs never get MCP
+	// regardless of grant -- the tools act on external systems, which a
+	// rehearsal must not do (credentials are withheld anyway; this makes
+	// the denial structural rather than an auth failure).
+	for _, server := range config.MCPServers(workspace) {
+		action := "deny"
+		if !meta.DryRun && slices.Contains(r.FM.MCP, server) {
+			action = "allow"
+		}
+		fmt.Fprintf(&b, "  %q: %s\n", server+"_*", action)
+	}
 	b.WriteString("  skill:\n")
 	b.WriteString("    \"*\": deny\n") // order matters: last matching rule wins
 	for _, s := range r.FM.Skills {

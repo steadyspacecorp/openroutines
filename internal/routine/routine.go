@@ -38,6 +38,7 @@ type Frontmatter struct {
 	Consumes    string        `yaml:"consumes,omitempty"`  // "memory": this routine consumes the memory change feed
 	Webfetch    bool          `yaml:"webfetch,omitempty"`  // grants the webfetch tool; external content is an injection vector, so off by default
 	Websearch   bool          `yaml:"websearch,omitempty"` // grants the websearch tool (and enables its search backend)
+	MCP         []string      `yaml:"mcp,omitempty"`       // grants a configured MCP server's tools; third-party tool text is an injection vector, so none by default
 }
 
 // IsActive applies the default: routines are active unless explicitly not.
