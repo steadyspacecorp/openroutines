@@ -19,7 +19,7 @@ Records hold facts, never polished prose -- compression and voice are a reader's
 
 The memory an agent builds as it works travels through git, on its own branch -- backed up with every push, kept separate from your routines. Memory survives redeploys and rollbacks like a database, but versioned and inspectable: reviewing what your agent has learned is `git log memory`, and pruning bad learnings is part of maintaining an agent -- humans can curate the branch, and the agent pulls before each run.
 
-The working files stay lean, too: entries older than the retention window (`memory.retention` in `openroutines.yaml`, default 30 days) are trimmed daily, and git history keeps everything forever -- including changes a consumer hasn't seen yet.
+The working files stay lean, too: entries older than the retention window (`memory.retention` in `openroutines.yml`, default 30 days) are trimmed daily, and git history keeps everything forever -- including changes a consumer hasn't seen yet.
 
 ## Reporting: the memory branch is the change feed
 

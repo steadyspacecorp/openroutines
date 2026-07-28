@@ -27,11 +27,11 @@ A routine declares the credentials it needs in frontmatter, and each one arrives
 
 ### Typed credentials
 
-A credential can also carry a *type*. A `credentials:` entry in `openroutines.yaml` tells the runner how to materialize the stored value -- `type: github_app` turns a stored App private key into a short-lived installation token minted fresh for each run, injected as `GITHUB_TOKEN` alongside the App's Git identity, and revoked when the run ends. `type: oauth2_client` does the same for the OAuth2 client-credentials flow most SaaS APIs use for server-to-server access (Help Scout, Stripe, Slack app-level): the runner posts the stored client secret to the entry's `token_url` and injects only the resulting bearer under the entry's `inject_as` name -- same name→env mapping as everywhere else, so `support_desk_token` becomes `$SUPPORT_DESK_TOKEN`. Either way the routine declares the credential exactly as before; it just never sees the root secret. Credentials without an entry inject verbatim, as always.
+A credential can also carry a *type*. A `credentials:` entry in `openroutines.yml` tells the runner how to materialize the stored value -- `type: github_app` turns a stored App private key into a short-lived installation token minted fresh for each run, injected as `GITHUB_TOKEN` alongside the App's Git identity, and revoked when the run ends. `type: oauth2_client` does the same for the OAuth2 client-credentials flow most SaaS APIs use for server-to-server access (Help Scout, Stripe, Slack app-level): the runner posts the stored client secret to the entry's `token_url` and injects only the resulting bearer under the entry's `inject_as` name -- same name→env mapping as everywhere else, so `support_desk_token` becomes `$SUPPORT_DESK_TOKEN`. Either way the routine declares the credential exactly as before; it just never sees the root secret. Credentials without an entry inject verbatim, as always.
 
 ## Variables
 
-Non-secret configuration -- a repo name, a docs URL -- goes in a `variables:` map in `openroutines.yaml`, and every run receives each one as an environment variable (`product_repo` becomes `$PRODUCT_REPO`). Secrets go in encrypted credentials instead; inside a routine the interface is the same either way, so the only question a value raises is whether it's secret.
+Non-secret configuration -- a repo name, a docs URL -- goes in a `variables:` map in `openroutines.yml`, and every run receives each one as an environment variable (`product_repo` becomes `$PRODUCT_REPO`). Secrets go in encrypted credentials instead; inside a routine the interface is the same either way, so the only question a value raises is whether it's secret.
 
 ## Plugins
 

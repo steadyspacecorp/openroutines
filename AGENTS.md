@@ -15,7 +15,7 @@ Design-first is the workflow here: behavior gets decided in docs/design.md befor
 
 ## Repo layout
 
-- `template/` -- the agent skeleton that `openroutines scaffold` stamps out. Compiled into the CLI binary via Go's `embed`; this directory is the source of truth for what every new agent looks like. Keep it consistent with docs/design.md (frontmatter defaults, check-in routine, `openroutines.yaml` shape).
+- `template/` -- the agent skeleton that `openroutines scaffold` stamps out. Compiled into the CLI binary via Go's `embed`; this directory is the source of truth for what every new agent looks like. Keep it consistent with docs/design.md (frontmatter defaults, check-in routine, `openroutines.yml` shape).
 - `bin/` -- development scripts: `smoke` (CI's end-to-end test) and `release` (cross-compiles, publishes the GHCR base image, tags, creates the GitHub release).
 - `Dockerfile.release` -- the agent base image published to `ghcr.io/steadyspacecorp/openroutines`; keep its runtime contents in sync with `template/Dockerfile`'s runtime stage.
 - Go code: a single binary, `openroutines`, whose subcommands include the supervisor (`supervise`, the container entrypoint) plus `scaffold`, `configure`, `check`, `status`, `routines`, `skills`, `credentials`, and `update` (still stubbed).

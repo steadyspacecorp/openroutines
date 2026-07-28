@@ -13,7 +13,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
-// cmdConfigure interactively fills in openroutines.yaml, generates the master key,
+// cmdConfigure interactively fills in openroutines.yml, generates the master key,
 // and seeds encrypted credentials. Idempotent: existing values are defaults.
 func cmdConfigure(_ []string) int {
 	dir := "."

@@ -39,7 +39,32 @@ func TestVariableNameValidation(t *testing.T) {
 	}
 }
 
-// openroutines.yaml decodes strictly: a misspelled key is an error, not silently
+// The configuration file resolves newest spelling first: .yml, then the
+// legacy .yaml, then the original agent.yaml -- all read, so a pinned
+// agent renames on its own schedule (#50).
+func TestPathResolvesLegacySpellings(t *testing.T) {
+	dir := t.TempDir()
+	if got := filepath.Base(Path(dir)); got != FileName {
+		t.Fatalf("fresh dir should resolve to %s (the name a write creates), got %s", FileName, got)
+	}
+	// Oldest first: each newer spelling takes precedence once present.
+	names := make([]string, 0, len(LegacyFileNames)+1)
+	names = append(names, FileName)
+	names = append(names, LegacyFileNames...)
+	for i := len(names) - 1; i >= 0; i-- {
+		if err := os.WriteFile(filepath.Join(dir, names[i]), []byte("name: a\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := filepath.Base(Path(dir)); got != names[i] {
+			t.Fatalf("with %v present, Path should resolve %s, got %s", names[i:], names[i], got)
+		}
+		if _, err := Load(dir); err != nil {
+			t.Fatalf("%s should load: %v", names[i], err)
+		}
+	}
+}
+
+// openroutines.yml decodes strictly: a misspelled key is an error, not silently
 // ignored configuration.
 func TestLoadRejectsUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
@@ -49,7 +74,7 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
-// Credential metadata entries are validated like the rest of openroutines.yaml:
+// Credential metadata entries are validated like the rest of openroutines.yml:
 // a typed entry needs a known type and its type's configuration.
 func TestCredentialEntryValidation(t *testing.T) {
 	base := Agent{

@@ -15,7 +15,7 @@ import (
 )
 
 // frameworkOwned are the template files update may rewrite. Everything else
-// in an agent repo -- routines, skills, memory, openroutines.yaml, credentials --
+// in an agent repo -- routines, skills, memory, openroutines.yml, credentials --
 // belongs to the agent and is never touched. opencode.json stays off this
 // list deliberately: it is the user's harness config (the permission policy
 // and provider endpoint definitions; design decision "One binary"), and an update

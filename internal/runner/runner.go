@@ -149,7 +149,7 @@ func EffectiveModel(agent *config.Agent, r *routine.Routine) (string, error) {
 		model = agent.Defaults.Model
 	}
 	if model == "" || strings.Contains(model, "{{") {
-		return "", fmt.Errorf("no model: set model in frontmatter or defaults.model in openroutines.yaml (openroutines configure)")
+		return "", fmt.Errorf("no model: set model in frontmatter or defaults.model in openroutines.yml (openroutines configure)")
 	}
 	return model, nil
 }
@@ -254,7 +254,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	for _, k := range slices.Sorted(maps.Keys(secrets.env)) {
 		env = append(env, k+"="+secrets.env[k])
 	}
-	// Non-secret variables from openroutines.yaml, injected into every run (dry runs
+	// Non-secret variables from openroutines.yml, injected into every run (dry runs
 	// included). On a name collision the credential wins; check flags it.
 	for _, k := range slices.Sorted(maps.Keys(agent.Variables)) {
 		if _, taken := secrets.env[strings.ToUpper(k)]; taken {

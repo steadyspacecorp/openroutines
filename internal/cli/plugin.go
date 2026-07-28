@@ -163,12 +163,12 @@ func pluginAdd(args []string) int {
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.Credentials)) {
 		c := p.Manifest.Credentials[name]
 		if c.Type != "" {
-			stepf("add to openroutines.yaml:  credentials: { %s: { type: %s, ... } }  (see the type's required fields)", name, c.Type)
+			stepf("add to openroutines.yml:  credentials: { %s: { type: %s, ... } }  (see the type's required fields)", name, c.Type)
 		}
 		stepf("openroutines credentials set %s  # %s", name, firstLine(c.Description))
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.Variables)) {
-		stepf("set the %s variable in openroutines.yaml  # %s", name, firstLine(p.Manifest.Variables[name].Description))
+		stepf("set the %s variable in openroutines.yml  # %s", name, firstLine(p.Manifest.Variables[name].Description))
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
 		// The plugin declares the server; only a person puts the endpoint

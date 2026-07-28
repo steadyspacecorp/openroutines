@@ -97,7 +97,7 @@ func TestWebAccessOptIn(t *testing.T) {
 	}
 }
 
-// The workspace is built by allow-list: exactly openroutines.yaml, opencode.json,
+// The workspace is built by allow-list: exactly openroutines.yml, opencode.json,
 // and routines/ travel in. This is the audit's headline test -- no
 // secret-shaped file (the encrypted store, keys) and no dev-session rules
 // file (AGENTS.md/CLAUDE.md, which opencode would load into run context)
@@ -105,7 +105,7 @@ func TestWebAccessOptIn(t *testing.T) {
 func TestBuildWorkspaceAllowList(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
-		"openroutines.yaml":                     "name: t\n",
+		"openroutines.yml":                      "name: t\n",
 		"opencode.json":                         "{}",
 		"routines/daily.md":                     "---\nschedule: \"0 9 * * *\"\n---\nwork",
 		"plugins/demo/routines/plugin-daily.md": "---\nschedule: \"0 10 * * *\"\n---\nplugin work",
@@ -134,7 +134,7 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 	if err := buildWorkspace(dir, workspace); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"openroutines.yaml", "opencode.json", "routines/daily.md", "routines/plugin-daily.md"} {
+	for _, f := range []string{"openroutines.yml", "opencode.json", "routines/daily.md", "routines/plugin-daily.md"} {
 		if _, err := os.Stat(filepath.Join(workspace, f)); err != nil {
 			t.Errorf("%s should travel into the workspace: %v", f, err)
 		}
@@ -143,7 +143,7 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{"openroutines.yaml": true, "opencode.json": true, "routines": true}
+	allowed := map[string]bool{"openroutines.yml": true, "opencode.json": true, "routines": true}
 	for _, e := range entries {
 		if !allowed[e.Name()] {
 			t.Errorf("%s leaked into the run workspace", e.Name())

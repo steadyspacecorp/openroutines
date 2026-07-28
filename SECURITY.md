@@ -23,7 +23,7 @@ OpenRoutines treats model-directed execution as untrusted. This includes model o
 
 OpenRoutines trusts:
 
-- the agent repository's reviewed main branch, including its routines, skills, `openroutines.yaml`, and `opencode.json`;
+- the agent repository's reviewed main branch, including its routines, skills, `openroutines.yml`, and `opencode.json`;
 - the container host and deployment configuration;
 - administrators of the agent's Git origin;
 - the selected base image, opencode distribution, model provider, and other runtime dependencies.

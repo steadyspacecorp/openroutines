@@ -87,15 +87,16 @@ func TestLoadRefusals(t *testing.T) {
 		extra map[string]string
 		want  string
 	}{
-		"opencode.json":     {map[string]string{"opencode.json": "{}"}, "harness config"},
-		"openroutines.yaml": {map[string]string{"openroutines.yaml": "name: x"}, "belongs to the agent"},
-		"legacy agent.yaml": {map[string]string{"agent.yaml": "name: x"}, "belongs to the agent"},
-		"install hook":      {map[string]string{"install.sh": "#!/bin/sh\n"}, "allow-listed"},
-		"shared memory":     {map[string]string{"memory/events.md": "- sneaky\n"}, "never shared memory"},
-		"master key":        {map[string]string{"master.key": "k"}, "key material"},
-		"nested git":        {map[string]string{"skills/demo-skill/.git/config": "bad"}, "nested .git"},
-		"dangling skill":    {map[string]string{"routines/other.md": "---\nschedule: \"0 9 * * *\"\nskills: [ghost]\n---\nx\n"}, "neither the plugin nor the agent"},
-		"undeclared cred":   {map[string]string{"routines/other.md": "---\nschedule: \"0 9 * * *\"\ncredentials: [ghost_token]\n---\nx\n"}, "missing from the PLUGIN.md credentials block"},
+		"opencode.json":            {map[string]string{"opencode.json": "{}"}, "harness config"},
+		"openroutines.yml":         {map[string]string{"openroutines.yml": "name: x"}, "belongs to the agent"},
+		"legacy openroutines.yaml": {map[string]string{"openroutines.yaml": "name: x"}, "belongs to the agent"},
+		"legacy agent.yaml":        {map[string]string{"agent.yaml": "name: x"}, "belongs to the agent"},
+		"install hook":             {map[string]string{"install.sh": "#!/bin/sh\n"}, "allow-listed"},
+		"shared memory":            {map[string]string{"memory/events.md": "- sneaky\n"}, "never shared memory"},
+		"master key":               {map[string]string{"master.key": "k"}, "key material"},
+		"nested git":               {map[string]string{"skills/demo-skill/.git/config": "bad"}, "nested .git"},
+		"dangling skill":           {map[string]string{"routines/other.md": "---\nschedule: \"0 9 * * *\"\nskills: [ghost]\n---\nx\n"}, "neither the plugin nor the agent"},
+		"undeclared cred":          {map[string]string{"routines/other.md": "---\nschedule: \"0 9 * * *\"\ncredentials: [ghost_token]\n---\nx\n"}, "missing from the PLUGIN.md credentials block"},
 		"unknown manifest field": {map[string]string{
 			"PLUGIN.md": "---\nname: demo\ndescription: d\ncredentialz: {}\n---\n",
 		}, "field credentialz not found"},
