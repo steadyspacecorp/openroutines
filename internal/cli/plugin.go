@@ -69,26 +69,11 @@ func pluginAdd(args []string) int {
 	}
 	defer cleanup()
 
-	_, existingSkills, err := plugin.AgentNamespace(".")
+	inst, err := plugin.PrepareInstall(".", root, provenance)
 	if err != nil {
 		return fail(err)
 	}
-	agentSkills := map[string]bool{}
-	for _, s := range existingSkills {
-		agentSkills[s.Name] = true
-	}
-
-	p, err := plugin.Load(root, agentSkills)
-	if err != nil {
-		return fail(err)
-	}
-	collisions, err := p.Collisions(".")
-	if err != nil {
-		return fail(err)
-	}
-	if len(collisions) > 0 {
-		return fail(fmt.Errorf("already present, refusing to replace: %s -- remove them first to reinstall", strings.Join(collisions, ", ")))
-	}
+	p := inst.Plugin
 
 	fmt.Printf("Plugin %q -- %s\n\n", p.Manifest.Name, firstLine(p.Manifest.Description))
 	if p.Body != "" {
@@ -112,7 +97,7 @@ func pluginAdd(args []string) int {
 		}
 	}
 
-	installed, pendingStubs, err := p.Install(".", provenance)
+	installed, pendingStubs, err := inst.Apply()
 	if err != nil {
 		return fail(err)
 	}
