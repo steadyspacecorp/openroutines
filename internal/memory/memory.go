@@ -117,7 +117,10 @@ func newGitCmd(dir string, args []string) *exec.Cmd {
 // writers either: auto-gc detaches from the invoking command and keeps
 // writing .git/objects after it returns -- racing test TempDir cleanup (the
 // supervisor suite's flake) and, in production, container shutdown.
-// Repacking is origin's concern, not a run's.
+// Repacking is origin's concern, not a run's. And no unbounded stalls: a
+// transfer that goes quiet is abandoned rather than parked forever, because
+// a hung push is time the single-instance lease spends going stale while
+// this instance is very much alive.
 var hermeticConfig = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "protocol.file.allow=user",
@@ -125,6 +128,8 @@ var hermeticConfig = []string{
 	"-c", "user.email=agent@openroutines.dev",
 	"-c", "gc.auto=0",
 	"-c", "maintenance.auto=false",
+	"-c", "http.lowSpeedLimit=1000",
+	"-c", "http.lowSpeedTime=60",
 }
 
 // git runs a git command against the repo with hermetic configuration:
