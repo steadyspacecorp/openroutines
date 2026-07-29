@@ -74,12 +74,38 @@ var supervisorOwned = map[string]bool{
 	"runs.jsonl": true,
 }
 
-// newGitCmd builds a git invocation with hermetic environment: no system or
-// global config leaks in.
+// gitPassthrough is everything a git child inherits from this process. git
+// and ssh need these to work at all -- on a developer machine especially,
+// where authentication runs through the operator's own agent, keys, and
+// known_hosts.
+var gitPassthrough = []string{
+	"PATH",          // git's own subcommands, ssh, credential helpers
+	"HOME",          // ~/.ssh: known_hosts and the operator's keys and config
+	"SSH_AUTH_SOCK", // the operator's ssh-agent
+	"TMPDIR",
+	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+	"http_proxy", "https_proxy", "no_proxy",
+	// A TLS-inspecting proxy needs its CA bundle alongside the proxy
+	// itself, and the environment is the only channel left: http.sslCAInfo
+	// would live in the global config this invocation sends to /dev/null.
+	"GIT_SSL_CAINFO", "GIT_PROXY_SSL_CAINFO",
+}
+
+// newGitCmd builds a git invocation with a hermetic environment: no system or
+// global config leaks in, and the environment is constructed rather than
+// inherited. Inheriting it put OPENROUTINES_MASTER_KEY in the child's
+// /proc/<pid>/environ under env-var key delivery -- readable by any same-UID
+// process, model processes included, because the supervisor's non-dumpable
+// flag does not survive execve.
 func newGitCmd(dir string, args []string) *exec.Cmd {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	cmd.Env = []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
+	for _, name := range gitPassthrough {
+		if v, ok := os.LookupEnv(name); ok {
+			cmd.Env = append(cmd.Env, name+"="+v)
+		}
+	}
 	if sshCommand != "" {
 		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND="+sshCommand)
 	}

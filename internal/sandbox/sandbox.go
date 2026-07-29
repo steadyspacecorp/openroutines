@@ -41,8 +41,11 @@ const (
 // /proc stays readable: /dev/fd resolves through /proc/self/fd (bash process
 // substitution) and node reads its own cgroup files. The secrets that made
 // /proc dangerous are protected at the source instead -- the supervisor is
-// non-dumpable (ProtectProcess) and keys are file-delivered, so
-// /proc/<supervisor>/environ is both unreadable and empty of secrets.
+// non-dumpable (ProtectProcess), keys are file-delivered, and every child the
+// supervisor spawns (git included) gets a constructed, secret-free
+// environment. That last one matters because non-dumpable does not survive
+// execve: a child inheriting the supervisor's environment would publish the
+// master key in its own /proc/<pid>/environ.
 func Paths(workspace, memoryDir, runTmp, home, attemptHome string) (ro, rw []string) {
 	ro = []string{
 		workspace,
