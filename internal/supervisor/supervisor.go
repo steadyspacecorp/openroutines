@@ -224,7 +224,6 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		st *schedule.State
 	}
 	var due []dispatch
-	stateChanged := false
 	for _, r := range routines {
 		if !r.FM.IsActive() || (r.FM.Schedule == "" && r.FM.Trigger == nil) {
 			continue
@@ -257,7 +256,6 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 				continue
 			}
 			s.Log.Printf("%s: registered (watermark %s)", r.Name, now.Format(time.RFC3339))
-			stateChanged = true
 			continue
 		}
 		if st.Pending == nil {
@@ -281,17 +279,13 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 					// The scheduled run will pull whatever the trigger would
 					// have announced; refresh the baseline so the same news
 					// doesn't double-fire right after it.
-					if r.FM.Trigger != nil && s.refreshTriggerBaseline(r, now) {
-						stateChanged = true
+					if r.FM.Trigger != nil {
+						s.refreshTriggerBaseline(r, now)
 					}
 				}
 			}
 			if !minted && r.FM.Trigger != nil {
-				fired, dirty := s.evaluateTrigger(r, now)
-				if dirty {
-					stateChanged = true
-				}
-				if fired {
+				if s.evaluateTrigger(r, now) {
 					st.Pending = &schedule.Pending{
 						RunID:          schedule.NewRunID(),
 						ScheduledFor:   now,
@@ -309,7 +303,6 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 				s.Log.Printf("%s: %v", r.Name, err)
 				continue
 			}
-			stateChanged = true
 		}
 		if now.Before(schedule.NextRetryAt(st.Pending)) {
 			continue // backing off after a failed attempt
@@ -317,14 +310,17 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		due = append(due, dispatch{r, st})
 	}
 
-	// Persist-before-act: intent commits must be durable before any run acts.
-	if stateChanged {
-		if _, err := s.mem.Commit("Record pending runs"); err != nil {
-			s.Log.Printf("intent commit failed: %v", err)
-			return
-		}
+	// Persist-before-act: intent must be durable before any run acts. The
+	// commit is unconditional -- an earlier tick that wrote state and then
+	// failed to commit it leaves the record on disk and nowhere else, and no
+	// later tick would mint anything to notice. What the worktree carries is
+	// the intent; Commit no-ops on a clean tree.
+	intent, err := s.mem.Commit("Record pending runs")
+	if err != nil {
+		s.Log.Printf("intent commit failed: %v", err)
+		return
 	}
-	if !s.noOrigin && len(due) > 0 && !s.syncBlocked {
+	if !s.noOrigin && (intent != "" || len(due) > 0) && !s.syncBlocked {
 		if err := s.mem.Push(); err != nil {
 			// An identity that isn't durable is how duplicates happen: without
 			// a pushed intent, no new logical run starts.

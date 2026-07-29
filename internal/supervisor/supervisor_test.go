@@ -15,7 +15,10 @@ import (
 
 // fakeOpencode is a stand-in for the real binary: it reads fake-mode from
 // its own directory (the workspace is allow-list built and carries no test
-// scaffolding) to decide whether to succeed (writing memory) or fail.
+// scaffolding) to decide whether to succeed (writing memory) or fail. The
+// probe mode clones the memory branch from origin at spawn time -- exactly
+// what a replacement container would materialize if this attempt killed the
+// supervisor.
 const fakeOpencode = `#!/bin/sh
 mode=$(cat "$(dirname "$0")/fake-mode" 2>/dev/null || echo ok)
 # Every mode leaves the session storage a real opencode leaves in the
@@ -33,6 +36,9 @@ case "$mode" in
   consume) cp inbox.md memory/inbox-copy.md
      : > CONSUMED
      echo "consumed" ;;
+  probe) rm -rf "$(dirname "$0")/replacement"
+     git clone -q -b memory "$(cat "$(dirname "$0")/origin")" "$(dirname "$0")/replacement" || true
+     echo "probed" ;;
   *) mkdir -p memory/ledgers
      echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
      echo "done" ;;
@@ -99,6 +105,44 @@ func loadState(t *testing.T, s *Supervisor) *schedule.State {
 func readFile(_ *testing.T, path string) string {
 	raw, _ := os.ReadFile(path)
 	return string(raw)
+}
+
+func runCmd(t *testing.T, cwd string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = cwd
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %v: %s", args, err, out)
+	}
+}
+
+// fakeBinDir is where fixture put the fake opencode: the first PATH entry.
+func fakeBinDir() string {
+	return strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+}
+
+// withOrigin gives the agent a bare origin and tells the fake opencode where
+// it is, so a probe run can clone it mid-attempt.
+func withOrigin(t *testing.T, dir string) {
+	t.Helper()
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	runCmd(t, "", "git", "init", "-q", "-b", "main", "--bare", bare)
+	runCmd(t, dir, "git", "remote", "add", "origin", bare)
+	if err := os.WriteFile(filepath.Join(fakeBinDir(), "origin"), []byte(bare+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// replacementState is the scheduling state a replacement container would read
+// after materializing memory from origin, as of the moment the last probe
+// attempt's model process started.
+func replacementState(t *testing.T) *schedule.State {
+	t.Helper()
+	st, err := schedule.Load(filepath.Join(fakeBinDir(), "replacement", "state"), "every-minute")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
 }
 
 func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
@@ -522,6 +566,38 @@ func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
 	<-done
 	if got := strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_"); got != 3 {
 		t.Fatalf("lease holder should have run all 3 routines, got %d", got)
+	}
+}
+
+// A tick that wrote pending state and then failed to commit it leaves the
+// record on disk and nowhere else -- and the next tick, seeing a pending run,
+// mints nothing and would dispatch under an identity that exists only here.
+// Persist-before-act cannot rest on control flow: whatever the worktree
+// carries is committed and pushed before anything runs.
+func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
+	dir := fixture(t, "probe")
+	withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0) // register
+
+	// The aftermath of a failed intent commit: pending state on disk only.
+	st := loadState(t, s)
+	st.Pending = &schedule.Pending{RunID: "run_orphaned", ScheduledFor: t0, CoveredThrough: t0, CreatedAt: t0}
+	if err := st.Save(s.stateDir()); err != nil {
+		t.Fatal(err)
+	}
+	if n := memory.At(dir).Status().Uncommitted; n == 0 {
+		t.Fatal("precondition: the pending record should be uncommitted")
+	}
+
+	s.Tick(ctx, t0.Add(time.Minute)) // dispatches the orphaned pending run
+
+	seen := replacementState(t)
+	if seen == nil || seen.Pending == nil || seen.Pending.RunID != "run_orphaned" {
+		t.Fatalf("the run's identity should have reached origin before it acted, replacement sees %+v", seen)
 	}
 }
 
