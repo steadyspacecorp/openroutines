@@ -515,3 +515,28 @@ func TestResolveCredentialsRaw(t *testing.T) {
 		t.Fatal("expected derivation failure for an invalid stored key")
 	}
 }
+
+// `docker stop` can return without the run's client following the container
+// out -- an unresponsive daemon has nothing to stop. The wait on the client
+// must end anyway, or a local run parks the caller the way an orphan holding
+// the output pipe used to park the supervisor.
+func TestKillClientBoundsTheWaitOnAStuckDockerClient(t *testing.T) {
+	cmd := exec.Command("sleep", "120")
+	cmd.WaitDelay = pipeDrainDeadline
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		killClient(cmd, 100*time.Millisecond, done)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("killClient never returned: the wait on the docker client is unbounded")
+	}
+}

@@ -365,12 +365,13 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	scrubber := scrub.NewWriter(io.MultiWriter(os.Stdout, tail), secrets.scrub)
 	cmd.Stdout = scrubber
 	cmd.Stderr = scrubber
+	cmd.WaitDelay = pipeDrainDeadline
 
 	done := make(chan error, 1)
 	kill := func() {
 		if containerName != "" {
 			stopContainer(containerName)
-			<-done
+			killClient(cmd, containerExitGrace, done)
 		} else {
 			killGroup(cmd, 10*time.Second, done)
 		}
@@ -383,7 +384,10 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	go func() { done <- cmd.Wait() }()
 	select {
 	case werr := <-done:
-		if werr != nil {
+		// ErrWaitDelay means the process exited fine but something it left
+		// behind still held the output pipe: the run's outcome is the
+		// process's, not the orphan's -- only the tail of the log is lost.
+		if werr != nil && !errors.Is(werr, exec.ErrWaitDelay) {
 			res.Outcome = Crashed
 			if ee, isExit := werr.(*exec.ExitError); isExit {
 				res.ExitCode = ee.ExitCode()
@@ -898,7 +902,41 @@ func variablesLine(agent *config.Agent) string {
 	return strings.Join(names, ", ")
 }
 
+// pipeDrainDeadline bounds how long waiting on the run's output pipes may
+// outlast the process itself. A grandchild that left the process group --
+// a tool that daemonized into its own session -- keeps the inherited pipe
+// open after the run is signalled and killed, and the wait for EOF would
+// otherwise never end: the supervisor would hang on a run it had already
+// terminated. On expiry the pipes are closed and what can be reaped is
+// reaped; the orphan lives on, but it no longer holds the tick loop.
+const pipeDrainDeadline = 5 * time.Second
+
+// containerExitGrace is how long `docker run` gets to notice that its
+// container is gone before the client itself is killed.
+const containerExitGrace = 5 * time.Second
+
+// killClient ends a container run: `docker stop` has already been asked to
+// take the container down, so the client should follow it out. When it does
+// not -- an unresponsive daemon, a stop that timed out -- the client is
+// killed, because the alternative is the tick waiting on a docker CLI that
+// may never return. The container can outlive the run; a stuck daemon is the
+// operator's problem, but it must not become the supervisor's.
+//
+// Waiting for Wait to return is not optional: the caller reads the tail
+// buffer the output goroutines write to, so returning before Wait would race
+// them. The bound comes from making the process exit, not from walking away.
+func killClient(cmd *exec.Cmd, grace time.Duration, done chan error) {
+	select {
+	case <-done:
+	case <-time.After(grace):
+		_ = cmd.Process.Kill()
+		<-done // bounded by WaitDelay now that the process is going away
+	}
+}
+
 // killGroup terminates the run's whole process group: SIGTERM, grace, SIGKILL.
+// The waits are bounded by the command's WaitDelay, not by the group's
+// willingness to exit.
 func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error) {
 	pgid := -cmd.Process.Pid
 	_ = syscall.Kill(pgid, syscall.SIGTERM)
