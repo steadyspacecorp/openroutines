@@ -90,24 +90,32 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 	}
 }
 
+// trimFixture appends one event, commits it, then trims and commits the trim
+// the way the supervisor does. Returns the commit the event landed in.
+func trimFixture(t *testing.T, dir string) string {
+	t.Helper()
+	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
+	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
+		t.Fatal(err)
+	}
+	added, _ := At(dir).Head()
+	// Age the whole worktree past the window rather than backdating commits.
+	if changed, err := At(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
+		t.Fatalf("trim: changed=%v err=%v", changed, err)
+	}
+	if _, err := At(dir).Commit(TrimCommitMessage(30 * 24 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	return added
+}
+
 // A line added and later removed must still appear as an addition to a
 // consumer that hasn't seen it -- the feed is commit-by-commit, never a net
 // endpoint diff.
 func TestChangesSurvivePruning(t *testing.T) {
 	dir := deliveryFixture(t)
 	from, _ := At(dir).Head()
-
-	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
-	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
-		t.Fatal(err)
-	}
-	// Simulate retention pruning the line.
-	p := filepath.Join(At(dir).Worktree(), "events.md")
-	raw, _ := os.ReadFile(p)
-	os.WriteFile(p, []byte(strings.ReplaceAll(string(raw), "- 2026-07-21 doc-drift: ephemeral fact\n", "")), 0o644)
-	if _, err := At(dir).Commit("Trim memory to retention window"); err != nil {
-		t.Fatal(err)
-	}
+	trimFixture(t, dir)
 
 	through, _ := At(dir).Head()
 	changes, err := At(dir).Changes(from, through)
@@ -122,6 +130,23 @@ func TestChangesSurvivePruning(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(added, "\n"), "ephemeral fact") {
 		t.Fatalf("pruned event lost from the feed: %+v", changes)
+	}
+}
+
+// Retention pruning is not a change to report: a consumer whose cursor is
+// already past the trimmed entries must see nothing at all from the trim
+// commit, not a block of removals for history it consumed long ago.
+func TestRetentionTrimIsNotDelivered(t *testing.T) {
+	dir := deliveryFixture(t)
+	cursor := trimFixture(t, dir)
+
+	through, _ := At(dir).Head()
+	changes, err := At(dir).Changes(cursor, through)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("retention trim re-entered the feed: %+v", changes)
 	}
 }
 

@@ -125,10 +125,15 @@ func (m *Memory) Changes(from, through string) ([]CommitChange, error) {
 		return nil, fmt.Errorf("delivery changes: empty commit range")
 	}
 	// The commit sentinel and field separators are emitted by git itself
-	// (%x00/%x1f) -- argv cannot carry a literal NUL.
+	// (%x00/%x1f) -- argv cannot carry a literal NUL. Retention trims are
+	// dropped from the walk: pruning is bookkeeping, not a memory change, and
+	// delivering its removals would re-present already-consumed history to
+	// every consumer once a day. The pattern is anchored because --grep sees
+	// the whole message, subject included, and a routine name is a filename.
 	args := append([]string{
 		"log", "--reverse", "--date=format:%Y-%m-%d",
 		"--format=%x00%H%x1f%ad%x1f%s", "-p", "-U0", "--no-color",
+		"--invert-grep", "--grep=^" + trimTrailer + "$",
 		from + ".." + through, "--", ".",
 	}, deliveryExcludes...)
 	out, err := git(m.Worktree(), args...)
