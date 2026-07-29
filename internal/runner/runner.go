@@ -402,6 +402,15 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 				res.ExitCode = -1
 			}
 		}
+		// The model process is gone, but a descendant it detached from its
+		// stdio is not: it outlives the attempt in the supervisor's own
+		// container and keeps writing to staged memory while the pipeline
+		// validates and imports it. The attempt ends with its whole process
+		// group whichever way it ended. (In container mode the run's pid
+		// namespace dies with `docker run --rm`, which does this already.)
+		if containerName == "" {
+			reapGroup(cmd)
+		}
 	case <-time.After(timeout):
 		res.Outcome = Timeout
 		kill()
@@ -956,6 +965,16 @@ func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error) {
 		_ = syscall.Kill(pgid, syscall.SIGKILL)
 		<-done
 	}
+}
+
+// reapGroup kills what the model process left running after exiting on its
+// own. No grace period: the run is over, nothing left in the group has an
+// output anyone reads, and the pipeline is about to treat staging as final.
+// The leader has been waited on, so the group only still exists if a
+// descendant is alive -- and a live group's id cannot be recycled as a pid,
+// so this cannot reach an unrelated process.
+func reapGroup(cmd *exec.Cmd) {
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
 
 func timestamp() string { return time.Now().UTC().Format(time.RFC3339) }
