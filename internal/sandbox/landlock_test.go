@@ -70,7 +70,7 @@ func TestLandlockConfinement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ro, rw := Paths(workspace, runTmp, home, attemptHome)
+	ro, rw := Paths(workspace, memoryDir, runTmp, home, attemptHome)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

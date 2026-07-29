@@ -2,11 +2,9 @@ package cli
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,8 +13,6 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/plugin"
-	"github.com/steadyspacecorp/openroutines/internal/routine"
-	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
 func cmdPlugin(args []string) int {
@@ -64,34 +60,17 @@ func pluginAdd(args []string) int {
 		return fail(fmt.Errorf("run plugin add from inside an agent repository"))
 	}
 
-	// Local directories and remote sources both go through a temporary clone,
-	// so the vendored payload always corresponds to the recorded commit.
-	root, provenance, cleanup, err := resolvePluginSource(source, subPath, "")
+	root, provenance, cleanup, err := plugin.Fetch(source, subPath, "")
 	if err != nil {
 		return fail(err)
 	}
 	defer cleanup()
 
-	_, existingSkills, err := plugin.AgentNamespace(".")
+	inst, err := plugin.PrepareInstall(".", root, provenance)
 	if err != nil {
 		return fail(err)
 	}
-	agentSkills := map[string]bool{}
-	for _, s := range existingSkills {
-		agentSkills[s.Name] = true
-	}
-
-	p, err := plugin.Load(root, agentSkills)
-	if err != nil {
-		return fail(err)
-	}
-	collisions, err := p.Collisions(".")
-	if err != nil {
-		return fail(err)
-	}
-	if len(collisions) > 0 {
-		return fail(fmt.Errorf("already present, refusing to replace: %s -- remove them first to reinstall", strings.Join(collisions, ", ")))
-	}
+	p := inst.Plugin
 
 	fmt.Printf("Plugin %q -- %s\n\n", p.Manifest.Name, firstLine(p.Manifest.Description))
 	if p.Body != "" {
@@ -115,7 +94,7 @@ func pluginAdd(args []string) int {
 		}
 	}
 
-	installed, pendingStubs, err := p.Install(".", provenance)
+	installed, pendingStubs, err := inst.Apply()
 	if err != nil {
 		return fail(err)
 	}
@@ -131,7 +110,11 @@ func pluginAdd(args []string) int {
 	// already-defined name is the person's entry and is left untouched.
 	mcpHandled := map[string]bool{}
 	if interactive && !yes && len(p.Manifest.MCP) > 0 {
-		defined := config.MCPServers(".")
+		oc, err := config.LoadOpenCode(".")
+		if err != nil {
+			return fail(err)
+		}
+		defined := oc.MCPServers()
 		reader := bufio.NewReader(os.Stdin)
 		for _, name := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
 			if slices.Contains(defined, name) {
@@ -140,12 +123,12 @@ func pluginAdd(args []string) int {
 				continue
 			}
 			m := p.Manifest.MCP[name]
-			fmt.Printf("Define mcp server %q in opencode.json? This connects runs that grant it to an external endpoint.\n  %s\n  [y/N] ", name, mcpSnippet(name, m))
+			fmt.Printf("Define mcp server %q in opencode.json? This connects runs that grant it to an external endpoint.\n  %s\n  [y/N] ", name, config.MCPSnippet(name, m.URL, m.Credential))
 			line, _ := reader.ReadString('\n')
 			if strings.TrimSpace(strings.ToLower(line)) != "y" {
 				continue // stays a printed next step
 			}
-			if err := config.AddMCPServer(".", name, mcpEntry(m)); err != nil {
+			if err := config.AddMCPServer(".", name, m.URL, m.Credential); err != nil {
 				return fail(err)
 			}
 			fmt.Printf("  wrote mcp server %q to opencode.json\n", name)
@@ -177,7 +160,7 @@ func pluginAdd(args []string) int {
 		if mcpHandled[name] {
 			continue
 		}
-		stepf("add to opencode.json's mcp block:  %s  # %s", mcpSnippet(name, p.Manifest.MCP[name]), firstLine(p.Manifest.MCP[name].Description))
+		stepf("add to opencode.json's mcp block:  %s  # %s", config.MCPSnippet(name, p.Manifest.MCP[name].URL, p.Manifest.MCP[name].Credential), firstLine(p.Manifest.MCP[name].Description))
 	}
 	for _, s := range pendingStubs {
 		stepf("seed %s after the memory worktree exists (first run creates it)", s)
@@ -188,100 +171,6 @@ func pluginAdd(args []string) int {
 	}
 	stepf("review the diff and commit -- suggested message: \"Install plugin %s (from %s @ %s)\"", p.Manifest.Name, provenance.Repository, shortRevision(provenance.Revision))
 	return 0
-}
-
-// mcpEntry renders a declared server as the opencode.json entry a person
-// consents to. Always remote (the framework's only supported transport); a
-// named credential becomes the standard bearer header referencing the
-// credential's run-environment name.
-func mcpEntry(m plugin.MCPServer) map[string]any {
-	entry := map[string]any{"type": "remote", "url": m.URL}
-	if m.Credential != "" {
-		entry["headers"] = map[string]any{"Authorization": "Bearer {env:" + strings.ToUpper(m.Credential) + "}"}
-	}
-	return entry
-}
-
-// mcpSnippet is mcpEntry as the exact JSON shown at the consent prompt and
-// in the paste step -- what you read is what lands.
-func mcpSnippet(name string, m plugin.MCPServer) string {
-	entry, _ := json.Marshal(mcpEntry(m))
-	return fmt.Sprintf("%q: %s", name, entry)
-}
-
-func resolvePluginSource(source, subPath, revision string) (string, plugin.Source, func(), error) {
-	cleanup := func() {}
-	repository := source
-	cloneURL := ""
-	repoRoot := ""
-	if fi, err := os.Stat(source); err == nil && fi.IsDir() {
-		abs, err := filepath.Abs(source)
-		if err != nil {
-			return "", plugin.Source{}, cleanup, err
-		}
-		abs, err = filepath.EvalSymlinks(abs)
-		if err != nil {
-			return "", plugin.Source{}, cleanup, err
-		}
-		out, err := exec.Command("git", "-C", abs, "rev-parse", "--show-toplevel").Output()
-		if err != nil {
-			return "", plugin.Source{}, cleanup, fmt.Errorf("local plugin source must be inside a git repository: %w", err)
-		}
-		repoRoot, err = filepath.EvalSymlinks(strings.TrimSpace(string(out)))
-		if err != nil {
-			return "", plugin.Source{}, cleanup, err
-		}
-		cloneURL = repoRoot
-		localPath, err := filepath.Rel(repoRoot, abs)
-		if err != nil {
-			return "", plugin.Source{}, cleanup, err
-		}
-		if subPath != "" {
-			localPath = filepath.Join(localPath, subPath)
-		}
-		subPath = filepath.ToSlash(localPath)
-		repository = repoRoot
-	}
-	if cloneURL == "" {
-		cloneURL = repository
-	}
-	if !strings.Contains(repository, "://") && !strings.Contains(repository, "@") && strings.Count(repository, "/") == 1 {
-		cloneURL = "https://github.com/" + repository + ".git"
-		repository = cloneURL
-	}
-	tmp, err := os.MkdirTemp("", "openroutines-plugin-*")
-	if err != nil {
-		return "", plugin.Source{}, cleanup, err
-	}
-	cleanup = func() { _ = os.RemoveAll(tmp) }
-	clone := exec.Command("git", "-c", "protocol.ext.allow=never", "clone", "--quiet", "--", cloneURL, tmp)
-	clone.Stderr = os.Stderr
-	if err := clone.Run(); err != nil {
-		cleanup()
-		return "", plugin.Source{}, func() {}, fmt.Errorf("clone %s: %w", cloneURL, err)
-	}
-	if revision != "" {
-		checkout := exec.Command("git", "-C", tmp, "checkout", "--quiet", "--detach", revision)
-		checkout.Stderr = os.Stderr
-		if err := checkout.Run(); err != nil {
-			cleanup()
-			return "", plugin.Source{}, func() {}, fmt.Errorf("checkout %s: %w", revision, err)
-		}
-	}
-	revBytes, err := exec.Command("git", "-C", tmp, "rev-parse", "HEAD").Output()
-	if err != nil {
-		cleanup()
-		return "", plugin.Source{}, func() {}, err
-	}
-	root := tmp
-	if subPath != "" && subPath != "." {
-		root, err = pluginSubdir(tmp, filepath.FromSlash(subPath))
-		if err != nil {
-			cleanup()
-			return "", plugin.Source{}, func() {}, err
-		}
-	}
-	return root, plugin.Source{Repository: repository, Path: subPath, Revision: strings.TrimSpace(string(revBytes))}, cleanup, nil
 }
 
 func shortRevision(revision string) string {
@@ -336,62 +225,23 @@ func pluginUpdate(args []string) int {
 		return fail(fmt.Errorf("usage: openroutines plugin update <name> [--yes]"))
 	}
 	name := rest[0]
-	if !skill.NamePattern.MatchString(name) {
-		return fail(fmt.Errorf("invalid plugin name %q", name))
-	}
-	ours := filepath.Join("plugins", name)
-	oldSource, err := plugin.ReadSource(ours)
+	upd, err := plugin.PrepareUpdate(".", name)
 	if err != nil {
-		return fail(fmt.Errorf("plugin %s: %w", name, err))
+		return fail(err)
 	}
-	base, _, cleanupBase, err := resolvePluginSource(oldSource.Repository, oldSource.Path, oldSource.Revision)
-	if err != nil {
-		return fail(fmt.Errorf("load recorded revision: %w", err))
-	}
-	defer cleanupBase()
-	theirs, newSource, cleanupTheirs, err := resolvePluginSource(oldSource.Repository, oldSource.Path, "")
-	if err != nil {
-		return fail(fmt.Errorf("load upstream: %w", err))
-	}
-	defer cleanupTheirs()
-	if newSource.Revision == oldSource.Revision {
-		fmt.Printf("Plugin %s is already current at %s.\n", name, shortRevision(oldSource.Revision))
+	defer upd.Close()
+	if upd.Current() {
+		fmt.Printf("Plugin %s is already current at %s.\n", name, shortRevision(upd.Old.Revision))
 		return 0
 	}
-	_, existingSkills, err := plugin.AgentNamespace(".")
-	if err != nil {
-		return fail(err)
-	}
-	agentSkills := map[string]bool{}
-	for _, s := range existingSkills {
-		agentSkills[s.Name] = true
-	}
-	upstream, err := plugin.Load(theirs, agentSkills)
-	if err != nil {
-		return fail(fmt.Errorf("new upstream revision is invalid: %w", err))
-	}
-	if upstream.Manifest.Name != name {
-		return fail(fmt.Errorf("upstream plugin name changed from %q to %q", name, upstream.Manifest.Name))
-	}
-	collisions, err := pluginExternalCollisions(name, upstream)
-	if err != nil {
-		return fail(err)
-	}
-	if len(collisions) > 0 {
-		return fail(fmt.Errorf("updated plugin collides with agent content: %s", strings.Join(collisions, ", ")))
-	}
-	fmt.Printf("Update plugin %q: %s -> %s\n\n", name, shortRevision(oldSource.Revision), shortRevision(newSource.Revision))
-	changes, err := plugin.Changes(base, theirs)
-	if err != nil {
-		return fail(err)
-	}
+	fmt.Printf("Update plugin %q: %s -> %s\n\n", name, shortRevision(upd.Old.Revision), shortRevision(upd.New.Revision))
 	fmt.Println("Upstream files:")
-	for _, change := range changes {
+	for _, change := range upd.Changes {
 		fmt.Printf("  %s\n", change)
 	}
 	fmt.Println()
 	fmt.Println("The updated bundle asks for:")
-	fmt.Println(indent(strings.TrimRight(upstream.Summary(), "\n"), "  "))
+	fmt.Println(indent(strings.TrimRight(upd.Upstream.Summary(), "\n"), "  "))
 	fmt.Println()
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
 	if !interactive && !yes {
@@ -405,132 +255,15 @@ func pluginUpdate(args []string) int {
 			return 0
 		}
 	}
-	merged, err := os.MkdirTemp(".", ".openroutines-plugin-update-*")
+	conflicts, err := upd.Apply()
 	if err != nil {
-		return fail(err)
-	}
-	defer os.RemoveAll(merged)
-	conflicts, err := plugin.MergeTrees(base, ours, theirs, merged)
-	if err != nil {
-		return fail(err)
-	}
-	basePlugin, err := plugin.Load(base, agentSkills)
-	if err != nil {
-		return fail(fmt.Errorf("recorded upstream revision is invalid: %w", err))
-	}
-	baseRoutines := map[string]bool{}
-	for _, r := range basePlugin.Routines {
-		baseRoutines[r.Name] = true
-	}
-	for _, r := range upstream.Routines {
-		if baseRoutines[r.Name] {
-			continue
-		}
-		path := filepath.Join(merged, "routines", r.Name+".md")
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return fail(err)
-		}
-		raw, err = routine.WithActive(raw, false)
-		if err != nil {
-			return fail(err)
-		}
-		if err := os.WriteFile(path, raw, 0o644); err != nil {
-			return fail(err)
-		}
-	}
-	sourceToWrite := newSource
-	if len(conflicts) > 0 {
-		sourceToWrite = oldSource
-	}
-	if err := plugin.WriteSource(merged, sourceToWrite); err != nil {
-		return fail(err)
-	}
-	if len(conflicts) == 0 {
-		mergedPlugin, err := plugin.Load(merged, agentSkills)
-		if err != nil {
-			return fail(fmt.Errorf("merged plugin is invalid: %w", err))
-		}
-		mergedCollisions, err := pluginExternalCollisions(name, mergedPlugin)
-		if err != nil {
-			return fail(err)
-		}
-		if len(mergedCollisions) > 0 {
-			return fail(fmt.Errorf("merged plugin collides with agent content: %s", strings.Join(mergedCollisions, ", ")))
-		}
-	}
-	backup := ours + ".update-backup"
-	if err := os.Rename(ours, backup); err != nil {
-		return fail(err)
-	}
-	if err := os.Rename(merged, ours); err != nil {
-		_ = os.Rename(backup, ours)
-		return fail(err)
-	}
-	if err := os.RemoveAll(backup); err != nil {
 		return fail(err)
 	}
 	if len(conflicts) > 0 {
-		return fail(fmt.Errorf("plugin update has conflicts in %s; resolve the markers and rerun update (recorded revision remains %s)", strings.Join(conflicts, ", "), shortRevision(oldSource.Revision)))
+		return fail(fmt.Errorf("plugin update has conflicts in %s; resolve the markers and rerun update (recorded revision remains %s)", strings.Join(conflicts, ", "), shortRevision(upd.Old.Revision)))
 	}
-	fmt.Printf("Updated plugins/%s to %s. Review the diff, run openroutines check, and commit.\n", name, shortRevision(newSource.Revision))
+	fmt.Printf("Updated plugins/%s to %s. Review the diff, run openroutines check, and commit.\n", name, shortRevision(upd.New.Revision))
 	return 0
-}
-
-func pluginExternalCollisions(name string, candidate *plugin.Plugin) ([]string, error) {
-	routines, skills, err := plugin.AgentNamespace(".")
-	if err != nil {
-		return nil, fmt.Errorf("agent routines and skills must be valid before updating: %w", err)
-	}
-	ownPrefix := filepath.Clean(filepath.Join("plugins", name)) + string(filepath.Separator)
-	routineNames := map[string]bool{}
-	for _, r := range routines {
-		clean := filepath.Clean(r.Path)
-		if clean == filepath.Clean(filepath.Join("plugins", name)) || strings.HasPrefix(clean, ownPrefix) {
-			continue
-		}
-		routineNames[r.Name] = true
-	}
-	skillNames := map[string]bool{}
-	for _, s := range skills {
-		clean := filepath.Clean(s.Dir)
-		if clean == filepath.Clean(filepath.Join("plugins", name)) || strings.HasPrefix(clean, ownPrefix) {
-			continue
-		}
-		skillNames[s.Name] = true
-	}
-	var collisions []string
-	for _, r := range candidate.Routines {
-		if routineNames[r.Name] {
-			collisions = append(collisions, "routine "+r.Name)
-		}
-	}
-	for _, s := range candidate.Skills {
-		if skillNames[s.Name] {
-			collisions = append(collisions, "skill "+s.Name)
-		}
-	}
-	return collisions, nil
-}
-
-func pluginSubdir(root, subPath string) (string, error) {
-	clean := filepath.Clean(subPath)
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("--path %q escapes the plugin repository", subPath)
-	}
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", err
-	}
-	candidate, err := filepath.EvalSymlinks(filepath.Join(resolvedRoot, clean))
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(resolvedRoot, candidate)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("--path %q escapes the plugin repository", subPath)
-	}
-	return candidate, nil
 }
 
 func indent(s, prefix string) string {

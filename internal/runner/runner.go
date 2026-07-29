@@ -176,6 +176,14 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		return nil, nil, err
 	}
 	timeout := EffectiveTimeout(agent, r)
+	// The harness config is parsed from the agent repository, not the
+	// workspace copy buildWorkspace makes later: MCP permission rules must
+	// never depend on pipeline ordering to see the server list. A file
+	// opencode could not parse fails the attempt here, before anything runs.
+	oc, err := config.LoadOpenCode(dir)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	secrets, err := resolveCredentials(dir, agent, r, model, meta.DryRun)
 	if err != nil {
@@ -184,7 +192,8 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	// Derived material (installation tokens) is revoked when the attempt
 	// ends, success or failure; a fresh attempt derives fresh material.
 	defer secrets.release()
-	if err := memory.EnsureWorktree(dir); err != nil {
+	mem := memory.At(dir)
+	if err := mem.Ensure(); err != nil {
 		return nil, nil, err
 	}
 
@@ -206,7 +215,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	if err := copyDeclaredSkills(dir, workspace, r.FM.Skills); err != nil {
 		return nil, nil, err
 	}
-	if err := memory.Snapshot(dir, staging.MemoryDir); err != nil {
+	if err := mem.Snapshot(staging.MemoryDir); err != nil {
 		return nil, nil, err
 	}
 	if r.FM.IsConsumer() {
@@ -219,7 +228,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	if err := prepareSchedule(dir, workspace, r, agent.Timezone, time.Now()); err != nil {
 		return nil, nil, fmt.Errorf("forward schedule: %w", err)
 	}
-	if err := writeAgentDefinition(workspace, agent, r, meta); err != nil {
+	if err := writeAgentDefinition(workspace, agent, r, oc.MCPServers(), meta); err != nil {
 		return nil, nil, err
 	}
 	runTmp := filepath.Join(workspace, ".runtmp")
@@ -296,7 +305,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 			}
 			attemptHome := filepath.Join(workspace, attemptHomeName)
 			ocExec = hostOpencodeExec(workspace)
-			ro, rw := sandbox.Paths(workspace, runTmp, home, attemptHome)
+			ro, rw := sandbox.Paths(workspace, staging.MemoryDir, runTmp, home, attemptHome)
 			cmd = exec.Command(self, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
 			cmd.Env = append(env,
 				"PATH="+os.Getenv("PATH"),
@@ -429,40 +438,91 @@ func Run(dir, name string, keep bool) (*Result, error) {
 		return res, nil // test: discard staging, record nothing
 	}
 
-	if res.Outcome == Completed {
-		if _, err := ImportMemory(dir, r, staging); err != nil {
-			res.Outcome = Crashed
-			_ = memory.AppendEvent(dir, fmt.Sprintf("%s supervisor: routine %s (%s) memory rejected: %v", datestamp(), r.Name, runID, err))
-		} else {
-			AdvanceConsumer(dir, r, staging, runID)
-		}
-	} else {
-		_ = memory.AppendEvent(dir, fmt.Sprintf("%s supervisor: routine %s (%s) %s after %s (exit %d)", datestamp(), r.Name, runID, res.Outcome, res.Duration, res.ExitCode))
-	}
-	if err := memory.AppendRunRecord(dir, RecordJSON(r, Meta{RunID: runID, AttemptID: "attempt_01"}, 1, exec, true)); err != nil {
-		return res, err
-	}
-	commit, err := memory.Commit(dir, fmt.Sprintf("Run %s (%s): %s", r.Name, runID, res.Outcome))
-	if err != nil {
-		return res, err
-	}
-	res.Commit = commit
-	return res, nil
+	settlement, err := Settle(dir, r, staging, exec, Meta{RunID: runID, AttemptID: "attempt_01"}, "", nil)
+	res.Outcome = settlement.Outcome
+	res.Commit = settlement.Commit
+	return res, err
 }
 
-// ImportMemory applies routine-level memory policy, then imports the staged
+// Settlement is one attempt's settled, durable outcome.
+type Settlement struct {
+	Outcome   Outcome // downgraded to Crashed when staged memory was rejected
+	Detail    string  // the failure description recorded; "" for clean completions
+	Discarded bool    // staged events.md change discarded (events: false)
+	Commit    string  // settlement commit hash, "" when nothing changed
+}
+
+// Settle makes one attempt's end durable in memory -- the single settlement
+// path for manual and scheduled runs. A completed attempt's staged memory is
+// imported under routine policy and its consumer cursor advanced; a rejected
+// import downgrades the outcome to Crashed. Any failure is recorded as an
+// event, every attempt as a run record, and the whole settlement commits as
+// one memory commit. stage, when set, runs before that commit so caller
+// bookkeeping (scheduling state, abandonment tasks) rides the same commit.
+// detail overrides the derived failure description -- for attempts that
+// failed before producing a result; pass it pre-redacted. A Canceled attempt
+// gets only its run record: nothing settled -- the same logical run retries
+// -- and no commit of its own (the shutdown commit carries the record).
+func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, meta Meta, detail string, stage func(*Settlement)) (*Settlement, error) {
+	mem := memory.At(dir)
+	s := &Settlement{Outcome: res.Outcome, Detail: detail}
+	if res.Outcome == Completed {
+		discarded, err := importMemory(dir, r, staging)
+		if err != nil {
+			s.Outcome = Crashed
+			s.Detail = "memory rejected: " + err.Error()
+		} else {
+			s.Discarded = discarded
+			advanceConsumer(dir, r, staging, meta.RunID)
+		}
+	} else if s.Detail == "" && res.Outcome != Canceled {
+		s.Detail = fmt.Sprintf("%s after %s (exit %d)", res.Outcome, res.Duration, res.ExitCode)
+		if res.Hint != "" {
+			s.Detail += " -- " + res.Hint
+		}
+	}
+	if s.Outcome != Completed && s.Outcome != Canceled {
+		_ = mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.AttemptID, s.Detail))
+	}
+	if stage != nil {
+		stage(s)
+	}
+	rec := *res
+	rec.Outcome = s.Outcome
+	if err := mem.AppendRunRecord(recordJSON(r, meta, parseAttempt(meta.AttemptID), &rec, meta.ScheduledFor == "")); err != nil {
+		return s, err
+	}
+	if s.Outcome == Canceled {
+		return s, nil
+	}
+	commit, err := mem.Commit(fmt.Sprintf("Run %s (%s): %s", r.Name, meta.RunID, s.Outcome))
+	if err != nil {
+		return s, err
+	}
+	s.Commit = commit
+	return s, nil
+}
+
+func parseAttempt(attemptID string) int {
+	var n int
+	_, _ = fmt.Sscanf(attemptID, "attempt_%d", &n)
+	return n
+}
+
+// importMemory applies routine-level memory policy, then imports the staged
 // tree. A routine with events: false cannot record events: a staged change
 // to events.md is discarded -- the worktree copy wins, the rest of the tree
 // imports normally. Reports whether such a change was discarded.
-func ImportMemory(dir string, r *routine.Routine, staging *Staging) (bool, error) {
+func importMemory(dir string, r *routine.Routine, staging *Staging) (bool, error) {
+	mem := memory.At(dir)
 	discarded := false
 	if !r.FM.RecordsEvents() {
 		var err error
-		if discarded, err = memory.RestoreFile(dir, staging.MemoryDir, "events.md"); err != nil {
+		if discarded, err = mem.RestoreFile(staging.MemoryDir, "events.md"); err != nil {
 			return false, err
 		}
 	}
-	return discarded, memory.Import(dir, staging.MemoryDir)
+	return discarded, mem.Import(staging.MemoryDir)
 }
 
 // prepareInbox fixes the delivery boundary at the memory branch's current
@@ -471,11 +531,12 @@ func ImportMemory(dir string, r *routine.Routine, staging *Staging) (bool, error
 // cursor starts at the current state: nothing to replay, first consume
 // initializes the cursor.
 func prepareInbox(dir, workspace, consumer string) (string, error) {
-	through, err := memory.Head(dir)
+	mem := memory.At(dir)
+	through, err := mem.Head()
 	if err != nil {
 		return "", err
 	}
-	cursor, err := memory.LoadCursor(dir, consumer)
+	cursor, err := mem.LoadCursor(consumer)
 	if err != nil {
 		return "", err
 	}
@@ -483,7 +544,7 @@ func prepareInbox(dir, workspace, consumer string) (string, error) {
 	var changes []memory.CommitChange
 	if cursor != nil {
 		from = cursor.ConsumedThrough
-		if changes, err = memory.Changes(dir, from, through); err != nil {
+		if changes, err = mem.Changes(from, through); err != nil {
 			return "", err
 		}
 	}
@@ -491,25 +552,25 @@ func prepareInbox(dir, workspace, consumer string) (string, error) {
 	return through, os.WriteFile(filepath.Join(workspace, memory.InboxFileName), []byte(inbox), 0o644)
 }
 
-// AdvanceConsumer moves a consumer routine's cursor through the inbox it just
-// consumed. Call after a successful import, before the completion commit, so
+// advanceConsumer moves a consumer routine's cursor through the inbox it just
+// consumed. Runs after a successful import, before the completion commit, so
 // consumption and results land in the same commit. No marker, no advance:
 // completing a run does not imply consuming its inbox.
-func AdvanceConsumer(dir string, r *routine.Routine, staging *Staging, runID string) {
+func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID string) {
 	if !r.FM.IsConsumer() || staging.ConsumerThrough == "" || !staging.Consumed() {
 		return
 	}
-	_ = memory.SaveCursor(dir, r.Name, memory.Cursor{
+	_ = memory.At(dir).SaveCursor(r.Name, memory.Cursor{
 		ConsumedThrough: staging.ConsumerThrough,
 		ByRun:           runID,
 		At:              time.Now().UTC(),
 	})
 }
 
-// RecordJSON formats one run record line for runs.jsonl. Usage fields are
+// recordJSON formats one run record line for runs.jsonl. Usage fields are
 // per attempt (spend happens per attempt; retries would double-count a
 // run-level figure) and absent means the runtime didn't report, never zero.
-func RecordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, manual bool) string {
+func recordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, manual bool) string {
 	fields := map[string]any{
 		"run_id":          meta.RunID,
 		"routine":         r.Name,
@@ -634,7 +695,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 // missed exactly one entry, credentials.yml.enc; allow-lists don't have
 // that failure mode.)
 func buildWorkspace(dir, workspace string) error {
-	for _, name := range []string{filepath.Base(config.Path(dir)), "opencode.json"} {
+	for _, name := range []string{filepath.Base(config.Path(dir)), config.OpenCodeFileName} {
 		raw, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -735,10 +796,26 @@ type instructionData struct {
 	Variables     string // "$PRODUCT_REPO, $DOCS_URL" -- empty when none configured
 }
 
-// writeAgentDefinition generates the opencode agent for this run: default-deny
-// skills with the routine's declared skills allowed, and the standing
-// instruction that frames memory as records, never instructions.
-func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Routine, meta Meta) error {
+// writeAgentDefinition places the generated opencode agent for this run at
+// the harness's discovery path in the workspace.
+func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Routine, servers []string, meta Meta) error {
+	def, err := renderDefinition(agent, r, servers, meta)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(workspace, ".opencode", "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "routine.md"), []byte(def), 0o644)
+}
+
+// renderDefinition generates the opencode agent for this run: default-deny
+// skills with the routine's declared skills allowed, an explicit rule per
+// configured MCP server (servers is the agent's opencode.json server list --
+// passed in, so rule generation can never silently see an empty config), and
+// the standing instruction that frames memory as records, never instructions.
+func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string, meta Meta) (string, error) {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "description: Generated for routine %s -- derived from frontmatter, do not edit\n", r.Name)
@@ -779,7 +856,7 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 	// regardless of grant -- the tools act on external systems, which a
 	// rehearsal must not do (credentials are withheld anyway; this makes
 	// the denial structural rather than an auth failure).
-	for _, server := range config.MCPServers(workspace) {
+	for _, server := range servers {
 		action := "deny"
 		if !meta.DryRun && slices.Contains(r.FM.MCP, server) {
 			action = "allow"
@@ -805,31 +882,17 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 		Marker:        memory.ConsumeMarker,
 		Variables:     variablesLine(agent),
 	}); err != nil {
-		return err
+		return "", err
 	}
-
-	dir := filepath.Join(workspace, ".opencode", "agents")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "routine.md"), []byte(b.String()), 0o644)
+	return b.String(), nil
 }
 
 // RenderDefinition generates a routine's opencode agent definition exactly
 // as a run would, without running anything. check uses it to validate
-// routine wiring -- frontmatter through generated definition -- offline,
-// with no provider key and no Docker.
-func RenderDefinition(agent *config.Agent, r *routine.Routine, dryRun bool) (string, error) {
-	ws, err := os.MkdirTemp("", "openroutines-render-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(ws)
-	if err := writeAgentDefinition(ws, agent, r, Meta{RunID: "run_check", AttemptID: "attempt_00", DryRun: dryRun}); err != nil {
-		return "", err
-	}
-	raw, err := os.ReadFile(filepath.Join(ws, ".opencode", "agents", "routine.md"))
-	return string(raw), err
+// routine wiring -- frontmatter through generated definition, MCP rules
+// included -- offline, with no provider key and no Docker.
+func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string, dryRun bool) (string, error) {
+	return renderDefinition(agent, r, servers, Meta{RunID: "run_check", AttemptID: "attempt_00", DryRun: dryRun})
 }
 
 // variablesLine renders the agent's variable names for the standing

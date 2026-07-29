@@ -69,10 +69,10 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
-	if err := EnsureWorktree(dir); err != nil {
+	if err := At(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	wt := WorktreePath(dir)
+	wt := At(dir).Worktree()
 	now := time.Now()
 	old := now.Add(-40 * 24 * time.Hour)
 
@@ -94,7 +94,7 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	// Uncommitted entry: must always survive.
 	appendLine(t, filepath.Join(wt, "events.md"), "- uncommitted fact")
 
-	changed, err := Trim(dir, 30*24*time.Hour, now)
+	changed, err := At(dir).Trim(30*24*time.Hour, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	}
 
 	// Idempotent: a second trim changes nothing.
-	if changed, err := Trim(dir, 30*24*time.Hour, now); err != nil || changed {
+	if changed, err := At(dir).Trim(30*24*time.Hour, now); err != nil || changed {
 		t.Fatalf("second trim should be a no-op: changed=%v err=%v", changed, err)
 	}
 }

@@ -16,7 +16,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -46,6 +45,7 @@ type Supervisor struct {
 	InstanceID string
 	Log        *log.Logger
 
+	mem           *memory.Memory
 	noOrigin      bool
 	loc           *time.Location
 	retention     time.Duration
@@ -81,13 +81,15 @@ func New(dir string) (*Supervisor, error) {
 		return nil, err
 	}
 	secrets := supervisorSecrets(dir)
+	mem := memory.At(dir)
 	return &Supervisor{
 		Dir:        dir,
 		InstanceID: memory.InstanceID(),
 		Log:        log.New(scrub.NewWriter(os.Stdout, secrets), "", log.LstdFlags|log.LUTC),
+		mem:        mem,
 		loc:        loc,
 		retention:  retention,
-		noOrigin:   !memory.HasOrigin(dir),
+		noOrigin:   !mem.HasOrigin(),
 		secrets:    secrets,
 		lastPolled: map[string]time.Time{},
 		pollFailed: map[string]bool{},
@@ -121,9 +123,7 @@ func supervisorSecrets(dir string) map[string]string {
 	return out
 }
 
-func (s *Supervisor) stateDir() string {
-	return filepath.Join(memory.WorktreePath(s.Dir), schedule.StateDirName)
-}
+func (s *Supervisor) stateDir() string { return s.mem.StateDir() }
 
 // Run is the supervise loop: startup, then one Tick per minute until ctx is
 // cancelled, then shutdown (final commit and push, lease release).
@@ -139,7 +139,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	} else if configured {
 		s.Log.Printf("deploy key configured for memory sync")
 	}
-	if err := memory.EnsureWorktree(s.Dir); err != nil {
+	if err := s.mem.Ensure(); err != nil {
 		return err
 	}
 	if s.noOrigin {
@@ -148,7 +148,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		if err := s.acquireLease(ctx); err != nil {
 			return err
 		}
-		defer func() { memory.ReleaseLease(s.Dir, s.leaseSHA) }()
+		defer func() { s.mem.ReleaseLease(s.leaseSHA) }()
 	}
 	s.Log.Printf("supervising %s (instance %s, tick %s)", s.Dir, s.InstanceID, TickInterval)
 	if err := s.verifySandbox(); err != nil {
@@ -193,10 +193,10 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	// history keeps everything; the working files stay lean.
 	if now.Sub(s.lastTrim) >= 24*time.Hour {
 		s.lastTrim = now
-		if changed, err := memory.Trim(s.Dir, s.retention, now); err != nil {
+		if changed, err := s.mem.Trim(s.retention, now); err != nil {
 			s.Log.Printf("retention trim: %v", err)
 		} else if changed {
-			if _, err := memory.Commit(s.Dir, fmt.Sprintf("Trim memory to retention window (%s)", s.retention)); err != nil {
+			if _, err := s.mem.Commit(fmt.Sprintf("Trim memory to retention window (%s)", s.retention)); err != nil {
 				s.Log.Printf("retention trim commit: %v", err)
 			}
 			s.pushBestEffort()
@@ -310,13 +310,13 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 
 	// Persist-before-act: intent commits must be durable before any run acts.
 	if stateChanged {
-		if _, err := memory.Commit(s.Dir, "Record pending runs"); err != nil {
+		if _, err := s.mem.Commit("Record pending runs"); err != nil {
 			s.Log.Printf("intent commit failed: %v", err)
 			return
 		}
 	}
 	if !s.noOrigin && len(due) > 0 && !s.syncBlocked {
-		if err := memory.Push(s.Dir); err != nil {
+		if err := s.mem.Push(); err != nil {
 			// An identity that isn't durable is how duplicates happen: without
 			// a pushed intent, no new logical run starts.
 			s.blockOnce("push", "intent push failed -- runs held until origin is reachable: "+err.Error(), &s.unreachWarned)
@@ -375,92 +375,72 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	s.Log.Printf("%s: %s %s starting (scheduled %s)", r.Name, p.RunID, meta.AttemptID, meta.ScheduledFor)
 
 	res, staging, err := runner.Execute(ctx, s.Dir, agent, r, meta)
+	detail := ""
 	if err != nil {
 		s.Log.Printf("%s: %s failed to start: %v", r.Name, p.RunID, err)
-		s.settleFailure(r, st, &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}, meta, now, err.Error())
-		return
+		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
+		// Start-failure text quotes raw errors (git, provider); memory events
+		// are committed and pushed, so redact before recording.
+		detail = scrub.Redact(err.Error(), s.secrets)
+	} else {
+		defer staging.Cleanup()
 	}
-	defer staging.Cleanup()
 
-	switch res.Outcome {
-	case runner.Completed:
-		discarded, err := runner.ImportMemory(s.Dir, r, staging)
-		if err != nil {
-			s.settleFailure(r, st, res, meta, now, "memory rejected: "+err.Error())
-			return
+	// The settlement commit carries this attempt's scheduling consequences:
+	// success clears pending and advances the watermark; the final failed
+	// attempt abandons the run -- a human-owned task (someone must act)
+	// alongside the advanced watermark; shutdown undoes the attempt
+	// increment so an interrupted attempt doesn't count toward abandonment
+	// and the same logical run retries on next boot.
+	abandoned := false
+	settlement, serr := runner.Settle(s.Dir, r, staging, res, meta, detail, func(fin *runner.Settlement) {
+		date := now.UTC().Format("2006-01-02")
+		switch {
+		case fin.Outcome == runner.Canceled:
+			p.Attempts--
+		case fin.Outcome == runner.Completed:
+			st.Watermark = p.CoveredThrough
+			st.Pending = nil
+			st.RecordSuccess()
+		case p.Attempts >= MaxAttempts:
+			abandoned = true
+			_ = s.mem.AppendHumanTask("task-"+p.RunID,
+				fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, fin.Detail, date))
+			st.Watermark = p.CoveredThrough
+			st.Pending = nil
+			if cooldown := st.RecordAbandonment(now); cooldown > 0 {
+				_ = s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown))
+				s.Log.Printf("%s: circuit breaker tripped -- cooling down for %s", r.Name, cooldown)
+			}
 		}
-		if discarded {
-			s.Log.Printf("%s: discarded staged events.md change (events: false)", r.Name)
-		}
-		runner.AdvanceConsumer(s.Dir, r, staging, p.RunID)
-		st.Watermark = p.CoveredThrough
-		st.Pending = nil
-		st.RecordSuccess()
 		if err := st.Save(s.stateDir()); err != nil {
 			s.Log.Printf("%s: %v", r.Name, err)
 		}
-		_ = memory.AppendRunRecord(s.Dir, runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
-		if _, err := memory.Commit(s.Dir, fmt.Sprintf("Run %s (%s): completed", r.Name, p.RunID)); err != nil {
-			s.Log.Printf("%s: commit: %v", r.Name, err)
-		}
+	})
+	if serr != nil {
+		s.Log.Printf("%s: %s settle: %v", r.Name, p.RunID, serr)
+	}
+	if settlement.Discarded {
+		s.Log.Printf("%s: discarded staged events.md change (events: false)", r.Name)
+	}
+	switch {
+	case settlement.Outcome == runner.Canceled:
+		s.Log.Printf("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
+		return // no push: shutdown's final commit and push carry the record
+	case settlement.Outcome == runner.Completed:
 		s.pushBestEffort()
 		s.Log.Printf("%s: %s completed in %s", r.Name, p.RunID, res.Duration)
-	case runner.Canceled:
-		// Shutdown killed the attempt: pending survives untouched (the same
-		// logical run retries on next boot); undo the attempt increment so
-		// an interrupted attempt doesn't count toward abandonment.
-		p.Attempts--
-		_ = st.Save(s.stateDir())
-		_ = memory.AppendRunRecord(s.Dir, runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
-		s.Log.Printf("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
-	default:
-		detail := fmt.Sprintf("%s after %s (exit %d)", res.Outcome, res.Duration, res.ExitCode)
-		if res.Hint != "" {
-			detail += " -- " + res.Hint
-		}
-		s.settleFailure(r, st, res, meta, now, detail)
-	}
-}
-
-// settleFailure records a failed attempt: an event (it happened), a run
-// record, and -- past the attempt cap -- abandonment, which is a human-owned
-// task (someone must act) alongside the advanced watermark.
-func (s *Supervisor) settleFailure(r *routine.Routine, st *schedule.State, res *runner.ExecResult, meta runner.Meta, now time.Time, detail string) {
-	// Failure detail often quotes raw errors (git, provider); memory events
-	// are committed and pushed, so redact before recording.
-	detail = scrub.Redact(detail, s.secrets)
-	p := st.Pending
-	date := now.UTC().Format("2006-01-02")
-	_ = memory.AppendEvent(s.Dir, fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", date, r.Name, p.RunID, meta.AttemptID, detail))
-	_ = memory.AppendRunRecord(s.Dir, runner.RecordJSON(r, meta, parseAttempt(meta.AttemptID), res, false))
-	abandoned := false
-	if p.Attempts >= MaxAttempts {
-		abandoned = true
-		_ = memory.AppendHumanTask(s.Dir, "task-"+p.RunID,
-			fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, detail, date))
-		st.Watermark = p.CoveredThrough
-		st.Pending = nil
-		if cooldown := st.RecordAbandonment(now); cooldown > 0 {
-			_ = memory.AppendEvent(s.Dir, fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown))
-			s.Log.Printf("%s: circuit breaker tripped -- cooling down for %s", r.Name, cooldown)
-		}
-	}
-	if err := st.Save(s.stateDir()); err != nil {
-		s.Log.Printf("%s: %v", r.Name, err)
-	}
-	if _, err := memory.Commit(s.Dir, fmt.Sprintf("Run %s (%s): %s", r.Name, p.RunID, res.Outcome)); err != nil {
-		s.Log.Printf("%s: commit: %v", r.Name, err)
-	}
-	s.pushBestEffort()
-	if abandoned {
+	case abandoned:
+		s.pushBestEffort()
 		s.Log.Printf("%s: %s abandoned after %d attempts", r.Name, p.RunID, MaxAttempts)
-	} else {
-		s.Log.Printf("%s: %s attempt failed (%s) -- will retry", r.Name, p.RunID, detail)
+	default:
+		s.pushBestEffort()
+		s.Log.Printf("%s: %s attempt failed (%s) -- will retry", r.Name, p.RunID, settlement.Detail)
 	}
 }
 
 func (s *Supervisor) syncOnce() {
-	rep := memory.Sync(s.Dir)
+	rep := s.mem.Sync()
 	switch {
 	case rep.Rewritten:
 		s.syncBlocked = true
@@ -492,9 +472,9 @@ func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
 	if !*warned {
 		*warned = true
 		date := time.Now().UTC().Format("2006-01-02")
-		_ = memory.AppendHumanTask(s.Dir, "task-"+kind+"-"+time.Now().UTC().Format("20060102"),
+		_ = s.mem.AppendHumanTask("task-"+kind+"-"+time.Now().UTC().Format("20060102"),
 			fmt.Sprintf("%s (source: supervisor; added %s)", msg, date))
-		_, _ = memory.Commit(s.Dir, "Record supervisor blocker")
+		_, _ = s.mem.Commit("Record supervisor blocker")
 		s.pushBestEffort()
 	}
 }
@@ -506,13 +486,13 @@ func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
 // a blocker that outlives its outage is noise a person has to chase.
 func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	*warned = false
-	changed, err := memory.ResolveHumanTasks(s.Dir, "task-"+kind+"-",
+	changed, err := s.mem.ResolveHumanTasks("task-"+kind+"-",
 		"done "+time.Now().UTC().Format("2006-01-02")+" -- "+msg)
 	if err != nil || !changed {
 		return
 	}
 	s.Log.Printf("RECOVERED: %s", msg)
-	_, _ = memory.Commit(s.Dir, "Resolve supervisor blocker")
+	_, _ = s.mem.Commit("Resolve supervisor blocker")
 	s.pushBestEffort()
 }
 
@@ -520,7 +500,7 @@ func (s *Supervisor) pushBestEffort() {
 	if s.noOrigin || s.syncBlocked {
 		return
 	}
-	if err := memory.Push(s.Dir); err != nil {
+	if err := s.mem.Push(); err != nil {
 		s.Log.Printf("memory push failed (will retry): %v", err)
 	}
 }
@@ -556,7 +536,7 @@ func (s *Supervisor) verifySandbox() error {
 
 func (s *Supervisor) shutdown() {
 	s.Log.Printf("shutting down: final memory sync")
-	if _, err := memory.Commit(s.Dir, "Shutdown"); err != nil {
+	if _, err := s.mem.Commit("Shutdown"); err != nil {
 		s.Log.Printf("shutdown commit: %v", err)
 	}
 	s.pushBestEffort()
@@ -568,7 +548,7 @@ func (s *Supervisor) shutdown() {
 // (compare-and-swap on the lease ref): two instances racing cannot both win.
 func (s *Supervisor) acquireLease(ctx context.Context) error {
 	for {
-		lease, err := memory.ReadLease(s.Dir)
+		lease, err := s.mem.ReadLease()
 		if err != nil {
 			return fmt.Errorf("lease: %w", err)
 		}
@@ -579,7 +559,7 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 			eligible = lease.Holder == s.InstanceID || time.Since(lease.At) > memory.LeaseTTL
 		}
 		if eligible {
-			sha, werr := memory.WriteLease(s.Dir, s.InstanceID, time.Now(), expected)
+			sha, werr := s.mem.WriteLease(s.InstanceID, time.Now(), expected)
 			if werr == nil {
 				s.leaseSHA = sha
 				return nil
@@ -600,11 +580,11 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 // renewLease heartbeats atomically against the lease we last wrote. Returns
 // false -- pause all dispatch -- when another live instance holds it.
 func (s *Supervisor) renewLease(now time.Time) bool {
-	if sha, err := memory.WriteLease(s.Dir, s.InstanceID, now, s.leaseSHA); err == nil {
+	if sha, err := s.mem.WriteLease(s.InstanceID, now, s.leaseSHA); err == nil {
 		s.leaseSHA = sha
 		return true
 	}
-	lease, err := memory.ReadLease(s.Dir)
+	lease, err := s.mem.ReadLease()
 	if err == nil && lease != nil && lease.Holder != s.InstanceID && time.Since(lease.At) <= memory.LeaseTTL {
 		s.Log.Printf("BLOCKED: lease held by %s (heartbeat %s) -- pausing dispatch", lease.Holder, lease.At.Format(time.RFC3339))
 		return false
@@ -613,16 +593,10 @@ func (s *Supervisor) renewLease(now time.Time) bool {
 	if lease != nil {
 		expected = lease.SHA
 	}
-	if sha, werr := memory.WriteLease(s.Dir, s.InstanceID, now, expected); werr == nil {
+	if sha, werr := s.mem.WriteLease(s.InstanceID, now, expected); werr == nil {
 		s.leaseSHA = sha
 		return true
 	}
 	s.Log.Printf("lease renewal failed -- pausing dispatch this tick")
 	return false
-}
-
-func parseAttempt(attemptID string) int {
-	var n int
-	_, _ = fmt.Sscanf(attemptID, "attempt_%d", &n)
-	return n
 }

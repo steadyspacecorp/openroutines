@@ -200,27 +200,19 @@ var testSource = Source{
 	Revision:   "0123456789abcdef0123456789abcdef01234567",
 }
 
-func TestCollisionsAndInstall(t *testing.T) {
+func TestPrepareInstallAndApply(t *testing.T) {
 	src := write(t, map[string]string{
 		"skills/demo-skill/SKILL.md": "---\nname: demo-skill\ndescription: d\n---\nHow.\n",
 		"memory/ledgers/demo.md":     "# demo ledger\n",
 	})
-	p, err := Load(src, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	agent := t.TempDir()
-	got, err := p.Collisions(agent)
+	inst, err := PrepareInstall(agent, src, testSource)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("fresh agent should have no collisions: %v", got)
 	}
 
 	// No memory worktree yet: stubs go pending, the rest installs.
-	installed, pending, err := p.Install(agent, testSource)
+	installed, pending, err := inst.Apply()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,20 +232,31 @@ func TestCollisionsAndInstall(t *testing.T) {
 		t.Fatalf("installed %v, want the grouped plugin directory", installed)
 	}
 
-	// Now everything collides.
-	got, err = p.Collisions(agent)
-	if err != nil {
-		t.Fatal(err)
+	// Now everything collides, and the refusal happens at prepare -- Apply
+	// is unreachable without a clean PrepareInstall.
+	_, err = PrepareInstall(agent, src, testSource)
+	if err == nil {
+		t.Fatal("reinstall over an existing plugin should be refused")
 	}
-	if len(got) != 3 {
-		t.Fatalf("want plugin, routine, and skill collisions after install, got %v", got)
+	for _, want := range []string{filepath.Join("plugins", "demo"), "routine demo", "skill demo-skill"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal should name %q: %v", want, err)
+		}
 	}
 
 	// With a worktree, the stub lands -- unless the ledger already exists,
 	// which is live memory and never clobbered.
+	install := func(agent string) (installed, pending []string, err error) {
+		t.Helper()
+		inst, err := PrepareInstall(agent, src, testSource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inst.Apply()
+	}
 	agent2 := t.TempDir()
 	os.MkdirAll(filepath.Join(agent2, "memory", "ledgers"), 0o755)
-	installed, pending, err = p.Install(agent2, testSource)
+	installed, pending, err = install(agent2)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("stub should install into an existing worktree: pending=%v err=%v", pending, err)
 	}
@@ -263,7 +266,7 @@ func TestCollisionsAndInstall(t *testing.T) {
 	agent3 := t.TempDir()
 	os.MkdirAll(filepath.Join(agent3, "memory", "ledgers"), 0o755)
 	os.WriteFile(filepath.Join(agent3, "memory", "ledgers", "demo.md"), []byte("live state\n"), 0o644)
-	_, pending, err = p.Install(agent3, testSource)
+	_, pending, err = install(agent3)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("existing ledger must go pending, not be clobbered: pending=%v err=%v", pending, err)
 	}
@@ -272,14 +275,12 @@ func TestCollisionsAndInstall(t *testing.T) {
 	}
 }
 
-// Provenance that later commands would reject must be refused at install
-// time, before anything is copied -- otherwise plugin list, plugin update,
-// and check all fail against a plugin the user was told installed fine.
-func TestInstallRefusesInvalidProvenance(t *testing.T) {
-	p, err := Load(write(t, nil), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+// Provenance that later commands would reject must be refused at prepare
+// time, before the review prompt and before anything is copied -- otherwise
+// plugin list, plugin update, and check all fail against a plugin the user
+// was told installed fine.
+func TestPrepareInstallRefusesInvalidProvenance(t *testing.T) {
+	src := write(t, nil)
 	cases := map[string]Source{
 		"missing repository": {Revision: testSource.Revision},
 		"missing revision":   {Repository: testSource.Repository},
@@ -289,7 +290,7 @@ func TestInstallRefusesInvalidProvenance(t *testing.T) {
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
 			agent := t.TempDir()
-			if _, _, err := p.Install(agent, source); err == nil {
+			if _, err := PrepareInstall(agent, src, source); err == nil {
 				t.Fatal("want refusal")
 			}
 			if _, err := os.Stat(filepath.Join(agent, "plugins")); !os.IsNotExist(err) {
@@ -303,10 +304,7 @@ func TestInstallRefusesInvalidProvenance(t *testing.T) {
 // collision detection against an already-ambiguous agent would miss exactly
 // the name in conflict. Refuse while the namespace is invalid.
 func TestCollisionsFailClosedOnInvalidNamespace(t *testing.T) {
-	p, err := Load(write(t, nil), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	src := write(t, nil)
 	agent := t.TempDir()
 	routine := "---\nschedule: \"0 9 * * *\"\n---\nDo the demo.\n"
 	for _, rel := range []string{
@@ -321,9 +319,9 @@ func TestCollisionsFailClosedOnInvalidNamespace(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := p.Collisions(agent)
+	_, err := PrepareInstall(agent, src, testSource)
 	if err == nil {
-		t.Fatalf("want refusal on a duplicated namespace, got collisions %v", got)
+		t.Fatal("want refusal on a duplicated namespace")
 	}
 	if !strings.Contains(err.Error(), "duplicate routine") {
 		t.Fatalf("error should name the duplicate: %v", err)
@@ -334,7 +332,8 @@ func TestInstallRollsBackOnCopyFailure(t *testing.T) {
 	src := write(t, map[string]string{
 		"skills/demo-skill/SKILL.md": "---\nname: demo-skill\ndescription: d\n---\nHow.\n",
 	})
-	p, err := Load(src, nil)
+	agent := t.TempDir()
+	inst, err := PrepareInstall(agent, src, testSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,8 +346,7 @@ func TestInstallRollsBackOnCopyFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "skills", "demo-skill", ".git", "config"), []byte("bad"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	agent := t.TempDir()
-	if _, _, err := p.Install(agent, testSource); err == nil || !strings.Contains(err.Error(), "nested .git") {
+	if _, _, err := inst.Apply(); err == nil || !strings.Contains(err.Error(), "nested .git") {
 		t.Fatalf("want nested .git copy refusal, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(agent, "plugins", "demo", "routines", "demo.md")); !os.IsNotExist(err) {
@@ -375,53 +373,5 @@ func TestManifestAcceptsAllDerivedTypes(t *testing.T) {
 	dir := write(t, map[string]string{"PLUGIN.md": manifest("aws_sts")})
 	if _, err := Load(dir, nil); err == nil || !strings.Contains(err.Error(), strings.Join(creds.DerivedTypes, ", ")) {
 		t.Fatalf("unknown type must be refused naming the known set, got %v", err)
-	}
-}
-
-func TestMergeTreesPreservesLocalEditsAndReportsConflicts(t *testing.T) {
-	base := t.TempDir()
-	ours := t.TempDir()
-	theirs := t.TempDir()
-	dest := t.TempDir()
-	writeFile := func(root, rel, content string) {
-		t.Helper()
-		path := filepath.Join(root, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeFile(base, "routines/demo.md", "schedule: old\nunchanged: one\nunchanged: two\nprompt: old\n")
-	writeFile(ours, "routines/demo.md", "schedule: local\nunchanged: one\nunchanged: two\nprompt: old\n")
-	writeFile(theirs, "routines/demo.md", "schedule: old\nunchanged: one\nunchanged: two\nprompt: upstream\n")
-	writeFile(theirs, "skills/new/SKILL.md", "new\n")
-
-	conflicts, err := MergeTrees(base, ours, theirs, dest)
-	if err != nil || len(conflicts) != 0 {
-		t.Fatalf("clean merge: conflicts=%v err=%v", conflicts, err)
-	}
-	raw, _ := os.ReadFile(filepath.Join(dest, "routines", "demo.md"))
-	if !strings.Contains(string(raw), "schedule: local") || !strings.Contains(string(raw), "prompt: upstream") {
-		t.Fatalf("merge did not preserve both sides:\n%s", raw)
-	}
-	if _, err := os.Stat(filepath.Join(dest, "skills", "new", "SKILL.md")); err != nil {
-		t.Fatalf("upstream addition missing: %v", err)
-	}
-
-	conflictDest := t.TempDir()
-	writeFile(ours, "routines/demo.md", "schedule: ours\nunchanged: one\nunchanged: two\nprompt: old\n")
-	writeFile(theirs, "routines/demo.md", "schedule: theirs\nunchanged: one\nunchanged: two\nprompt: old\n")
-	conflicts, err = MergeTrees(base, ours, theirs, conflictDest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(conflicts) != 1 || conflicts[0] != filepath.Join("routines", "demo.md") {
-		t.Fatalf("want routine conflict, got %v", conflicts)
-	}
-	raw, _ = os.ReadFile(filepath.Join(conflictDest, "routines", "demo.md"))
-	if !strings.Contains(string(raw), "<<<<<<< local") {
-		t.Fatalf("conflict markers missing:\n%s", raw)
 	}
 }

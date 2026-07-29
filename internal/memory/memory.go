@@ -23,6 +23,22 @@ const (
 	maxEntries = 2000    // total staged file cap
 )
 
+// stateDirName is the supervisor-owned directory inside the worktree holding
+// per-routine bookkeeping: scheduling state at its root, trigger baselines
+// and consumer cursors in subdirectories.
+const stateDirName = "state"
+
+// Memory is one agent repository's memory. The handle binds the repository
+// root; every operation that reads or maintains the memory branch, its
+// worktree, and the supervisor-owned state inside it goes through here.
+type Memory struct {
+	repoDir string
+}
+
+// At binds the agent repository at repoDir. No I/O: the worktree may not be
+// materialized yet (Status reports that; Ensure fixes it).
+func At(repoDir string) *Memory { return &Memory{repoDir: repoDir} }
+
 // primitives are the framework-blessed shared memory files, seeded on init.
 // Each opens with a fenced example of its format: the file teaches its own
 // shape at the point of use, and the retention trimmer preserves everything
@@ -54,7 +70,7 @@ var primitives = map[string]string{
 // supervisorOwned paths never travel into staging and are never touched by
 // import: routines cannot read or rewrite scheduling state or run records.
 var supervisorOwned = map[string]bool{
-	"state":      true,
+	stateDirName: true,
 	"runs.jsonl": true,
 }
 
@@ -70,22 +86,25 @@ func newGitCmd(dir string, args []string) *exec.Cmd {
 	return cmd
 }
 
+// hermeticConfig is the -c configuration every git invocation carries: no
+// hooks, no file-protocol tricks, a fixed commit identity. No background
+// writers either: auto-gc detaches from the invoking command and keeps
+// writing .git/objects after it returns -- racing test TempDir cleanup (the
+// supervisor suite's flake) and, in production, container shutdown.
+// Repacking is origin's concern, not a run's.
+var hermeticConfig = []string{
+	"-c", "core.hooksPath=/dev/null",
+	"-c", "protocol.file.allow=user",
+	"-c", "user.name=openroutines",
+	"-c", "user.email=agent@openroutines.dev",
+	"-c", "gc.auto=0",
+	"-c", "maintenance.auto=false",
+}
+
 // git runs a git command against the repo with hermetic configuration:
-// no system/global config, no hooks, no file-protocol tricks.
+// no system/global config leaks in.
 func git(dir string, args ...string) (string, error) {
-	base := []string{
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "protocol.file.allow=user",
-		"-c", "user.name=openroutines",
-		"-c", "user.email=agent@openroutines.dev",
-		// No background writers: auto-gc detaches from the invoking command
-		// and keeps writing .git/objects after it returns -- racing test
-		// TempDir cleanup (the supervisor suite's flake) and, in production,
-		// container shutdown. Repacking is origin's concern, not a run's.
-		"-c", "gc.auto=0",
-		"-c", "maintenance.auto=false",
-	}
-	cmd := newGitCmd(dir, append(base, args...))
+	cmd := newGitCmd(dir, append(hermeticConfig, args...))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
@@ -93,29 +112,34 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// WorktreePath returns the memory worktree location inside the agent repo.
-func WorktreePath(repoDir string) string { return filepath.Join(repoDir, Dir) }
+// Worktree returns the memory worktree location inside the agent repo.
+func (m *Memory) Worktree() string { return filepath.Join(m.repoDir, Dir) }
 
-// EnsureWorktree materializes memory/ as a worktree of the memory branch,
+// StateDir returns the supervisor-owned state directory inside the worktree.
+// Per-routine state lives at <StateDir>/<name>.json (scheduling) and
+// <StateDir>/<subdir>/<name>.json (trigger baselines, consumer cursors).
+func (m *Memory) StateDir() string { return filepath.Join(m.Worktree(), stateDirName) }
+
+// Ensure materializes memory/ as a worktree of the memory branch,
 // creating the orphan branch and seeding the primitives on first use.
 // Self-heals: safe to call every run.
-func EnsureWorktree(repoDir string) error {
-	wt := WorktreePath(repoDir)
+func (m *Memory) Ensure() error {
+	wt := m.Worktree()
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
 		return nil // already materialized
 	}
 	// A production image carries .git from build time, which may register a
 	// worktree whose directory was excluded from the image. Prune stale
 	// registrations or the add below fails on first boot.
-	_, _ = git(repoDir, "worktree", "prune")
-	if _, err := git(repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
+	_, _ = git(m.repoDir, "worktree", "prune")
+	if _, err := git(m.repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
 		// No local branch. A deployed container's .git never has one, but the
 		// agent's real memory usually exists on origin: adopt it rather than
 		// minting a new root (found live: every container generation was
 		// splicing a stray root commit into the lineage).
-		if HasOrigin(repoDir) {
-			if _, lerr := git(repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); lerr == nil {
-				if _, ferr := git(repoDir, "fetch", "--quiet", "origin", "+refs/heads/"+Branch+":refs/heads/"+Branch); ferr != nil {
+		if m.HasOrigin() {
+			if _, lerr := git(m.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); lerr == nil {
+				if _, ferr := git(m.repoDir, "fetch", "--quiet", "origin", "+refs/heads/"+Branch+":refs/heads/"+Branch); ferr != nil {
 					return fmt.Errorf("adopting memory branch from origin: %w", ferr)
 				}
 				// Adoption is where a restart used to launder a rewritten
@@ -124,32 +148,32 @@ func EnsureWorktree(repoDir string) error {
 				// the baseline that survives container replacement -- refuse
 				// to adopt a tip that does not descend from it. Fail closed,
 				// like the sandbox probe: a human repairs and moves the ref.
-				if accepted := AcceptedTip(repoDir); accepted != "" {
-					tip, terr := git(repoDir, "rev-parse", "refs/heads/"+Branch)
-					if terr == nil && tip != accepted && !isAncestor(repoDir, accepted, tip) {
+				if accepted := m.AcceptedTip(); accepted != "" {
+					tip, terr := git(m.repoDir, "rev-parse", "refs/heads/"+Branch)
+					if terr == nil && tip != accepted && !isAncestor(m.repoDir, accepted, tip) {
 						return fmt.Errorf("origin/%s does not descend from the last accepted tip %s -- memory history was rewritten while this agent was down; refusing to adopt it. Inspect origin/%s, then either restore the branch or move %s to the new tip to accept the rewrite deliberately", Branch, short(accepted), Branch, acceptedRef)
 					}
 				}
 			}
 		}
 	}
-	if _, err := git(repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
+	if _, err := git(m.repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
 		// Truly first use: create the orphan branch from an empty tree via
 		// plumbing. (worktree add --orphan needs git >= 2.42; this works
 		// everywhere.)
-		tree, err := gitStdin(repoDir, "", "mktree")
+		tree, err := gitStdin(m.repoDir, "", "mktree")
 		if err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)
 		}
-		commit, err := git(repoDir, "-c", "user.name=openroutines", "-c", "user.email=agent@openroutines.dev", "commit-tree", tree, "-m", "Memory branch root")
+		commit, err := git(m.repoDir, "commit-tree", tree, "-m", "Memory branch root")
 		if err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)
 		}
-		if _, err := git(repoDir, "branch", Branch, commit); err != nil {
+		if _, err := git(m.repoDir, "branch", Branch, commit); err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)
 		}
 	}
-	if _, err := git(repoDir, "worktree", "add", wt, Branch); err != nil {
+	if _, err := git(m.repoDir, "worktree", "add", wt, Branch); err != nil {
 		return err
 	}
 	// Seed the primitives and the ledgers directory if absent.
@@ -178,8 +202,8 @@ func EnsureWorktree(repoDir string) error {
 // Snapshot copies the memory worktree's files into a plain staging directory:
 // regular files only, no git metadata. This staged copy is what a routine
 // sees and writes as memory/.
-func Snapshot(repoDir, stagingDir string) error {
-	wt := WorktreePath(repoDir)
+func (m *Memory) Snapshot(stagingDir string) error {
+	wt := m.Worktree()
 	return filepath.WalkDir(wt, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -258,11 +282,11 @@ func Validate(stagingDir string) error {
 
 // Import applies the staged tree to the worktree: copy every staged file in,
 // delete worktree files that no longer exist in staging. Caller commits.
-func Import(repoDir, stagingDir string) error {
+func (m *Memory) Import(stagingDir string) error {
 	if err := Validate(stagingDir); err != nil {
 		return err
 	}
-	wt := WorktreePath(repoDir)
+	wt := m.Worktree()
 	// Refuse to import over uncommitted human curation: Import overwrites and
 	// deletes, and uncommitted edits have no reflog to recover from. Only the
 	// human-curated files gate -- supervisor-owned paths (state/, runs.jsonl)
@@ -334,8 +358,8 @@ func Import(repoDir, stagingDir string) error {
 // of `events: false` (design decision "Memory records events, tasks, and
 // context"): the instruction tells the routine not to write the file, this
 // makes sure. Reports whether a staged change was discarded.
-func RestoreFile(repoDir, stagingDir, name string) (bool, error) {
-	src := filepath.Join(WorktreePath(repoDir), name)
+func (m *Memory) RestoreFile(stagingDir, name string) (bool, error) {
+	src := filepath.Join(m.Worktree(), name)
 	dest := filepath.Join(stagingDir, name)
 	want, err := os.ReadFile(src)
 	if os.IsNotExist(err) {
@@ -359,8 +383,8 @@ func RestoreFile(repoDir, stagingDir, name string) (bool, error) {
 }
 
 // Commit records the current worktree state on the memory branch.
-func Commit(repoDir, message string) (string, error) {
-	wt := WorktreePath(repoDir)
+func (m *Memory) Commit(message string) (string, error) {
+	wt := m.Worktree()
 	if _, err := git(wt, "add", "-A"); err != nil {
 		return "", err
 	}
@@ -382,8 +406,8 @@ func flatten(s string) string {
 
 // AppendEvent records a supervisor-written event: the mechanism for outcomes
 // the model never got to narrate (timeouts, crashes, sync trouble).
-func AppendEvent(repoDir, line string) error {
-	p := filepath.Join(WorktreePath(repoDir), "events.md")
+func (m *Memory) AppendEvent(line string) error {
+	p := filepath.Join(m.Worktree(), "events.md")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -398,8 +422,8 @@ func AppendEvent(repoDir, line string) error {
 // it to a person. The entry lands at the end of the real "## Human-owned"
 // section (fenced format examples don't count), created if missing. Idempotent
 // by task id, so restart-prone callers can use deterministic ids.
-func AppendHumanTask(repoDir, taskID, description string) error {
-	p := filepath.Join(WorktreePath(repoDir), "tasks.md")
+func (m *Memory) AppendHumanTask(taskID, description string) error {
+	p := filepath.Join(m.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -457,8 +481,8 @@ func AppendHumanTask(repoDir, taskID, description string) error {
 // condition they reported has recovered. Prefix matching (not an exact id)
 // makes recovery restart-proof: the supervisor need not remember which day's
 // blocker it raised. Reports whether anything changed.
-func ResolveHumanTasks(repoDir, idPrefix, resolution string) (bool, error) {
-	p := filepath.Join(WorktreePath(repoDir), "tasks.md")
+func (m *Memory) ResolveHumanTasks(idPrefix, resolution string) (bool, error) {
+	p := filepath.Join(m.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -489,8 +513,8 @@ func ResolveHumanTasks(repoDir, idPrefix, resolution string) (bool, error) {
 }
 
 // AppendRunRecord appends one JSONL run record to the supervisor-owned log.
-func AppendRunRecord(repoDir, record string) error {
-	p := filepath.Join(WorktreePath(repoDir), "runs.jsonl")
+func (m *Memory) AppendRunRecord(record string) error {
+	p := filepath.Join(m.Worktree(), "runs.jsonl")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -498,6 +522,46 @@ func AppendRunRecord(repoDir, record string) error {
 	defer f.Close()
 	_, err = fmt.Fprintln(f, record)
 	return err
+}
+
+// RemoveRoutineState deletes every per-routine state file for name: the
+// scheduling state at state/<name>.json plus the entry in every state
+// subdirectory (trigger baselines, consumer cursors -- and whatever subtree
+// comes next, without this function having to learn about it). Filenames are
+// compared, never globbed, so name cannot alter the matching. Returns the
+// removed paths relative to the repository root; the caller commits.
+func (m *Memory) RemoveRoutineState(name string) ([]string, error) {
+	stateDir := m.StateDir()
+	entries, err := os.ReadDir(stateDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	remove := func(dir string) error {
+		p := filepath.Join(dir, name+".json")
+		switch err := os.Remove(p); {
+		case err == nil:
+			rel, _ := filepath.Rel(m.repoDir, p)
+			removed = append(removed, rel)
+		case !os.IsNotExist(err):
+			return err
+		}
+		return nil
+	}
+	if err := remove(stateDir); err != nil {
+		return removed, err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			if err := remove(filepath.Join(stateDir, e.Name())); err != nil {
+				return removed, err
+			}
+		}
+	}
+	return removed, nil
 }
 
 // WorktreeStatus reports the memory worktree's state for `openroutines
@@ -514,12 +578,12 @@ type WorktreeStatus struct {
 // Status inspects the memory worktree; only RemoteMemory is set when not
 // yet materialized -- it distinguishes a fresh clone of a running agent
 // (adopt with sync) from an agent that has never run.
-func Status(repoDir string) WorktreeStatus {
+func (m *Memory) Status() WorktreeStatus {
 	var st WorktreeStatus
-	if _, err := git(repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch); err == nil {
+	if _, err := git(m.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch); err == nil {
 		st.RemoteMemory = true
 	}
-	wt := WorktreePath(repoDir)
+	wt := m.Worktree()
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err != nil {
 		return st
 	}

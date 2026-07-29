@@ -48,7 +48,7 @@ func TestRecordJSONUsage(t *testing.T) {
 	r := &routine.Routine{Name: "x"}
 	meta := Meta{RunID: "run_1"}
 
-	bare := RecordJSON(r, meta, 1, &ExecResult{Outcome: Completed}, false)
+	bare := recordJSON(r, meta, 1, &ExecResult{Outcome: Completed}, false)
 	for _, absent := range []string{"tokens", "model", "effort", "cost_reported"} {
 		if strings.Contains(bare, absent) {
 			t.Fatalf("unreported %s must be omitted, got %s", absent, bare)
@@ -57,7 +57,7 @@ func TestRecordJSONUsage(t *testing.T) {
 
 	res := &ExecResult{Outcome: Completed, Model: "fake/model", Effort: "high",
 		Usage: &Usage{Input: 100, Output: 20, Reasoning: 5, CacheRead: 7, CacheWrite: 3, CostReported: 0.01}}
-	rec := RecordJSON(r, meta, 1, res, false)
+	rec := recordJSON(r, meta, 1, res, false)
 	for _, want := range []string{`"model":"fake/model"`, `"effort":"high"`, `"input":100`, `"output":20`,
 		`"reasoning":5`, `"cache_read":7`, `"cache_write":3`, `"cost_reported":0.01`} {
 		if !strings.Contains(rec, want) {

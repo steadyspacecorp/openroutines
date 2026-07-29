@@ -19,8 +19,8 @@ type SyncReport struct {
 }
 
 // HasOrigin reports whether the repo has an origin remote configured.
-func HasOrigin(repoDir string) bool {
-	_, err := git(repoDir, "remote", "get-url", "origin")
+func (m *Memory) HasOrigin() bool {
+	_, err := git(m.repoDir, "remote", "get-url", "origin")
 	return err == nil
 }
 
@@ -35,23 +35,23 @@ const acceptedRef = "refs/openroutines/accepted"
 
 // AcceptedTip returns the last accepted memory tip recorded on origin, ""
 // when none has been recorded yet (pre-upgrade repos, first boot).
-func AcceptedTip(repoDir string) string {
-	if _, err := git(repoDir, "fetch", "--quiet", "origin", "+"+acceptedRef+":"+acceptedRef); err != nil {
+func (m *Memory) AcceptedTip() string {
+	if _, err := git(m.repoDir, "fetch", "--quiet", "origin", "+"+acceptedRef+":"+acceptedRef); err != nil {
 		return ""
 	}
-	tip, _ := git(repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
+	tip, _ := git(m.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
 	return tip
 }
 
 // recordAccepted publishes tip as the new accepted baseline (best effort --
 // the next sync simply re-verifies from the previous baseline).
-func recordAccepted(repoDir, tip string) {
-	current, _ := git(repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
+func (m *Memory) recordAccepted(tip string) {
+	current, _ := git(m.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
 	if current == tip {
 		return
 	}
-	if _, err := git(repoDir, "push", "--quiet", "origin", "+"+tip+":"+acceptedRef); err == nil {
-		_, _ = git(repoDir, "update-ref", acceptedRef, tip)
+	if _, err := git(m.repoDir, "push", "--quiet", "origin", "+"+tip+":"+acceptedRef); err == nil {
+		_, _ = git(m.repoDir, "update-ref", acceptedRef, tip)
 	}
 }
 
@@ -61,12 +61,12 @@ func recordAccepted(repoDir, tip string) {
 // history and conflicts -- never resolve silently. The rewrite baseline is
 // the durable accepted ref, so refusal holds across repeated syncs and
 // process restarts alike.
-func Sync(repoDir string) SyncReport {
-	wt := WorktreePath(repoDir)
-	if !HasOrigin(repoDir) {
+func (m *Memory) Sync() SyncReport {
+	wt := m.Worktree()
+	if !m.HasOrigin() {
 		return SyncReport{NoOrigin: true}
 	}
-	if _, err := git(repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); err != nil {
+	if _, err := git(m.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); err != nil {
 		if strings.Contains(err.Error(), "exit status 2") {
 			return SyncReport{RemoteMissing: true} // first push will create it
 		}
@@ -75,18 +75,18 @@ func Sync(repoDir string) SyncReport {
 
 	// The baseline for rewrite detection: the durably recorded accepted tip,
 	// falling back to the remote-tracking ref for repos that predate it.
-	oldTip := AcceptedTip(repoDir)
+	oldTip := m.AcceptedTip()
 	if oldTip == "" {
-		oldTip, _ = git(repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch)
+		oldTip, _ = git(m.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch)
 	}
-	if _, err := git(repoDir, "fetch", "--quiet", "origin", Branch); err != nil {
+	if _, err := git(m.repoDir, "fetch", "--quiet", "origin", Branch); err != nil {
 		return SyncReport{Unreachable: true, Detail: err.Error()}
 	}
-	newTip, err := git(repoDir, "rev-parse", "refs/remotes/origin/"+Branch)
+	newTip, err := git(m.repoDir, "rev-parse", "refs/remotes/origin/"+Branch)
 	if err != nil {
 		return SyncReport{Unreachable: true, Detail: err.Error()}
 	}
-	if oldTip != "" && oldTip != newTip && !isAncestor(repoDir, oldTip, newTip) {
+	if oldTip != "" && oldTip != newTip && !isAncestor(m.repoDir, oldTip, newTip) {
 		return SyncReport{Rewritten: true, Detail: fmt.Sprintf("origin/%s rewritten: %s no longer reachable from %s", Branch, short(oldTip), short(newTip))}
 	}
 
@@ -96,16 +96,16 @@ func Sync(repoDir string) SyncReport {
 	}
 	switch {
 	case local == newTip:
-		recordAccepted(repoDir, newTip)
+		m.recordAccepted(newTip)
 		return SyncReport{}
-	case isAncestor(repoDir, local, newTip):
+	case isAncestor(m.repoDir, local, newTip):
 		// Behind: fast-forward only.
 		if _, err := git(wt, "merge", "--ff-only", "--quiet", newTip); err != nil {
 			return SyncReport{Conflict: true, Detail: err.Error()}
 		}
-		recordAccepted(repoDir, newTip)
+		m.recordAccepted(newTip)
 		return SyncReport{Adopted: true}
-	case isAncestor(repoDir, newTip, local):
+	case isAncestor(m.repoDir, newTip, local):
 		return SyncReport{} // ahead: the next push carries it
 	default:
 		// Diverged (human curation raced local commits): rebase ours on top.
@@ -113,7 +113,7 @@ func Sync(repoDir string) SyncReport {
 			_, _ = git(wt, "rebase", "--abort")
 			return SyncReport{Conflict: true, Detail: err.Error()}
 		}
-		recordAccepted(repoDir, newTip)
+		m.recordAccepted(newTip)
 		return SyncReport{Adopted: true}
 	}
 }
@@ -121,16 +121,16 @@ func Sync(repoDir string) SyncReport {
 // Push publishes the memory branch. Fast-forward only: rejections are
 // reported, never forced. A successful push advances the accepted baseline:
 // origin's tip is now our own history.
-func Push(repoDir string) error {
-	if !HasOrigin(repoDir) {
+func (m *Memory) Push() error {
+	if !m.HasOrigin() {
 		return nil
 	}
-	wt := WorktreePath(repoDir)
+	wt := m.Worktree()
 	if _, err := git(wt, "push", "--quiet", "origin", Branch); err != nil {
 		return err
 	}
 	if tip, err := git(wt, "rev-parse", "HEAD"); err == nil {
-		recordAccepted(repoDir, tip)
+		m.recordAccepted(tip)
 	}
 	return nil
 }
@@ -170,18 +170,18 @@ type Lease struct {
 }
 
 // ReadLease fetches the current lease from origin; nil when none exists.
-func ReadLease(repoDir string) (*Lease, error) {
-	if _, lerr := git(repoDir, "fetch", "--quiet", "origin", "+"+leaseRef+":"+leaseRef); lerr != nil {
+func (m *Memory) ReadLease() (*Lease, error) {
+	if _, lerr := git(m.repoDir, "fetch", "--quiet", "origin", "+"+leaseRef+":"+leaseRef); lerr != nil {
 		if strings.Contains(lerr.Error(), "couldn't find remote ref") {
 			return nil, nil
 		}
 		return nil, lerr
 	}
-	sha, err := git(repoDir, "rev-parse", leaseRef)
+	sha, err := git(m.repoDir, "rev-parse", leaseRef)
 	if err != nil {
 		return nil, err
 	}
-	content, cerr := git(repoDir, "cat-file", "blob", leaseRef)
+	content, cerr := git(m.repoDir, "cat-file", "blob", leaseRef)
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -200,13 +200,13 @@ func ReadLease(repoDir string) (*Lease, error) {
 // succeeds only if origin's lease is still exactly expectedSHA (empty means
 // "must not exist"). Two instances racing for the same lease cannot both
 // win. Returns the new lease SHA for the next renewal's expectation.
-func WriteLease(repoDir, instanceID string, now time.Time, expectedSHA string) (string, error) {
-	blob, err := gitStdin(repoDir, leaseContent(instanceID, now), "hash-object", "-w", "--stdin")
+func (m *Memory) WriteLease(instanceID string, now time.Time, expectedSHA string) (string, error) {
+	blob, err := gitStdin(m.repoDir, leaseContent(instanceID, now), "hash-object", "-w", "--stdin")
 	if err != nil {
 		return "", err
 	}
 	cas := "--force-with-lease=" + leaseRef + ":" + expectedSHA
-	if _, err := git(repoDir, "push", "--quiet", cas, "origin", blob+":"+leaseRef); err != nil {
+	if _, err := git(m.repoDir, "push", "--quiet", cas, "origin", blob+":"+leaseRef); err != nil {
 		return "", err
 	}
 	return blob, nil
@@ -217,21 +217,15 @@ func WriteLease(repoDir, instanceID string, now time.Time, expectedSHA string) (
 // Unconditional deletion let a stale instance, shutting down after losing
 // the lease, delete the new holder's live lease. ownedSHA "" means this
 // instance never held the lease; there is nothing to release.
-func ReleaseLease(repoDir, ownedSHA string) {
+func (m *Memory) ReleaseLease(ownedSHA string) {
 	if ownedSHA == "" {
 		return
 	}
-	_, _ = git(repoDir, "push", "--quiet", "--force-with-lease="+leaseRef+":"+ownedSHA, "origin", ":"+leaseRef)
+	_, _ = git(m.repoDir, "push", "--quiet", "--force-with-lease="+leaseRef+":"+ownedSHA, "origin", ":"+leaseRef)
 }
 
 func gitStdin(dir, stdin string, args ...string) (string, error) {
-	base := []string{
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "protocol.file.allow=user",
-		"-c", "gc.auto=0",
-		"-c", "maintenance.auto=false",
-	}
-	cmd := newGitCmd(dir, append(base, args...))
+	cmd := newGitCmd(dir, append(hermeticConfig, args...))
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
