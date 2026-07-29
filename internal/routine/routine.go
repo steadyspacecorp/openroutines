@@ -60,7 +60,10 @@ type Routine struct {
 }
 
 // Parse reads one routine file. The file must begin with a "---" frontmatter
-// block; everything after the closing "---" is the prompt body.
+// block; everything after the closing "---" is the prompt body. Errors name
+// the failure, not the file: the caller passed the path and knows how to
+// spell it for its reader (Error does, relative to nothing; a plugin
+// validator does, relative to the payload).
 func Parse(path string) (*Routine, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -68,7 +71,7 @@ func Parse(path string) (*Routine, error) {
 	}
 	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
-		return nil, fmt.Errorf("%s: missing frontmatter (file must start with ---)", filepath.Base(path))
+		return nil, errors.New("missing frontmatter (file must start with ---)")
 	}
 	rest := text[len("---\n"):]
 	end := strings.Index(rest, "\n---\n")
@@ -77,7 +80,7 @@ func Parse(path string) (*Routine, error) {
 		if strings.HasSuffix(rest, "\n---") {
 			end = len(rest) - len("\n---")
 		} else {
-			return nil, fmt.Errorf("%s: unterminated frontmatter (no closing ---)", filepath.Base(path))
+			return nil, errors.New("unterminated frontmatter (no closing ---)")
 		}
 	}
 	// Strict decoding: a typo like `actve: false` must be an error, not a
@@ -86,7 +89,7 @@ func Parse(path string) (*Routine, error) {
 	dec.KnownFields(true)
 	var fm Frontmatter
 	if err := dec.Decode(&fm); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("%s: frontmatter: %w", filepath.Base(path), err)
+		return nil, fmt.Errorf("frontmatter: %w", err)
 	}
 	body := ""
 	if bodyStart := end + len("\n---\n"); bodyStart <= len(rest) {
@@ -142,20 +145,35 @@ func WithActive(raw []byte, active bool) ([]byte, error) {
 // Error is a load failure attributed to the routine it concerns: the file
 // that would not parse, or the name two files collide on. Attribution is what
 // keeps one broken file from being everyone's problem -- a run of a healthy
-// routine can tell that the error belongs to someone else.
+// routine can tell that the error belongs to someone else. Path names the
+// file when the failure is about one, since a name alone does not say which
+// of routines/ and plugins/*/routines/ the failure is in -- and two plugins
+// shipping the same broken filename would otherwise be indistinguishable.
 type Error struct {
 	Name string // the routine the failure is about
+	Path string // the file it is about; "" when the failure is about two (a collision)
 	Err  error
 }
 
-func (e *Error) Error() string { return e.Err.Error() }
+func (e *Error) Error() string {
+	if e.Path == "" {
+		return e.Err.Error()
+	}
+	return e.Path + ": " + e.Err.Error()
+}
+
 func (e *Error) Unwrap() error { return e.Err }
 
-// Concerns reports whether a LoadAgent error stands between the caller and
+// Concerns reports whether one LoadAgent error stands between the caller and
 // routine name. An error attributed to another routine does not; an
 // unattributed one (an unreadable plugins directory, which could be hiding
-// this very routine) concerns everyone -- fail closed.
+// this very routine) concerns everyone -- fail closed. Pass a single error,
+// never an errors.Join: attribution would match whichever error joined first,
+// whatever name it is about.
 func Concerns(err error, name string) bool {
+	if err == nil {
+		return false
+	}
 	var re *Error
 	if errors.As(err, &re) {
 		return re.Name == name
@@ -179,9 +197,12 @@ func LoadDir(dir string) ([]*Routine, []error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
-		r, err := Parse(filepath.Join(dir, e.Name()))
+		path := filepath.Join(dir, e.Name())
+		r, err := Parse(path)
 		if err != nil {
-			errs = append(errs, &Error{Name: strings.TrimSuffix(e.Name(), ".md"), Err: err})
+			// The filename is the identity, so a file that will not parse
+			// still says which routine it is about.
+			errs = append(errs, &Error{Name: strings.TrimSuffix(e.Name(), ".md"), Path: path, Err: err})
 			continue
 		}
 		routines = append(routines, r)
@@ -192,6 +213,12 @@ func LoadDir(dir string) ([]*Routine, []error) {
 
 // LoadAgent reads agent-owned routines plus every installed plugin's
 // routines. Names are global identities, so duplicates are errors.
+//
+// Every routine it returns is one a caller may run: a name any attributed
+// error is about is dropped from the list, not just a name two *parseable*
+// files claim. A run whose workspace would be assembled around such a name
+// refuses to start (routine.Concerns, in the runner), so a name left in the
+// list is a name the tick would schedule, mint, and push before that refusal.
 func LoadAgent(root string) ([]*Routine, []error) {
 	routines, errs := LoadDir(filepath.Join(root, "routines"))
 	pluginDirs, err := os.ReadDir(filepath.Join(root, "plugins"))
@@ -207,19 +234,24 @@ func LoadAgent(root string) ([]*Routine, []error) {
 		errs = append(errs, foundErrs...)
 	}
 	seen := map[string]string{}
-	duplicates := map[string]bool{}
 	for _, r := range routines {
 		if prior, ok := seen[r.Name]; ok {
 			errs = append(errs, &Error{Name: r.Name, Err: fmt.Errorf("duplicate routine %q: %s and %s", r.Name, prior, r.Path)})
-			duplicates[r.Name] = true
 		} else {
 			seen[r.Name] = r.Path
 		}
 	}
-	if len(duplicates) > 0 {
+	broken := map[string]bool{}
+	for _, err := range errs {
+		var re *Error
+		if errors.As(err, &re) {
+			broken[re.Name] = true
+		}
+	}
+	if len(broken) > 0 {
 		filtered := routines[:0]
 		for _, r := range routines {
-			if !duplicates[r.Name] {
+			if !broken[r.Name] {
 				filtered = append(filtered, r)
 			}
 		}
@@ -228,6 +260,11 @@ func LoadAgent(root string) ([]*Routine, []error) {
 	sort.Slice(routines, func(i, j int) bool { return routines[i].Name < routines[j].Name })
 	return routines, errs
 }
+
+// ErrNotFound is the one Find failure that means the name is free. Every
+// other one means the name is spoken for by something the agent could not
+// read -- which a caller about to write the file needs to tell apart.
+var ErrNotFound = errors.New("no routine")
 
 // Find returns one globally named routine from an agent repository.
 func Find(root, name string) (*Routine, error) {
@@ -245,5 +282,5 @@ func Find(root, name string) (*Routine, error) {
 			return r, nil
 		}
 	}
-	return nil, fmt.Errorf("no routine %q", name)
+	return nil, fmt.Errorf("%w %q", ErrNotFound, name)
 }

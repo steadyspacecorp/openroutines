@@ -1,6 +1,7 @@
 package routine
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,5 +175,46 @@ func TestLoadErrorsAreAttributedToTheirRoutine(t *testing.T) {
 	_, err := Find(root, "typo")
 	if err == nil || !strings.Contains(err.Error(), "actve") {
 		t.Errorf("want the parse error for the broken routine, got %v", err)
+	}
+	if !strings.Contains(err.Error(), filepath.Join("routines", "typo.md")) {
+		t.Errorf("the error should name the file it is about, got %v", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Errorf("a routine that does not load is not a routine that is absent: %v", err)
+	}
+	if _, err := Find(root, "nobody"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a name nothing claims is ErrNotFound, got %v", err)
+	}
+}
+
+// A file that does not parse still claims its name, so a name two files claim
+// is a collision even when one of them is the broken file -- and both are
+// dropped. Otherwise the tick would schedule the healthy one, mint and push
+// its run, and only then have the runner refuse to assemble the workspace.
+func TestBrokenFileClaimsItsNameAgainstAHealthyOne(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{filepath.Join(root, "routines"), filepath.Join(root, "plugins", "demo", "routines")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "routines", "daily.md"),
+		[]byte("---\nschedule: \"0 9 * * *\"\n---\nwork\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "plugins", "demo", "routines", "daily.md"),
+		[]byte("---\nschedule: \"0 9 * * *\"\nactve: false\n---\nbroken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	routines, errs := LoadAgent(root)
+	if len(routines) != 0 {
+		t.Errorf("daily is ambiguous while one of its two files does not load: %v", routines)
+	}
+	if len(errs) != 1 || !Concerns(errs[0], "daily") {
+		t.Fatalf("want one error about daily, got %v", errs)
+	}
+	if !strings.Contains(errs[0].Error(), filepath.Join("plugins", "demo", "routines", "daily.md")) {
+		t.Errorf("the error must name the broken file, not just the routine: %v", errs[0])
 	}
 }
