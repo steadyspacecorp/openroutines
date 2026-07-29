@@ -131,6 +131,35 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	}
 }
 
+// A typo in one routine's frontmatter is that routine's problem alone: the
+// tick schedules around it and the healthy routine's run assembles a
+// workspace without it, rather than failing every attempt at workspace
+// assembly and abandoning runs agent-wide.
+func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
+	dir := fixture(t, "ok")
+	os.WriteFile(filepath.Join(dir, "routines", "typo.md"), []byte(
+		"---\nschedule: \"* * * * *\"\nactve: false\n---\nBroken.\n"), 0o644)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0) // register
+	s.Tick(ctx, t0.Add(61*time.Second))
+
+	st := loadState(t, s)
+	if st.Pending != nil {
+		t.Fatalf("the healthy routine should have completed, not retried: %+v", st.Pending)
+	}
+	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	if !strings.Contains(ledger, "ran run_") {
+		t.Fatalf("the healthy routine should have run: %q", ledger)
+	}
+	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	if !strings.Contains(records, `"outcome":"completed"`) {
+		t.Fatalf("run record missing: %q", records)
+	}
+}
+
 func TestCatchupCollapsesMissedFirings(t *testing.T) {
 	dir := fixture(t, "ok")
 	s := newSupervisor(t, dir)

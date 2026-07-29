@@ -139,3 +139,40 @@ func TestLoadAgentIncludesPluginsAndDropsDuplicateIdentities(t *testing.T) {
 		}
 	}
 }
+
+// Load errors name the routine they are about, so one broken file can be
+// worked around by everyone else -- and so the broken routine's own lookup
+// reports the reason instead of "no routine".
+func TestLoadErrorsAreAttributedToTheirRoutine(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "routines"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, "routines", name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("healthy.md", "---\nschedule: \"0 9 * * *\"\n---\nwork\n")
+	write("typo.md", "---\nschedule: \"0 9 * * *\"\nactve: false\n---\nbroken\n")
+
+	_, errs := LoadAgent(root)
+	if len(errs) != 1 {
+		t.Fatalf("expected one error, got %v", errs)
+	}
+	if Concerns(errs[0], "healthy") {
+		t.Errorf("a typo in typo.md is not healthy's problem: %v", errs[0])
+	}
+	if !Concerns(errs[0], "typo") {
+		t.Errorf("the error is about typo: %v", errs[0])
+	}
+
+	if _, err := Find(root, "healthy"); err != nil {
+		t.Errorf("healthy is findable alongside a broken sibling: %v", err)
+	}
+	_, err := Find(root, "typo")
+	if err == nil || !strings.Contains(err.Error(), "actve") {
+		t.Errorf("want the parse error for the broken routine, got %v", err)
+	}
+}

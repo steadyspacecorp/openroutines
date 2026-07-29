@@ -209,7 +209,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		}
 	}()
 
-	if err := buildWorkspace(dir, workspace); err != nil {
+	if err := buildWorkspace(dir, workspace, r.Name); err != nil {
 		return nil, nil, err
 	}
 	if err := copyDeclaredSkills(dir, workspace, r.FM.Skills); err != nil {
@@ -693,23 +693,31 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 // on the list -- the encrypted credential store, a stray key, dev rules like
 // AGENTS.md -- does not exist in a run. (This replaced a deny-list that
 // missed exactly one entry, credentials.yml.enc; allow-lists don't have
-// that failure mode.)
-func buildWorkspace(dir, workspace string) error {
-	for _, name := range []string{filepath.Base(config.Path(dir)), config.OpenCodeFileName} {
-		raw, err := os.ReadFile(filepath.Join(dir, name))
+// that failure mode.) name is the routine being run -- whose errors are the
+// only ones that can fail assembly.
+func buildWorkspace(dir, workspace, name string) error {
+	for _, file := range []string{filepath.Base(config.Path(dir)), config.OpenCodeFileName} {
+		raw, err := os.ReadFile(filepath.Join(dir, file))
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(workspace, name), raw, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(workspace, file), raw, 0o644); err != nil {
 			return err
 		}
 	}
+	// A file another routine owns is not this run's problem: an unparseable
+	// sibling is simply absent from the workspace, the same posture the
+	// supervisor's tick takes when it schedules around one. Only an error
+	// about this routine -- its own frontmatter, or a name it collides on --
+	// fails the attempt.
 	routines, errs := routine.LoadAgent(dir)
-	if len(errs) > 0 {
-		return errs[0]
+	for _, err := range errs {
+		if routine.Concerns(err, name) {
+			return err
+		}
 	}
 	for _, r := range routines {
 		raw, err := os.ReadFile(r.Path)

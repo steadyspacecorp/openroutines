@@ -3,6 +3,7 @@
 package routine
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -138,6 +139,30 @@ func WithActive(raw []byte, active bool) ([]byte, error) {
 	return []byte(head + tail), nil
 }
 
+// Error is a load failure attributed to the routine it concerns: the file
+// that would not parse, or the name two files collide on. Attribution is what
+// keeps one broken file from being everyone's problem -- a run of a healthy
+// routine can tell that the error belongs to someone else.
+type Error struct {
+	Name string // the routine the failure is about
+	Err  error
+}
+
+func (e *Error) Error() string { return e.Err.Error() }
+func (e *Error) Unwrap() error { return e.Err }
+
+// Concerns reports whether a LoadAgent error stands between the caller and
+// routine name. An error attributed to another routine does not; an
+// unattributed one (an unreadable plugins directory, which could be hiding
+// this very routine) concerns everyone -- fail closed.
+func Concerns(err error, name string) bool {
+	var re *Error
+	if errors.As(err, &re) {
+		return re.Name == name
+	}
+	return true
+}
+
 // LoadDir parses every *.md routine in dir, sorted by name. A missing dir is
 // an empty agent, not an error.
 func LoadDir(dir string) ([]*Routine, []error) {
@@ -156,7 +181,7 @@ func LoadDir(dir string) ([]*Routine, []error) {
 		}
 		r, err := Parse(filepath.Join(dir, e.Name()))
 		if err != nil {
-			errs = append(errs, err)
+			errs = append(errs, &Error{Name: strings.TrimSuffix(e.Name(), ".md"), Err: err})
 			continue
 		}
 		routines = append(routines, r)
@@ -185,7 +210,7 @@ func LoadAgent(root string) ([]*Routine, []error) {
 	duplicates := map[string]bool{}
 	for _, r := range routines {
 		if prior, ok := seen[r.Name]; ok {
-			errs = append(errs, fmt.Errorf("duplicate routine %q: %s and %s", r.Name, prior, r.Path))
+			errs = append(errs, &Error{Name: r.Name, Err: fmt.Errorf("duplicate routine %q: %s and %s", r.Name, prior, r.Path)})
 			duplicates[r.Name] = true
 		} else {
 			seen[r.Name] = r.Path
@@ -207,8 +232,11 @@ func LoadAgent(root string) ([]*Routine, []error) {
 // Find returns one globally named routine from an agent repository.
 func Find(root, name string) (*Routine, error) {
 	routines, errs := LoadAgent(root)
+	// A routine that failed to load is missing from the list; reporting it as
+	// "no routine" would send the reader looking for a file that is right
+	// there. Report why it is not loadable instead.
 	for _, err := range errs {
-		if strings.Contains(err.Error(), "duplicate routine "+fmt.Sprintf("%q", name)) {
+		if Concerns(err, name) {
 			return nil, err
 		}
 	}

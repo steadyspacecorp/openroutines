@@ -22,6 +22,12 @@ The framework's configuration file is `openroutines.yaml`, named for the system 
 
 **Why.** Prompts are the program; they belong in files, under version control, in a format both humans and models read natively. Frontmatter makes every grant explicit and greppable: what a routine can touch is declared at the top of the file that defines it, not assembled at runtime. Agent-level defaults live in `openroutines.yaml`; frontmatter overrides them.
 
+## A broken routine is one broken routine
+
+**Decision.** A routine that does not load -- unknown frontmatter key, unterminated frontmatter, a filename two files claim -- is absent, and nothing more. The tick logs it and schedules the rest; a healthy routine's run assembles its workspace without it. Load errors are therefore attributed to the routine they concern (`routine.Error`, carrying the name), and the one place attribution is used to *fail* is the routine actually being run: its own unparseable file, or a name it is party to a collision on, still fails its attempt with the real error, and lookups of that name report the parse failure rather than "no routine".
+
+**Why.** The blast radius of a typo should be the file it is in. Failing every run on any parse error is not fail-closed, it is fail-everywhere: the broken routine is already excluded from scheduling, so all the extra strictness buys is that the *healthy* routines mint pending runs, push their intent commits, and then fail at workspace assembly -- five attempts each, abandonment tasks across the board, circuit breakers tripped, and an operator reading `<healthy-routine>: <run_id> failed to start: <other-file>: frontmatter: ...`. The one error class that genuinely concerns everyone -- a directory that would not read, which could be hiding any routine -- is unattributed and still fails the attempt.
+
 ## Scheduling: a tick loop with catch-up, not cron
 
 **Decision.** A supervisor process in the container wakes every minute, re-reads routine frontmatter, and dispatches whatever is due. Scheduling state is durable and per-routine (keyed by the routine's filename): a **watermark** -- the latest cron occurrence fully accounted for -- plus at most one **pending run**.
