@@ -247,7 +247,7 @@ sequenceDiagram
     end
     Note over S: one run at a time, in due order
     S->>W: record pending run (run_id, scheduled_for, covered_through)<br/>and reserve this attempt (attempts + 1)
-    S->>O: commit whatever intent the worktree carries, push it;<br/>required before acting
+    S->>O: commit whatever intent the worktree carries, push it --<br/>required before acting
     S->>O: renew the single-instance lease (CAS heartbeat) --<br/>a lost lease stops dispatch for this tick
     S->>St: snapshot memory files into staging
     S->>S: flock routine, build clean env (declared credentials and run metadata)
