@@ -1,0 +1,136 @@
+package runner
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func renderEvents(t *testing.T, secrets map[string]string, lines ...string) string {
+	t.Helper()
+	var out strings.Builder
+	r := newRenderer(&out, secrets)
+	for _, l := range lines {
+		if _, err := r.Write([]byte(l + "\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.Flush()
+	return out.String()
+}
+
+func toolEvent(t *testing.T, tool, title, output string, exit int) string {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"type": "tool_use",
+		"part": map[string]any{
+			"type": "tool", "tool": tool,
+			"state": map[string]any{
+				"status": "completed", "title": title, "output": output,
+				"metadata": map[string]any{"exit": exit},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// The routine's own text prints whole; tool calls become a summary line with
+// their output bounded to a tail -- the fix for #62's unbounded `gh run view`
+// dump landing in the container log.
+func TestRendererBoundsToolOutput(t *testing.T) {
+	big := strings.Repeat("noise\n", 100_000) + "the part that matters"
+	out := renderEvents(t, nil,
+		`{"type":"step_start","part":{}}`,
+		`{"type":"text","part":{"type":"text","text":"Checked the failed job."}}`,
+		toolEvent(t, "bash", "gh run view --log-failed", big, 1),
+	)
+	if !strings.Contains(out, "Checked the failed job.") {
+		t.Fatalf("routine text should print whole:\n%s", out)
+	}
+	if !strings.Contains(out, "[tool bash] gh run view --log-failed") || !strings.Contains(out, "exit 1") {
+		t.Fatalf("tool call should render as a summary line:\n%s", out)
+	}
+	if !strings.Contains(out, "the part that matters") {
+		t.Fatalf("the output tail -- where errors land -- should survive:\n%s", out)
+	}
+	if len(out) > 4*toolOutputBytes {
+		t.Fatalf("600KB of tool output should render bounded, got %d bytes", len(out))
+	}
+	if strings.Contains(out, "step_start") {
+		t.Fatalf("transcript structure should not render:\n%s", out)
+	}
+}
+
+// Scrubbing happens before truncation: a secret sitting across the
+// truncation boundary must still redact, never leak half of itself.
+func TestRendererScrubsBeforeTruncating(t *testing.T) {
+	secret := "tok-0123456789abcdef0123456789abcdef"
+	output := strings.Repeat("x", toolOutputBytes-10) + secret + strings.Repeat("y", toolOutputBytes)
+	out := renderEvents(t, map[string]string{"api_token": secret}, toolEvent(t, "bash", "echo $API_TOKEN", output, 0))
+	if strings.Contains(out, secret) || strings.Contains(out, secret[:12]) {
+		t.Fatalf("secret (or a truncated half of it) leaked:\n%s", out)
+	}
+}
+
+// Anything the renderer does not recognize passes through bounded: a
+// plain-text line from a fake or future opencode, an event schema the
+// framework doesn't know. Degrade, never fail the run.
+func TestRendererPassesUnknownLinesThroughBounded(t *testing.T) {
+	out := renderEvents(t, nil,
+		"plain text from an older opencode",
+		`{"type":"future_event","payload":"`+strings.Repeat("z", 3*passthroughBytes)+`"}`,
+	)
+	if !strings.Contains(out, "plain text from an older opencode") {
+		t.Fatalf("plain lines should pass through:\n%s", out)
+	}
+	if !strings.Contains(out, "truncated]") || len(out) > 2*passthroughBytes {
+		t.Fatalf("unknown events should be bounded, got %d bytes:\n%.200s", len(out), out)
+	}
+}
+
+// Error events keep their payload: the provider-auth hint matches on this
+// text, and it is what an operator reads when a run dies.
+func TestRendererKeepsErrorEvents(t *testing.T) {
+	out := renderEvents(t, nil, `{"type":"error","error":{"name":"APIError","data":{"message":"API key is invalid.","statusCode":401}}}`)
+	if !authFailurePattern.MatchString(out) {
+		t.Fatalf("rendered error should still classify as an auth failure:\n%s", out)
+	}
+}
+
+// A single event line beyond the buffer cap is suppressed with a notice
+// instead of ballooning memory, and the stream recovers on the next line.
+func TestRendererSuppressesOversizedEvents(t *testing.T) {
+	var out strings.Builder
+	r := newRenderer(&out, nil)
+	huge := []byte(toolEvent(t, "bash", "cat warandpeace", strings.Repeat("a", maxEventBytes+(1<<20)), 0) + "\n")
+	// A pipe delivers a line this size in chunks, never one Write.
+	for len(huge) > 0 {
+		n := min(len(huge), 64<<10)
+		if _, err := r.Write(huge[:n]); err != nil {
+			t.Fatal(err)
+		}
+		huge = huge[n:]
+	}
+	if _, err := r.Write([]byte(`{"type":"text","part":{"text":"still here"}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	r.Flush()
+	if !strings.Contains(out.String(), "suppressed") || !strings.Contains(out.String(), "still here") {
+		t.Fatalf("oversized event should be suppressed and the stream recover:\n%.300s", out.String())
+	}
+	if len(out.String()) > 1024 {
+		t.Fatalf("suppression should be a notice, got %d bytes", len(out.String()))
+	}
+}
+
+// A failed tool call renders its error text, not silence.
+func TestRendererShowsToolErrors(t *testing.T) {
+	raw := (`{"type":"tool_use","part":{"tool":"webfetch","state":{"status":"error","title":"fetch docs","error":"connect: connection refused"}}}`)
+	out := renderEvents(t, nil, raw)
+	if !strings.Contains(out, "connection refused") || !strings.Contains(out, "error") {
+		t.Fatalf("tool failure should render its error:\n%s", out)
+	}
+}

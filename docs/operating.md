@@ -58,6 +58,17 @@ A few properties fall out of the design (see [docs/design.md](design.md) for the
 - **Memory survives.** Code rolls back with the image; memory lives on its own branch and persists, like a database, but versioned.
 - **No application ingress.** The shipped container listens on no ports. Routine output and run records go to stdout -- read them with `docker logs` or your platform's log tooling. This does not replace normal host and deployment access controls.
 
+## Log level
+
+The log is rendered, not raw: a routine's own output prints whole, each tool call becomes a summary line plus the last 2KB of its output, and injected secrets are scrubbed before anything is truncated. Set `log_level` in `openroutines.yml` to change how much survives -- omitted means `info`:
+
+- `debug` -- the full model-process transcript plus opencode's own diagnostics. For chasing a specific problem, not for running unattended.
+- `info` -- the default: the rendered run stream plus supervisor lifecycle lines (run started, completed, registered).
+- `warn` -- no run stream; degraded-but-running conditions (unreachable origin, a routine that stopped loading, sandbox warnings) and everything `error` shows.
+- `error` -- failed and abandoned runs, held dispatch, and nothing else.
+
+A failed attempt prints its last output at every level -- a warn or error agent still tells you why a run died. `OPENROUTINES_LOG_LEVEL` overrides the configured value for one process, which is how you flip a live container to `debug` without a redeploy (config changes only reach production on redeploy).
+
 ## Continuous deployment
 
 For continuous deployment, wire the usual hooks: run `openroutines check` on every push, rebuild and redeploy on merge to `main`. The redeploy is not just delivery hygiene -- it is the only way routine changes reach a running agent. Pushes to the `memory` branch never trigger a deploy; that separation is by design.

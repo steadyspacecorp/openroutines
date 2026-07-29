@@ -76,6 +76,7 @@ type Agent struct {
 	Owner       Owner                 `yaml:"owner"`
 	Timezone    string                `yaml:"timezone"`
 	Defaults    Defaults              `yaml:"defaults"`
+	LogLevel    string                `yaml:"log_level,omitempty"`
 	Memory      *Memory               `yaml:"memory,omitempty"`
 	Variables   map[string]string     `yaml:"variables,omitempty"`
 	Credentials map[string]creds.Spec `yaml:"credentials,omitempty"`
@@ -160,6 +161,11 @@ func (a *Agent) Problems() []string {
 	}
 	if _, err := memory.ParseRetention(a.Retention()); err != nil {
 		out = append(out, fmt.Sprintf("memory.retention: %v", err))
+	}
+	if a.LogLevel != "" {
+		if _, err := ParseLogLevel(a.LogLevel); err != nil {
+			out = append(out, err.Error())
+		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(a.Variables)) {
 		switch {
