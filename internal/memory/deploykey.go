@@ -54,8 +54,12 @@ func ConfigureDeployKey() (bool, error) {
 	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
 		return false, err
 	}
+	// Keepalives bound a silently dropped connection: without them a stalled
+	// push parks until the kernel gives up, and the single-instance lease
+	// goes stale underneath a supervisor that is still running.
 	sshCommand = fmt.Sprintf(
-		"ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=%s",
+		"ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=%s"+
+			" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4",
 		keyPath, filepath.Join(sshDir, "known_hosts"),
 	)
 	return true, nil
