@@ -52,7 +52,17 @@ openroutines status
 
 Shows master key state, models, routines and schedules, skills, memory sync state, and token usage.
 
-Each routine also reports what the supervisor's scheduling state says about it: how far its schedule is accounted for (the watermark), a pending run with the attempts it has spent and when the next one is due, and an active circuit-breaker cool-down -- a routine sitting one out does not advertise a next firing, because it will not honour it. A routine with nothing under it has no state yet: the supervisor has never seen it, which is what every fresh checkout looks like. The grants in parentheses are the routine's declared authority -- skills, credentials, MCP servers, and web access.
+Each routine also reports what the supervisor's scheduling state says about it: how far its schedule is accounted for (the watermark), a pending run with the attempts it has spent, and an active circuit-breaker cool-down with the time it ends -- a routine sitting one out does not advertise a next firing, because it will not honour it. A routine with nothing under it has no state yet: the supervisor has never seen it, which is what every fresh checkout looks like. The grants in parentheses are the routine's declared authority -- skills, credentials, MCP servers, and web access.
+
+A pending run is followed by what actually becomes of it, which the attempt count alone does not say:
+
+- `next attempt <time>` -- the last attempt failed and the run is backing off.
+- `still in flight` -- the attempt is running now. Reserving an attempt and failing one leave the same state on disk, so the tell is the run record, which is written only when an attempt settles. Without a run log to compare against (a checkout that has never run), status falls back to the retry line rather than guess.
+- `due now` -- the retry is already owed, or no attempt has touched the run yet.
+- `budget spent` -- every attempt is gone; the next tick abandons the run and files a task.
+- `held` -- the routine is inactive or declares neither a schedule nor a trigger, so the tick skips it before reading its state. Nothing is coming to advance the run; activating the routine or restoring its schedule releases it.
+
+These lines come out of the `memory` branch as your checkout last fetched it, so status says when that reading is behind origin. Run `openroutines sync` for the current picture.
 
 ## usage
 
