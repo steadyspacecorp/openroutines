@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -107,8 +108,15 @@ func routinesNew(args []string) int {
 		return fail(err)
 	}
 	path := routinePath(name)
-	if existing, err := routine.Find(".", name); err == nil {
+	existing, err := routine.Find(".", name)
+	if err == nil {
 		return fail(fmt.Errorf("routine %q already exists at %s", name, existing.Path))
+	}
+	// "Not found" is the only error that clears the way: a file that does not
+	// load still claims its name, and creating over it would replace someone's
+	// prompt with the template.
+	if !errors.Is(err, routine.ErrNotFound) {
+		return fail(fmt.Errorf("cannot create %q: %w", name, err))
 	}
 	if err := os.MkdirAll("routines", 0o755); err != nil {
 		return fail(err)
@@ -119,6 +127,23 @@ func routinesNew(args []string) int {
 	}
 	fmt.Printf("Created %s (inactive -- edit the schedule and prompt, then set active: true)\n", path)
 	return 0
+}
+
+// routineFile resolves the file a named routine lives in, for the two
+// commands that act on the file rather than on what it declares. A routine
+// that does not load is exactly the one you need to edit or remove, so take
+// the file the load error names -- unless the name is claimed by two files,
+// where picking one would be a guess.
+func routineFile(name string) (string, error) {
+	r, err := routine.Find(".", name)
+	if err == nil {
+		return r.Path, nil
+	}
+	var re *routine.Error
+	if errors.As(err, &re) && re.Path != "" {
+		return re.Path, nil
+	}
+	return "", err
 }
 
 // routineName validates a CLI routine argument against the name grammar.
@@ -144,11 +169,10 @@ func routinesEdit(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	r, err := routine.Find(".", name)
+	path, err := routineFile(name)
 	if err != nil {
 		return fail(err)
 	}
-	path := r.Path
 	editor := os.Getenv("VISUAL")
 	if editor == "" {
 		editor = os.Getenv("EDITOR")
@@ -163,7 +187,7 @@ func routinesEdit(args []string) int {
 	}
 	// A routine you just edited should still be valid.
 	if _, err := routine.Parse(path); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: %s: %v\n", path, err)
 		return 1
 	}
 	return 0
@@ -201,11 +225,10 @@ func routinesRemove(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	r, err := routine.Find(".", name)
+	path, err := routineFile(name)
 	if err != nil {
-		return fail(fmt.Errorf("no routine %q: %v", name, err))
+		return fail(err)
 	}
-	path := r.Path
 	if err := os.Remove(path); err != nil {
 		return fail(err)
 	}
@@ -214,7 +237,7 @@ func routinesRemove(args []string) int {
 	// scheduling state, trigger baseline, consumer cursor -- so the branch
 	// doesn't accumulate orphans that misfire a later routine with the same
 	// name. Its ledger stays -- that's memory.
-	removed, _ := memory.At(".").RemoveRoutineState(r.Name)
+	removed, _ := memory.At(".").RemoveRoutineState(name)
 	for _, p := range removed {
 		fmt.Printf("Removed %s (commit inside memory/ to record it)\n", p)
 	}
