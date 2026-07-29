@@ -99,6 +99,78 @@ func TestStagedCopyRefusesHardLinks(t *testing.T) {
 	}
 }
 
+// The whole policy is re-applied at copy time, not just the file-type half:
+// a path Validate walked past and a descendant created afterwards is still a
+// path that must never enter the branch.
+func TestStagedCopyRefusesPathsValidateWouldReject(t *testing.T) {
+	for _, rel := range []string{".gitattributes", ".gitignore", filepath.Join(stateDirName, "sched.md"), "runs.jsonl"} {
+		staging, wt := t.TempDir(), t.TempDir()
+		os.MkdirAll(filepath.Dir(filepath.Join(staging, rel)), 0o755)
+		os.WriteFile(filepath.Join(staging, rel), []byte("x\n"), 0o644)
+		if err := copyStaged(staging, wt); err == nil {
+			t.Errorf("%s: expected the copy to refuse it", rel)
+		}
+		if _, err := os.Stat(filepath.Join(wt, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s: copied into the worktree anyway", rel)
+		}
+	}
+}
+
+// The size cap too: a file Validate measured can be grown before the copy
+// reads it, so the cap is enforced on the bytes actually copied.
+func TestStagedCopyRefusesOversizedFile(t *testing.T) {
+	staging, wt := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(staging, "events.md"), make([]byte, maxFile+1), 0o644)
+	if err := copyStaged(staging, wt); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected an oversize rejection, got %v", err)
+	}
+}
+
+// Rejecting halfway through must leave the worktree as it was found. Settle
+// commits the failure record, so a half-copied tree would be committed as the
+// failed run's memory -- exactly the atomicity staging exists to provide.
+func TestStagedCopyRejectionLeavesTheWorktreeUntouched(t *testing.T) {
+	staging, wt := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(wt, "events.md"), []byte("committed\n"), 0o644)
+	os.WriteFile(filepath.Join(staging, "events.md"), []byte("committed\n- new\n"), 0o644)
+	os.WriteFile(filepath.Join(staging, "tasks.md"), []byte("- [ ] new\n"), 0o644)
+	// Sorts last: the good files are copied before the rejection lands.
+	if err := os.Symlink(filepath.Join(t.TempDir(), "secret.txt"), filepath.Join(staging, "zz.md")); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	if err := copyStaged(staging, wt); err == nil {
+		t.Fatal("expected the copy to refuse the symlink")
+	}
+	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "committed\n" {
+		t.Errorf("worktree events.md = %q, want the pre-import content", got)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "tasks.md")); !os.IsNotExist(err) {
+		t.Error("a file from the rejected tree landed in the worktree")
+	}
+}
+
+// RestoreFile writes into staging after the run, so it needs the import
+// copy's confinement: a staged path swapped for a symlink must not redirect
+// the write out of the staging tree.
+func TestRestoreFileNeverWritesOutsideStaging(t *testing.T) {
+	repo := t.TempDir()
+	wt := At(repo).Worktree()
+	os.MkdirAll(wt, 0o755)
+	os.WriteFile(filepath.Join(wt, "events.md"), []byte("worktree events\n"), 0o644)
+	staging := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	os.WriteFile(outside, []byte("do not touch\n"), 0o644)
+	if err := os.Symlink(outside, filepath.Join(staging, "events.md")); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	if _, err := At(repo).RestoreFile(staging, "events.md"); err == nil {
+		t.Error("expected RestoreFile to refuse a symlinked staged path")
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "do not touch\n" {
+		t.Fatalf("wrote through the symlink: %q", got)
+	}
+}
+
 // Import must refuse to overwrite uncommitted human curation -- there is no
 // reflog for edits that were never committed. Supervisor-owned paths are the
 // attempt's own in-flight bookkeeping and do not gate.

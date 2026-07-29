@@ -372,6 +372,25 @@ func topSegment(rel string) string {
 	return strings.Split(rel, string(filepath.Separator))[0]
 }
 
+// stagedPathPolicy rejects a staged path that may not enter the worktree
+// whatever it holds: git control files, supervisor-owned bookkeeping, absurd
+// depth. Validate applies it for an early, whole-tree failure; the import
+// copy applies it again because the tree can change under the walk that
+// validated it (see copyStaged).
+func stagedPathPolicy(rel string, isDir bool) error {
+	switch filepath.Base(rel) {
+	case ".git", ".gitattributes", ".gitmodules", ".gitignore":
+		return fmt.Errorf("staged memory contains git control file %q -- rejected", rel)
+	}
+	if supervisorOwned[topSegment(rel)] {
+		return fmt.Errorf("staged memory touches supervisor-owned path %q -- rejected", rel)
+	}
+	if isDir && strings.Count(rel, string(filepath.Separator)) > 8 {
+		return fmt.Errorf("staged memory path %q too deep -- rejected", rel)
+	}
+	return nil
+}
+
 // Validate rejects a staged memory tree that contains anything but regular
 // files under sane limits. A rejected tree fails the whole run.
 func Validate(stagingDir string) error {
@@ -384,17 +403,10 @@ func Validate(stagingDir string) error {
 		if err != nil || rel == "." {
 			return err
 		}
-		name := d.Name()
-		if name == ".git" || name == ".gitattributes" || name == ".gitmodules" || name == ".gitignore" {
-			return fmt.Errorf("staged memory contains git control file %q -- rejected", rel)
-		}
-		if supervisorOwned[topSegment(rel)] {
-			return fmt.Errorf("staged memory touches supervisor-owned path %q -- rejected", rel)
+		if err := stagedPathPolicy(rel, d.IsDir()); err != nil {
+			return err
 		}
 		if d.IsDir() {
-			if strings.Count(rel, string(filepath.Separator)) > 8 {
-				return fmt.Errorf("staged memory path %q too deep -- rejected", rel)
-			}
 			return nil
 		}
 		if !d.Type().IsRegular() {
@@ -480,27 +492,41 @@ func (m *Memory) Import(stagingDir string) error {
 // context"): the instruction tells the routine not to write the file, this
 // makes sure. Reports whether a staged change was discarded.
 func (m *Memory) RestoreFile(stagingDir, name string) (bool, error) {
-	src := filepath.Join(m.Worktree(), name)
-	dest := filepath.Join(stagingDir, name)
-	want, err := os.ReadFile(src)
-	if os.IsNotExist(err) {
-		// The worktree has no such file: the run must not create it either.
-		if _, serr := os.Stat(dest); os.IsNotExist(serr) {
-			return false, nil
-		}
-		return true, os.Remove(dest)
+	want, werr := os.ReadFile(filepath.Join(m.Worktree(), name))
+	if werr != nil && !os.IsNotExist(werr) {
+		return false, werr
 	}
+	// This reads and writes staging after the run, so it is confined exactly
+	// as the import copy is: a path swapped for a symlink must not redirect
+	// the write out of the staging tree (see copyStaged).
+	root, err := os.OpenRoot(stagingDir)
 	if err != nil {
 		return false, err
 	}
-	got, err := os.ReadFile(dest)
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
+	defer func() { _ = root.Close() }()
+	staged, serr := openStaged(root, name)
+	if serr == nil {
+		defer func() { _ = staged.Close() }()
+	} else if !errors.Is(serr, fs.ErrNotExist) {
+		return false, serr
 	}
-	if err == nil && bytes.Equal(got, want) {
-		return false, nil
+	if os.IsNotExist(werr) {
+		// The worktree has no such file: the run must not create it either.
+		if serr != nil {
+			return false, nil
+		}
+		return true, root.Remove(name)
 	}
-	return true, os.WriteFile(dest, want, 0o644)
+	if serr == nil {
+		got, err := io.ReadAll(staged)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Equal(got, want) {
+			return false, nil
+		}
+	}
+	return true, root.WriteFile(name, want, 0o644)
 }
 
 // Commit records the current worktree state on the memory branch.
@@ -803,56 +829,83 @@ func (m *Memory) Status() WorktreeStatus {
 	return st
 }
 
-// copyStaged copies every staged file into the worktree. Validate has walked
+// copyStaged brings every staged file into the worktree. Validate has walked
 // the tree by now, but staging is not quiescent: a descendant of the model
 // process can outlive the run and rewrite what the walk approved. So the copy
-// re-decides on what it actually opens -- an os.Root confines every path
-// component to the staging tree, and the check that the source is an ordinary
-// unaliased file is made on the descriptor being read, not on a path that can
-// mean something else a moment later.
+// decides for itself -- an os.Root confines every path component to the
+// staging tree, and every check (path policy, file type, count, size) is
+// re-applied here, on the descriptor being read rather than on a path that
+// can mean something else a moment later.
+//
+// Because those checks reject mid-walk, the copy lands in a scratch tree
+// beside the worktree and is promoted only once the whole staged tree has
+// passed. A rejection still fails the run, and Settle commits the failure
+// record -- so a half-copied worktree would commit part of a rejected run's
+// memory, which is the atomicity staging exists to provide.
 func copyStaged(stagingDir, wt string) error {
 	root, err := os.OpenRoot(stagingDir)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	return fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+	scratch, err := os.MkdirTemp(filepath.Dir(wt), ".openroutines-import-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+
+	var dirs, files []string
+	if err := fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if rel == "." {
 			return nil
 		}
+		rel = filepath.FromSlash(rel)
 		if rel == ConsumeMarker {
 			return nil // consume receipt for the runtime, never memory content
 		}
-		dest := filepath.Join(wt, filepath.FromSlash(rel))
-		if d.IsDir() {
-			return os.MkdirAll(dest, 0o755)
+		if err := stagedPathPolicy(rel, d.IsDir()); err != nil {
+			return err
 		}
-		return copyStagedFile(root, rel, dest)
-	})
+		if d.IsDir() {
+			dirs = append(dirs, rel)
+			return os.MkdirAll(filepath.Join(scratch, rel), 0o755)
+		}
+		if len(files) >= maxEntries {
+			return fmt.Errorf("staged memory exceeds %d files -- rejected", maxEntries)
+		}
+		files = append(files, rel)
+		return copyStagedFile(root, rel, filepath.Join(scratch, rel))
+	}); err != nil {
+		return err
+	}
+	for _, rel := range dirs {
+		if err := os.MkdirAll(filepath.Join(wt, rel), 0o755); err != nil {
+			return err
+		}
+	}
+	for _, rel := range files {
+		dest := filepath.Join(wt, rel)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if err := os.Rename(filepath.Join(scratch, rel), dest); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// copyStagedFile copies one staged file, deciding whether it may be copied
-// from the open descriptor. O_NONBLOCK so a fifo swapped in for a file
-// cannot park the import until someone opens its write end.
+// copyStagedFile copies one staged file into the scratch tree, bounded by the
+// same size cap Validate measured against: the file can have grown since.
 func copyStagedFile(root *os.Root, rel, dest string) error {
-	in, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return fmt.Errorf("staged memory file %q is not readable inside staging -- rejected: %w", rel, err)
-	}
-	defer in.Close()
-	info, err := in.Stat()
+	in, err := openStaged(root, rel)
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("staged memory file %q is not a regular file -- rejected", rel)
-	}
-	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
-		return fmt.Errorf("staged memory file %q is a hard link -- rejected", rel)
-	}
+	defer in.Close()
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -861,8 +914,41 @@ func copyStagedFile(root *os.Root, rel, dest string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	n, err := io.Copy(out, io.LimitReader(in, maxFile+1))
+	if err != nil {
+		return err
+	}
+	if n > maxFile {
+		return fmt.Errorf("staged memory file %q exceeds %d bytes -- rejected", rel, maxFile)
+	}
+	return nil
+}
+
+// openStaged opens a path inside the staging tree and proves on the
+// descriptor itself that it is an ordinary unaliased file. Nothing an earlier
+// stat decided is trusted: a descendant of the model process can outlive the
+// run and swap the path for a symlink, a hard link, or a fifo. O_NONBLOCK so
+// a fifo cannot park the caller until someone opens its write end.
+func openStaged(root *os.Root, rel string) (*os.File, error) {
+	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("staged memory file %q is not readable inside staging -- rejected: %w", rel, err)
+	}
+	info, err := f.Stat()
+	switch {
+	case err != nil:
+	case !info.Mode().IsRegular():
+		err = fmt.Errorf("staged memory file %q is not a regular file -- rejected", rel)
+	default:
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+			err = fmt.Errorf("staged memory file %q is a hard link -- rejected", rel)
+		}
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 func copyFile(src, dest string) error {
