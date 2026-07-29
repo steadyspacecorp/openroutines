@@ -169,6 +169,13 @@ func killGitGroup(pid int) error {
 // half-written SHA out of rev-parse would be worse than an error). It is
 // named rather than reported as a generic failure so the operator looks for
 // the process holding the pipe instead of at the origin.
+//
+// Only the last case keeps the underlying error in the chain, and that is the
+// distinction gitExitCode reads: git exited with a status of its own, so the
+// status means something about the repository. Neither bound above did -- both
+// describe what this process gave up on -- and callers that treat an exit
+// status as an answer (see reachable, in delivery.go) must not read one out of
+// a deadline we imposed.
 func (c *gitCmd) fail(args []string, err error, out []byte) error {
 	switch {
 	case c.ctx.Err() != nil:
@@ -176,7 +183,7 @@ func (c *gitCmd) fail(args []string, err error, out []byte) error {
 	case errors.Is(err, exec.ErrWaitDelay):
 		return fmt.Errorf("git %s: exited cleanly but something it spawned still held the output pipe after %s, so the output is incomplete: %s", strings.Join(args, " "), gitDrainDeadline, strings.TrimSpace(string(out)))
 	}
-	return fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 }
 
 // The bounds on a git invocation: the deadline itself, the grace the group
@@ -208,6 +215,10 @@ var (
 var hermeticConfig = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "protocol.file.allow=user",
+	// The delivery feed excludes retention trims with an anchored --grep;
+	// grep.patternType=fixed in the repo's own config would make the pattern
+	// match nothing and quietly put every trim back in the feed.
+	"-c", "grep.patternType=basic",
 	"-c", "user.name=openroutines",
 	"-c", "user.email=agent@openroutines.dev",
 	"-c", "gc.auto=0",
@@ -226,6 +237,18 @@ func git(dir string, args ...string) (string, error) {
 		return "", cmd.fail(args, err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitExitCode reports the status git exited with, or -1 when it never got to
+// exit at all (no git on PATH, a signal). The distinction is what separates
+// "git answered no" from "git could not answer": the first is a fact about
+// the repository, the second is an attempt worth repeating.
+func gitExitCode(err error) int {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	return -1
 }
 
 // Worktree returns the memory worktree location inside the agent repo.
@@ -508,6 +531,37 @@ func (m *Memory) Commit(message string) (string, error) {
 		return "", nil // nothing to commit
 	}
 	if _, err := git(wt, "commit", "--quiet", "-m", message); err != nil {
+		return "", err
+	}
+	return git(wt, "rev-parse", "--short", "HEAD")
+}
+
+// commitPaths commits only the named paths, leaving everything else in the
+// worktree as it found it. Commit sweeps the whole tree, which is right for a
+// run's settlement -- whatever the worktree carries is the intent -- and wrong
+// for maintenance: a commit written for one purpose must not carry work that
+// merely happened to be dirty when it fired. Missing paths are skipped.
+func (m *Memory) commitPaths(message string, paths ...string) (string, error) {
+	wt := m.Worktree()
+	var present []string
+	for _, p := range paths {
+		if _, err := os.Stat(filepath.Join(wt, p)); err == nil {
+			present = append(present, p)
+		}
+	}
+	if len(present) == 0 {
+		return "", nil
+	}
+	// A pathspec commit takes the working-tree content of those paths, but
+	// only for paths git already tracks -- add first so a file written for
+	// the first time isn't a pathspec that matches nothing.
+	if _, err := git(wt, append([]string{"add", "--"}, present...)...); err != nil {
+		return "", err
+	}
+	if changed, _ := git(wt, append([]string{"status", "--porcelain", "--"}, present...)...); changed == "" {
+		return "", nil // nothing to commit
+	}
+	if _, err := git(wt, append([]string{"commit", "--quiet", "-m", message, "--"}, present...)...); err != nil {
 		return "", err
 	}
 	return git(wt, "rev-parse", "--short", "HEAD")

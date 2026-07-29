@@ -104,7 +104,7 @@ func trimFixture(t *testing.T, dir string) string {
 	if changed, err := At(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
 		t.Fatalf("trim: changed=%v err=%v", changed, err)
 	}
-	if _, err := At(dir).Commit(TrimCommitMessage(30 * 24 * time.Hour)); err != nil {
+	if _, err := At(dir).CommitTrim(30 * 24 * time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	return added
@@ -151,6 +151,46 @@ func TestRetentionTrimIsNotDelivered(t *testing.T) {
 	}
 }
 
+// The trim commit is the one commit the feed skips wholesale, so it must
+// carry nothing but the trim. Curation left uncommitted in the worktree --
+// which `status` invites, and a failed intent commit leaves behind -- would
+// otherwise ride along into it and never reach a consumer at all.
+func TestTrimCommitLeavesUnrelatedWorkDeliverable(t *testing.T) {
+	dir := deliveryFixture(t)
+	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
+	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
+		t.Fatal(err)
+	}
+	cursor, _ := At(dir).Head()
+
+	// Curation sitting in the worktree when the daily trim fires.
+	appendMemory(t, dir, "tasks.md", "- [ ] `task-20260721-1` hand-curated ask (source: a human; added 2026-07-21)")
+	if changed, err := At(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
+		t.Fatalf("trim: changed=%v err=%v", changed, err)
+	}
+	if _, err := At(dir).CommitTrim(30 * 24 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := At(dir).Commit("Run doc-drift (run_c): completed"); err != nil {
+		t.Fatal(err)
+	}
+
+	through, _ := At(dir).Head()
+	changes, err := At(dir).Changes(cursor, through)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var added []string
+	for _, c := range changes {
+		for _, f := range c.Files {
+			added = append(added, f.Added...)
+		}
+	}
+	if !strings.Contains(strings.Join(added, "\n"), "hand-curated ask") {
+		t.Fatalf("the trim commit swallowed uncommitted curation: %+v", changes)
+	}
+}
+
 // A cursor whose commit is not on the memory branch names no change set, and
 // no retry will make it name one: the feed reports that as its own error so
 // the caller can tell it apart from an attempt worth repeating.
@@ -179,6 +219,37 @@ func TestChangesRejectsUnreachableCursor(t *testing.T) {
 	through, _ = At(dir).Head()
 	if _, err := At(dir).Changes(orphan, through); !errors.Is(err, ErrCursorUnreachable) {
 		t.Fatalf("an off-branch commit should report ErrCursorUnreachable, got %v", err)
+	}
+}
+
+// Only git's answer "no such commit" means the cursor is unreachable. A git
+// that could not answer at all -- a broken repository, a lock, a full disk --
+// is an attempt worth repeating, and must not be classified as the permanent
+// failure that abandons a run on its first try.
+func TestChangesKeepsEnvironmentFailuresRetryable(t *testing.T) {
+	dir := deliveryFixture(t)
+	head, _ := At(dir).Head()
+
+	_, err := At(t.TempDir()).Changes(head, head)
+	if err == nil {
+		t.Fatal("a repository that is not there should fail")
+	}
+	if errors.Is(err, ErrCursorUnreachable) {
+		t.Fatalf("an unanswerable git must stay retryable, got %v", err)
+	}
+
+	// A deadline this process imposed is the other way git stops answering,
+	// and the one an operator is likeliest to hit: the kill signal it reports
+	// must not be read as a verdict about the cursor.
+	restore, restoreGrace := gitTimeout, gitKillGrace
+	gitTimeout, gitKillGrace = time.Nanosecond, time.Millisecond
+	t.Cleanup(func() { gitTimeout, gitKillGrace = restore, restoreGrace })
+	_, err = At(dir).Changes(head, head)
+	if err == nil {
+		t.Fatal("a git that cannot outrun its deadline should fail")
+	}
+	if errors.Is(err, ErrCursorUnreachable) {
+		t.Fatalf("a timed-out git must stay retryable, got %v", err)
 	}
 }
 

@@ -563,7 +563,7 @@ func prepareInbox(dir, workspace, consumer string) (string, error) {
 		from = cursor.ConsumedThrough
 		if changes, err = mem.Changes(from, through); err != nil {
 			if errors.Is(err, memory.ErrCursorUnreachable) {
-				return "", fmt.Errorf("%w: %w -- repair or delete state/cursors/%s.json on the memory branch", ErrFatal, err, consumer)
+				return "", fmt.Errorf("%w: %w -- repair or delete %s on the memory branch", ErrFatal, err, memory.CursorFile(consumer))
 			}
 			return "", err
 		}

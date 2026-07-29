@@ -195,7 +195,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		if changed, err := s.mem.Trim(s.retention, now); err != nil {
 			s.Log.Printf("retention trim: %v", err)
 		} else if changed {
-			if _, err := s.mem.Commit(memory.TrimCommitMessage(s.retention)); err != nil {
+			if _, err := s.mem.CommitTrim(s.retention); err != nil {
 				s.Log.Printf("retention trim commit: %v", err)
 			}
 			s.pushBestEffort()
