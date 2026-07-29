@@ -43,6 +43,8 @@ The supervisor wakes every minute, re-reads routine frontmatter, and dispatches 
 
 A routine whose file does not load -- a frontmatter typo, a missing closing `---`, a name a plugin's routine also claims -- is skipped, and only it: the other routines run their next fire as usual. The supervisor records an event when a routine stops loading and another when it loads again, so the gap shows up in the agent's own reporting rather than only in the container log; `openroutines check` names the file and the mistake. Fix the file and the next tick picks it up, catch-up included. `routines edit` and `routines remove` work on a routine that does not load, and `routines new` will not create over one.
 
+Fire times are the agent's wall clock. A `schedule` is evaluated in the `timezone:` set in `openroutines.yml`, so `0 6 * * *` means 06:00 there on both sides of a daylight-saving transition, whatever zone the container's clock is set to -- and the supervisor, the `schedule.md` a run reads, and `openroutines status` all compute it the same way.
+
 Every run also receives the schedule as data: a read-only `./schedule.md` in the workspace listing each active routine's next fires, computed by the scheduler's own parser. When the running routine is itself scheduled, the file fixes its **window** -- now through its next fire-day's first fire -- and splits the other routines in-window (they fire before this routine runs again) and out. Routine prompts should read the file, never re-derive fire times from cron frontmatter: forecasting ("release notes run tonight") becomes transcription, which models get right.
 
 ## Triggers

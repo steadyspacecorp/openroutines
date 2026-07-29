@@ -15,6 +15,35 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// Spec is a cron expression bound to the agent's timezone. Every scan
+// normalizes its inputs into that zone before asking cron for a firing, and
+// so returns fire times as wall-clock in it. Binding matters because the
+// times fed in are persisted ones: a watermark that round-trips through the
+// state file comes back in a fabricated fixed-offset zone (Go's
+// time.Time.UnmarshalJSON does that whenever the offset isn't time.Local's),
+// and cron evaluates an unbound spec in whatever zone its argument carries --
+// which would freeze the agent's schedule at last season's UTC offset and
+// drift it an hour at every DST transition.
+type Spec struct {
+	sched cron.Schedule
+	loc   *time.Location
+}
+
+// Parse parses a standard cron expression to be evaluated in loc, which the
+// caller must resolve -- there is no ambient default to fall back to.
+func Parse(expr string, loc *time.Location) (*Spec, error) {
+	sched, err := cron.ParseStandard(expr)
+	if err != nil {
+		return nil, err
+	}
+	return &Spec{sched: sched, loc: loc}, nil
+}
+
+// Next returns the first firing strictly after t, in the spec's location.
+func (s *Spec) Next(t time.Time) time.Time {
+	return s.sched.Next(t.In(s.loc))
+}
+
 // Pending is a logical run that exists durably before it is allowed to act.
 type Pending struct {
 	RunID          string    `json:"run_id"`
@@ -112,7 +141,7 @@ func (s *State) Save(stateDir string) error {
 // Occurrences returns the first and last cron firing times in (after, until],
 // and how many there were. Multiple missed firings collapse into one run:
 // the caller uses first as scheduled_for and last as covered_through.
-func Occurrences(spec cron.Schedule, after, until time.Time) (first, last time.Time, n int) {
+func Occurrences(spec *Spec, after, until time.Time) (first, last time.Time, n int) {
 	t := after
 	for i := 0; i < 100000; i++ {
 		t = spec.Next(t)
@@ -129,8 +158,8 @@ func Occurrences(spec cron.Schedule, after, until time.Time) (first, last time.T
 }
 
 // NextFires returns up to n firing times strictly after `after` and no
-// later than `until`, in `after`'s location.
-func NextFires(spec cron.Schedule, after, until time.Time, n int) []time.Time {
+// later than `until`, in the spec's location.
+func NextFires(spec *Spec, after, until time.Time, n int) []time.Time {
 	var fires []time.Time
 	t := after
 	for len(fires) < n {
@@ -144,11 +173,12 @@ func NextFires(spec cron.Schedule, after, until time.Time, n int) []time.Time {
 }
 
 // WindowEnd returns the spec's first firing on its next fire-day -- the
-// first calendar day after `after`'s (in `after`'s location) with any
+// first calendar day after `after`'s (in the spec's location) with any
 // firing. Later same-day firings (retry slots) are skipped: a routine's
 // window closes when it next runs fresh, not when it retries. Zero when no
 // such firing lands by `until`.
-func WindowEnd(spec cron.Schedule, after, until time.Time) time.Time {
+func WindowEnd(spec *Spec, after, until time.Time) time.Time {
+	after = after.In(spec.loc)
 	y0, d0 := after.Year(), after.YearDay()
 	t := after
 	for i := 0; i < 100000; i++ {
