@@ -54,7 +54,7 @@ func TestLoadOpenCode(t *testing.T) {
 }
 
 // Drift flags framework concerns that crept into the harness's file: model
-// choice belongs in openroutines.yaml and frontmatter, and a defined provider
+// choice belongs in openroutines.yml and frontmatter, and a defined provider
 // no model references usually means a typo on one side.
 func TestOpenCodeDrift(t *testing.T) {
 	dir := t.TempDir()

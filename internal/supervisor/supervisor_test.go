@@ -58,7 +58,7 @@ func fixture(t *testing.T, mode string) string {
 		}
 	}
 	run("git", "init", "-q", "-b", "main", ".")
-	os.WriteFile(filepath.Join(dir, "openroutines.yaml"), []byte(agentYAML), 0o644)
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(agentYAML), 0o644)
 	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
 		"---\nschedule: \"* * * * *\"\n---\nDo the fake thing.\n"), 0o644)

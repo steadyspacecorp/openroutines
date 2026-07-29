@@ -57,20 +57,20 @@ func (o *OpenCode) MCPServers() []string {
 // drift worth flagging (it has arrived via coding-agent sessions before) --
 // including a model pinned inside an agent override. Defined providers are
 // cross-checked against modelPrefixes, the providers referenced by
-// openroutines.yaml defaults and routine frontmatter: an unreferenced id
+// openroutines.yml defaults and routine frontmatter: an unreferenced id
 // usually means a typo on one side.
 func (o *OpenCode) Drift(modelPrefixes []string) []string {
 	var warnings []string
 	for _, key := range slices.Sorted(maps.Keys(o.cfg)) {
 		if key != "$schema" && key != "permission" && key != "provider" && key != "agent" && key != "mcp" {
-			warnings = append(warnings, fmt.Sprintf("opencode.json contains %q -- model choice belongs in openroutines.yaml and frontmatter, not here", key))
+			warnings = append(warnings, fmt.Sprintf("opencode.json contains %q -- model choice belongs in openroutines.yml and frontmatter, not here", key))
 		}
 	}
 	if agents, ok := o.cfg["agent"].(map[string]any); ok {
 		for _, name := range slices.Sorted(maps.Keys(agents)) {
 			if entry, ok := agents[name].(map[string]any); ok {
 				if _, has := entry["model"]; has {
-					warnings = append(warnings, fmt.Sprintf("agent %q in opencode.json sets a model -- model choice belongs in openroutines.yaml and frontmatter, not here", name))
+					warnings = append(warnings, fmt.Sprintf("agent %q in opencode.json sets a model -- model choice belongs in openroutines.yml and frontmatter, not here", name))
 				}
 			}
 		}
@@ -78,7 +78,7 @@ func (o *OpenCode) Drift(modelPrefixes []string) []string {
 	if providers, ok := o.cfg["provider"].(map[string]any); ok {
 		for _, id := range slices.Sorted(maps.Keys(providers)) {
 			if !slices.Contains(modelPrefixes, id) {
-				warnings = append(warnings, fmt.Sprintf("provider %q in opencode.json is not referenced by any model in openroutines.yaml defaults or routine frontmatter", id))
+				warnings = append(warnings, fmt.Sprintf("provider %q in opencode.json is not referenced by any model in openroutines.yml defaults or routine frontmatter", id))
 			}
 		}
 	}

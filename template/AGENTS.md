@@ -9,7 +9,7 @@ instructions -- so nothing written here reaches the deployed agent.
 
 ## What this repository is
 
-This repo *is* an agent: one job description (`openroutines.yaml`), a set of
+This repo *is* an agent: one job description (`openroutines.yml`), a set of
 scheduled routines (`routines/*.md`), the skills they may use (`skills/`),
 encrypted credentials (`credentials.yml.enc`), and the agent's memory (a
 `memory/` directory backed by its own git branch). A supervisor in the
@@ -69,11 +69,11 @@ counts as delivered.
   `credentials.yml.enc` by hand). Credential names are lowercase snake_case
   and become env vars (`slack_webhook` -> `SLACK_WEBHOOK`) only in runs that
   declare them.
-- Non-secret configuration goes in the `variables:` map in `openroutines.yaml`
+- Non-secret configuration goes in the `variables:` map in `openroutines.yml`
   instead -- same name mapping (`product_repo` -> `PRODUCT_REPO`), injected
   into every run. If a value is secret it's a credential; otherwise it's a
   variable.
-- A `credentials:` entry in `openroutines.yaml` may give a stored credential a
+- A `credentials:` entry in `openroutines.yml` may give a stored credential a
   derived type: the run then receives short-lived material minted by the
   runner instead of the stored root secret. `type: github_app` (plus
   `app_id`) injects `GITHUB_TOKEN` and the App's Git identity;
@@ -87,7 +87,7 @@ counts as delivered.
   plus, when a custom endpoint is needed (an AI gateway, a proxy),
   `provider` definitions in opencode's schema, keyed by the prefix model
   strings use. Never remove or rewrite a provider block that is already
-  there; `openroutines update` never rewrites this file. `openroutines.yaml` and
+  there; `openroutines update` never rewrites this file. `openroutines.yml` and
   routine frontmatter are the framework's: identity, schedules, grants, and
   model *choice* (the framework resolves it per routine and injects the
   matching provider key). `openroutines check` warns when config lands on

@@ -26,7 +26,7 @@ import (
 // define the real vocabulary; this just catches obvious mistakes.
 var effortPattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
-// cmdCheck validates the agent repository: openroutines.yaml, every routine's
+// cmdCheck validates the agent repository: openroutines.yml, every routine's
 // frontmatter, skill references, credential names, and deploy prerequisites.
 // Exit code 1 on any failure -- made for CI.
 func cmdCheck(_ []string) int {
@@ -63,9 +63,9 @@ func cmdCheck(_ []string) int {
 		}
 	} else {
 		okf("valid (%s, %s)", agent.Name, agent.Timezone)
-		if configName == config.LegacyFileName {
-			warnf("%s is the legacy configuration name -- rename it to %s (git mv %s %s); both are read, and the rename is a one-line diff",
-				config.LegacyFileName, config.FileName, config.LegacyFileName, config.FileName)
+		if configName != config.FileName {
+			warnf("%s is a legacy configuration name -- rename it to %s (git mv %s %s); all spellings are read, and the rename is a one-line diff",
+				configName, config.FileName, configName, config.FileName)
 		}
 	}
 
@@ -247,7 +247,7 @@ func cmdCheck(_ []string) int {
 			}
 			model, merr := runner.EffectiveModel(agent, r)
 			if merr != nil {
-				continue // already reported against openroutines.yaml/frontmatter
+				continue // already reported against openroutines.yml/frontmatter
 			}
 			keyName := creds.ProviderKeyName(strings.SplitN(model, "/", 2)[0])
 			providerNeeds[keyName] = append(providerNeeds[keyName], r.Name)

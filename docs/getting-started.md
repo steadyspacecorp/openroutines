@@ -44,7 +44,7 @@ openroutines configure
 
 `scaffold` creates a fresh git repository with the agent's skeleton:
 
-- `openroutines.yaml` -- the agent's identity and defaults
+- `openroutines.yml` -- the agent's identity and defaults
 - `routines/` -- a starter check-in routine, active by default (twice a day, your agent reports what it did, what it intends to do, and where it's blocked -- to the logs, until you point it somewhere better)
 - `skills/` -- empty, ready for you to add to
 - `AGENTS.md` -- so you can work on the agent with the coding agent of your choice
@@ -52,7 +52,7 @@ openroutines configure
 
 A `memory/` directory appears on first run -- a checkout of the agent's dedicated memory branch, kept out of `main`'s history.
 
-`configure` is idempotent -- run it whenever. It fills in `openroutines.yaml` (name, job description, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
+`configure` is idempotent -- run it whenever. It fills in `openroutines.yml` (name, job description, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
 
 ### Name and job description
 
@@ -71,7 +71,7 @@ description: Maintain an accurate picture of what customers need and what the pr
 
 ## Pick your models
 
-`configure` sets the agent's default model in `openroutines.yaml` -- any provider opencode supports works, and any routine can override the default in its own frontmatter (see [Creating routines](routines.md)).
+`configure` sets the agent's default model in `openroutines.yml` -- any provider opencode supports works, and any routine can override the default in its own frontmatter (see [Creating routines](routines.md)).
 
 Custom model endpoints -- an AI gateway, a proxy, a self-hosted server -- are harness configuration: a `provider` block in `opencode.json`, in [opencode's provider schema](https://opencode.ai/docs/providers/), keyed by the prefix your model strings use:
 
@@ -89,7 +89,7 @@ Custom model endpoints -- an AI gateway, a proxy, a self-hosted server -- are ha
 }
 ```
 
-A routine then selects `model: my_gateway/some-model` in its frontmatter, and the credential `my_gateway_api_key` is injected automatically as the provider key. The boundary is simple: each config file belongs to the system that interprets it. Endpoint definitions and permissions are opencode's (`opencode.json`, which `openroutines update` never rewrites); model choice, grants, and schedules are the framework's (`openroutines.yaml` and frontmatter). `openroutines check` flags a defined provider that no model string references.
+A routine then selects `model: my_gateway/some-model` in its frontmatter, and the credential `my_gateway_api_key` is injected automatically as the provider key. The boundary is simple: each config file belongs to the system that interprets it. Endpoint definitions and permissions are opencode's (`opencode.json`, which `openroutines update` never rewrites); model choice, grants, and schedules are the framework's (`openroutines.yml` and frontmatter). `openroutines check` flags a defined provider that no model string references.
 
 ## Your first routine
 

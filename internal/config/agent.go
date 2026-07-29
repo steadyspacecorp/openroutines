@@ -1,4 +1,4 @@
-// Package config loads and validates openroutines.yaml -- the agent's identity:
+// Package config loads and validates openroutines.yml -- the agent's identity:
 // name, job description, owner, timezone, and routine defaults.
 package config
 
@@ -19,27 +19,29 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 )
 
-// FileName is the agent configuration file at the repository root.
-// FileName is the framework's configuration file -- named for the system
-// that reads it, as opencode.json is named for the harness.
-const FileName = "openroutines.yaml"
+// FileName is the agent configuration file at the repository root --
+// named for the system that reads it, as opencode.json is named for the
+// harness, and spelled .yml like credentials.yml.enc beside it (#50).
+const FileName = "openroutines.yml"
 
-// LegacyFileName is the pre-rename configuration file. Still read, and
+// LegacyFileNames are earlier spellings, newest first. Still read, and
 // Save writes back to whichever file the agent actually has, so pinned
 // agents migrate on their own schedule; check nudges the rename.
-const LegacyFileName = "agent.yaml"
+var LegacyFileNames = []string{"openroutines.yaml", "agent.yaml"}
 
 // Path returns the configuration file dir actually has: FileName when
-// present, LegacyFileName when only it exists, FileName otherwise (the
-// name a fresh write should create).
+// present, the first legacy name that exists otherwise, FileName as the
+// fallback (the name a fresh write should create).
 func Path(dir string) string {
 	preferred := filepath.Join(dir, FileName)
 	if _, err := os.Stat(preferred); err == nil {
 		return preferred
 	}
-	legacy := filepath.Join(dir, LegacyFileName)
-	if _, err := os.Stat(legacy); err == nil {
-		return legacy
+	for _, name := range LegacyFileNames {
+		legacy := filepath.Join(dir, name)
+		if _, err := os.Stat(legacy); err == nil {
+			return legacy
+		}
 	}
 	return preferred
 }
@@ -87,8 +89,8 @@ func (a *Agent) Retention() string {
 	return a.Memory.Retention
 }
 
-// Load reads the configuration file from dir (FileName, or LegacyFileName
-// as fallback). Decoding is strict: a misspelled key is an error, not
+// Load reads the configuration file from dir (FileName, or a LegacyFileNames
+// fallback). Decoding is strict: a misspelled key is an error, not
 // silently ignored configuration.
 func Load(dir string) (*Agent, error) {
 	path := Path(dir)
@@ -107,12 +109,21 @@ func Load(dir string) (*Agent, error) {
 
 // Save writes the configuration back to the file dir actually has -- a
 // legacy-named agent keeps its name until its operator renames it.
+// Two-space indentation, matching the scaffold template and routine
+// frontmatter: this is hand-edited, reviewed config, and a tool that
+// reformats it on every run undercuts that (#65) -- yaml.v3's default
+// is 4.
 func (a *Agent) Save(dir string) error {
-	out, err := yaml.Marshal(a)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(a); err != nil {
 		return err
 	}
-	return os.WriteFile(Path(dir), out, 0o644)
+	if err := enc.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(Path(dir), buf.Bytes(), 0o644)
 }
 
 // isPlaceholder reports whether a value is still a {{SCAFFOLD}} placeholder.

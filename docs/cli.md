@@ -4,7 +4,7 @@ Run any command from inside an agent repository (except `scaffold`).
 
 ```
 openroutines scaffold <path>      create a new agent repository
-openroutines configure            fill in openroutines.yaml, generate the master key
+openroutines configure            fill in openroutines.yml, generate the master key
 openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
 openroutines usage                token use and reported cost per routine (--json)
@@ -24,7 +24,7 @@ openroutines version              print the version
 openroutines scaffold <path>
 ```
 
-Creates a fresh git repository with the agent's skeleton: `openroutines.yaml`, a starter check-in routine, an empty `skills/` directory, `AGENTS.md`, a baseline `opencode.json` permission policy, `.gitignore`, Dockerfile, and pinned framework version.
+Creates a fresh git repository with the agent's skeleton: `openroutines.yml`, a starter check-in routine, an empty `skills/` directory, `AGENTS.md`, a baseline `opencode.json` permission policy, `.gitignore`, Dockerfile, and pinned framework version.
 
 ## configure
 
@@ -32,7 +32,7 @@ Creates a fresh git repository with the agent's skeleton: `openroutines.yaml`, a
 openroutines configure
 ```
 
-Idempotent -- run it whenever. Fills in `openroutines.yaml` (name, [job description](getting-started.md#name-and-job-description), owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
+Idempotent -- run it whenever. Fills in `openroutines.yml` (name, [job description](getting-started.md#name-and-job-description), owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
 
 ## check
 
