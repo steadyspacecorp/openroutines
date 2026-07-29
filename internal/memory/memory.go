@@ -446,25 +446,7 @@ func (m *Memory) Import(stagingDir string) error {
 			}
 		}
 	}
-	// Copy staged files over the worktree.
-	err := filepath.WalkDir(stagingDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(stagingDir, path)
-		if rel == "." {
-			return nil
-		}
-		if rel == ConsumeMarker {
-			return nil // consume receipt for the runtime, never memory content
-		}
-		dest := filepath.Join(wt, rel)
-		if d.IsDir() {
-			return os.MkdirAll(dest, 0o755)
-		}
-		return copyFile(path, dest)
-	})
-	if err != nil {
+	if err := copyStaged(stagingDir, wt); err != nil {
 		return err
 	}
 	// Remove worktree files the routine deleted in staging.
@@ -819,6 +801,68 @@ func (m *Memory) Status() WorktreeStatus {
 		_, _ = fmt.Sscanf(out, "%d", &st.Behind)
 	}
 	return st
+}
+
+// copyStaged copies every staged file into the worktree. Validate has walked
+// the tree by now, but staging is not quiescent: a descendant of the model
+// process can outlive the run and rewrite what the walk approved. So the copy
+// re-decides on what it actually opens -- an os.Root confines every path
+// component to the staging tree, and the check that the source is an ordinary
+// unaliased file is made on the descriptor being read, not on a path that can
+// mean something else a moment later.
+func copyStaged(stagingDir, wt string) error {
+	root, err := os.OpenRoot(stagingDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if rel == ConsumeMarker {
+			return nil // consume receipt for the runtime, never memory content
+		}
+		dest := filepath.Join(wt, filepath.FromSlash(rel))
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0o755)
+		}
+		return copyStagedFile(root, rel, dest)
+	})
+}
+
+// copyStagedFile copies one staged file, deciding whether it may be copied
+// from the open descriptor. O_NONBLOCK so a fifo swapped in for a file
+// cannot park the import until someone opens its write end.
+func copyStagedFile(root *os.Root, rel, dest string) error {
+	in, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return fmt.Errorf("staged memory file %q is not readable inside staging -- rejected: %w", rel, err)
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("staged memory file %q is not a regular file -- rejected", rel)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+		return fmt.Errorf("staged memory file %q is a hard link -- rejected", rel)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 func copyFile(src, dest string) error {
