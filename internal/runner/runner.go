@@ -953,16 +953,27 @@ func killClient(cmd *exec.Cmd, grace time.Duration, done chan error) {
 	}
 }
 
+// signalTarget is the run's own process group, or the process alone when the
+// spawn path did not make it a group leader. Every spawn path that gets
+// signalled sets Setpgid today; the guard is there because signalling -pid
+// without it reaches the supervisor's own group and kills the supervisor.
+func signalTarget(cmd *exec.Cmd) int {
+	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
+		return -cmd.Process.Pid
+	}
+	return cmd.Process.Pid
+}
+
 // killGroup terminates the run's whole process group: SIGTERM, grace, SIGKILL.
 // The waits are bounded by the command's WaitDelay, not by the group's
 // willingness to exit.
 func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error) {
-	pgid := -cmd.Process.Pid
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
+	target := signalTarget(cmd)
+	_ = syscall.Kill(target, syscall.SIGTERM)
 	select {
 	case <-done:
 	case <-time.After(grace):
-		_ = syscall.Kill(pgid, syscall.SIGKILL)
+		_ = syscall.Kill(target, syscall.SIGKILL)
 		<-done
 	}
 }
@@ -970,11 +981,13 @@ func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error) {
 // reapGroup kills what the model process left running after exiting on its
 // own. No grace period: the run is over, nothing left in the group has an
 // output anyone reads, and the pipeline is about to treat staging as final.
-// The leader has been waited on, so the group only still exists if a
-// descendant is alive -- and a live group's id cannot be recycled as a pid,
-// so this cannot reach an unrelated process.
+// Unlike killGroup this runs after the leader has been waited on, so an
+// already-empty group's id could in principle have been recycled by then --
+// an accepted race: the alternative is leaving the descendant writing to
+// memory the supervisor is about to commit. The import re-checks staging at
+// open time and does not depend on this having worked (see memory.copyStaged).
 func reapGroup(cmd *exec.Cmd) {
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_ = syscall.Kill(signalTarget(cmd), syscall.SIGKILL)
 }
 
 func timestamp() string { return time.Now().UTC().Format(time.RFC3339) }
