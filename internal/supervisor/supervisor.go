@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
@@ -112,6 +113,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	if err := sandbox.ProtectProcess(); err != nil {
 		s.Log.Printf("WARNING: could not mark supervisor non-dumpable: %v", err)
 	}
+	s.warnKeyDelivery()
 	if configured, err := memory.ConfigureDeployKey(); err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	} else if configured {
@@ -596,6 +598,22 @@ func (s *Supervisor) pushBestEffort() {
 	if err := s.mem.Push(); err != nil {
 		s.Log.Printf("memory push failed (will retry): %v", err)
 	}
+}
+
+// warnKeyDelivery says out loud, once at boot, that the master key value is
+// sitting in this process's environment -- the weaker of the two production
+// deliveries. Both work; only the file keeps the value out of the
+// environment, and a deployment that picked the env var years ago has no
+// other moment where anyone is told. It fires on a leftover variable too: a
+// deployment that moved to file delivery without unsetting the old one still
+// publishes the value. Log-only: the platform that forced env delivery cannot
+// be argued with at boot.
+func (s *Supervisor) warnKeyDelivery() {
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") != "1" || !creds.KeyValueInEnv() {
+		return
+	}
+	s.Log.Printf("WARNING: the master key value is in this process's environment (%s) -- readable wherever that environment is; mount the key as a file, point %s at the path, and unset %s",
+		creds.EnvMasterKey, creds.EnvMasterKeyFile, creds.EnvMasterKey)
 }
 
 // verifySandbox enforces the fail-closed policy at boot, not mid-run. Only

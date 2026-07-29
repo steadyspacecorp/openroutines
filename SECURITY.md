@@ -57,7 +57,7 @@ The security properties above assume that operators:
 - review repository changes, skills, credentials, and permission grants as code;
 - do not disable the production sandbox with `OPENROUTINES_UNSAFE_NO_SANDBOX=1`, and do not run a deployed agent with `OPENROUTINES_NATIVE=1` or with the image's `OPENROUTINES_IN_CONTAINER=1` unset -- either can spawn an unconfined model process, and only the first of those fails closed.
 
-Environment-variable key delivery is supported for compatibility, but has a weaker process-exposure posture than file delivery and is not the recommended production configuration.
+Environment-variable key delivery is supported for compatibility, but has a weaker process-exposure posture than file delivery and is not the recommended production configuration. The supervisor warns once at boot when the master key value is present in its environment, including when it is a leftover variable alongside file delivery.
 
 ## Known limitations
 
