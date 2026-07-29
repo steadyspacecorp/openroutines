@@ -386,6 +386,18 @@ func (p *Plugin) Summary() string {
 			if len(r.FM.MCP) > 0 {
 				w("    mcp: %s\n", strings.Join(r.FM.MCP, ", "))
 			}
+			// Web access is a grant like any other, and the one a reviewer of an
+			// unfamiliar bundle most wants named: it is how untrusted text gets in.
+			var web []string
+			if r.FM.Webfetch {
+				web = append(web, "webfetch")
+			}
+			if r.FM.Websearch {
+				web = append(web, "websearch")
+			}
+			if len(web) > 0 {
+				w("    web access: %s\n", strings.Join(web, ", "))
+			}
 			if t := r.FM.Trigger; t != nil {
 				w("    trigger: polls %s", t.Poll)
 				if t.Credential != "" {

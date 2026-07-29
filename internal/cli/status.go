@@ -79,8 +79,8 @@ func cmdStatus(_ []string) int {
 			}
 		}
 		grants := ""
-		if n := len(r.FM.Skills) + len(r.FM.Credentials); n > 0 {
-			grants = fmt.Sprintf(" (%d grant(s))", n)
+		if g := grantSummary(r); len(g) > 0 {
+			grants = " (" + strings.Join(g, " ") + ")"
 		}
 		fmt.Printf("  %-20s %-14s %s%s%s\n", r.Name, scheduleSummary(r), state, next, grants)
 	}
