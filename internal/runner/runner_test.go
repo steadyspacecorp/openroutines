@@ -132,7 +132,7 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 		}
 	}
 	workspace := t.TempDir()
-	if err := buildWorkspace(dir, workspace); err != nil {
+	if err := buildWorkspace(dir, workspace, "daily"); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"openroutines.yml", "opencode.json", "routines/daily.md", "routines/plugin-daily.md"} {
@@ -149,6 +149,56 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 		if !allowed[e.Name()] {
 			t.Errorf("%s leaked into the run workspace", e.Name())
 		}
+	}
+}
+
+// One unparseable file is one broken routine, not a broken agent: a healthy
+// routine assembles a workspace without it. The broken routine's own run
+// still fails, and with the real reason.
+func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"openroutines.yaml":                "name: t\n",
+		"routines/daily.md":                "---\nschedule: \"0 9 * * *\"\n---\nwork",
+		"routines/typo.md":                 "---\nschedule: \"0 9 * * *\"\nactve: false\n---\nbroken",
+		"routines/twin.md":                 "---\nschedule: \"0 9 * * *\"\n---\nmine",
+		"plugins/demo/routines/twin.md":    "---\nschedule: \"0 9 * * *\"\n---\ntheirs",
+		"plugins/demo/routines/plugged.md": "---\nschedule: \"0 10 * * *\"\n---\nplugin work",
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	workspace := t.TempDir()
+	if err := buildWorkspace(dir, workspace, "daily"); err != nil {
+		t.Fatalf("a sibling's parse error must not fail this routine's run: %v", err)
+	}
+	for _, f := range []string{"routines/daily.md", "routines/plugged.md"} {
+		if _, err := os.Stat(filepath.Join(workspace, f)); err != nil {
+			t.Errorf("%s should travel into the workspace: %v", f, err)
+		}
+	}
+	for _, f := range []string{"routines/typo.md", "routines/twin.md"} {
+		if _, err := os.Stat(filepath.Join(workspace, f)); err == nil {
+			t.Errorf("%s does not load and must not travel into the workspace", f)
+		}
+	}
+
+	if err := buildWorkspace(dir, t.TempDir(), "typo"); err == nil {
+		t.Error("the broken routine's own run must fail")
+	} else if !strings.Contains(err.Error(), "frontmatter") {
+		t.Errorf("want the parse error, got %v", err)
+	}
+	if err := buildWorkspace(dir, t.TempDir(), "twin"); err == nil {
+		t.Error("a routine party to a name collision must fail")
+	} else if !strings.Contains(err.Error(), "duplicate routine") {
+		t.Errorf("want the collision error, got %v", err)
 	}
 }
 
