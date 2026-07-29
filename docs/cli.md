@@ -9,7 +9,7 @@ openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
 openroutines usage                token use and reported cost per routine (--json)
 openroutines sync                 pull the agent's latest memory from origin (--push)
-openroutines routines <command>   new, list, run, test, edit, activate, deactivate, remove
+openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
 openroutines skills <command>     new, list, remove
 openroutines plugin <command>     add, list, update grouped plugin bundles
 openroutines credentials <cmd>    set, list, remove
@@ -75,9 +75,8 @@ Fast-forwards when behind, rebases local commits when both sides moved, and refu
 ```
 openroutines routines new <name>         create a routine (inactive until you activate it)
 openroutines routines list               names, schedules, grants
-openroutines routines run <name>         run once now; memory writes are kept
-openroutines routines test <name>        dry run: outbound tools disabled, credentials withheld,
-                                         intended actions narrated, memory writes discarded
+openroutines routines run <name> [--no-memory]
+                                         run once now; --no-memory discards memory writes
 openroutines routines edit <name>        open in $EDITOR, validate on close
 openroutines routines activate <name>    set active: true
 openroutines routines deactivate <name>  set active: false
@@ -85,6 +84,8 @@ openroutines routines remove <name>      delete the routine and its scheduling s
 ```
 
 A routine that does not load still holds its name: `new` refuses rather than overwrite it, `run` reports the parse error instead of "no routine", and `edit` and `remove` operate on the file so you can fix or drop it.
+
+`run` always has the routine's declared credentials and tools and may perform external actions. `--no-memory` discards staged memory writes and the run record; it is not a dry run. Use `check` for non-acting validation, and point acting routines at a scratch target when exercising their external path.
 
 ## skills
 

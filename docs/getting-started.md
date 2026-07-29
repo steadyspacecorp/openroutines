@@ -5,12 +5,12 @@ From nothing to a running agent: install the CLI, scaffold an agent, configure i
 ## Prerequisites
 
 - **git**
-- **Docker** -- needed by `routines run` and `routines test`, which execute in the same container they run in when deployed; `scaffold`, `configure`, `check`, and `routines new` don't need it
+- **Docker** -- needed by `routines run`, which executes in the same container it runs in when deployed; `scaffold`, `configure`, `check`, and `routines new` don't need it
 - **An API key for at least one model provider** (Anthropic, OpenAI, ...) -- `configure` encrypts it into the agent's credentials
 
 That's the whole list. You don't install opencode or any language runtime -- everything the agent runs on ships inside the container.
 
-None of it is private, either. The image your routines run in locally builds from public bases, so you can scaffold an agent, write routines, and run and test them against the real model without any registry access at all. GHCR is a deploy-time dependency only -- see [Operating in production](operating.md).
+None of it is private, either. The image your routines run in locally builds from public bases, so you can scaffold an agent, write routines, and run them against the real model without any registry access at all. GHCR is a deploy-time dependency only -- see [Operating in production](operating.md).
 
 ## Install the CLI
 
@@ -99,7 +99,7 @@ openroutines routines new doc-drift
 
 Edit the generated file -- schedule and scope in the frontmatter, prompt in the body -- then run it once locally. The local run uses the same runtime image, opencode version, constructed environment, and assembled workspace as production.
 
-Both `routines run` and `routines test` start opencode in a disposable Docker container; `test` changes its permissions and discards its writes, but uses the same containerized runtime.
+`routines run` starts opencode in a disposable Docker container. It is always a real run with the routine's credentials and tools; `--no-memory` discards only its staged memory writes and run record.
 
 ```bash
 openroutines routines run doc-drift
@@ -110,7 +110,8 @@ Day to day:
 ```bash
 openroutines status                   # master key, models, routines and schedules, skills, memory sync state, token usage
 openroutines routines list            # also: edit, activate, deactivate, remove
-openroutines routines test <name>     # dry run: routine credentials withheld, acting tools denied, memory discarded
+openroutines routines run <name> --no-memory
+                                      # real external actions; memory discarded
 openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove
 openroutines credentials set <name>   # add/replace one encrypted secret; also: list, remove
 openroutines usage                    # token use and reported cost per routine; --json for scripts
@@ -119,7 +120,7 @@ openroutines check                    # validate config, frontmatter, and schedu
 
 ## Where next
 
-- [Creating routines](routines.md) -- the frontmatter reference, schedules, triggers, and testing
+- [Creating routines](routines.md) -- the frontmatter reference, schedules, triggers, and local runs
 - [Extending your agent](extending.md) -- skills, plugins, credentials, and variables
 - [Your agent on the team](teamwork.md) -- how the agent reports its work and improves at its job
 - [Operating in production](operating.md) -- deploying, CI/CD, and updating

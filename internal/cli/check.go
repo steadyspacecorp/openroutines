@@ -219,13 +219,10 @@ func cmdCheck(_ []string) int {
 			errs = append(errs, "empty prompt body")
 		}
 		// Offline wiring validation: render the generated agent definition
-		// (both modes) exactly as a run would -- no provider key, no Docker.
+		// exactly as a run would -- no provider key, no Docker.
 		if agent != nil {
-			for _, dry := range []bool{false, true} {
-				if _, rerr := runner.RenderDefinition(agent, r, oc.MCPServers(), dry); rerr != nil {
-					errs = append(errs, fmt.Sprintf("generated definition: %v", rerr))
-					break
-				}
+			if _, rerr := runner.RenderDefinition(agent, r, oc.MCPServers()); rerr != nil {
+				errs = append(errs, fmt.Sprintf("generated definition: %v", rerr))
 			}
 		}
 		if len(errs) == 0 {

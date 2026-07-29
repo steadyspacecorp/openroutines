@@ -36,9 +36,7 @@ func cmdRoutines(args []string) int {
 	case "list":
 		return routinesList()
 	case "run":
-		return routinesRun(rest, true)
-	case "test":
-		return routinesRun(rest, false)
+		return routinesRun(rest)
 	case "edit":
 		return routinesEdit(rest)
 	case "activate":
@@ -59,28 +57,24 @@ const routinesUsage = `Manage this agent's routines (markdown files in routines/
 Usage:
   openroutines routines new <name>         create a routine (inactive until you activate it)
   openroutines routines list               names, schedules, grants
-  openroutines routines run <name>         run once now; memory writes are kept
-  openroutines routines test <name>        dry run: outbound tools disabled, credentials withheld,
-                                           intended actions narrated, memory writes discarded
+  openroutines routines run <name> [--no-memory]
+                                           run once now; --no-memory discards memory writes
   openroutines routines edit <name>        open in $EDITOR, validate on close
   openroutines routines activate <name>    set active: true
   openroutines routines deactivate <name>  set active: false
   openroutines routines remove <name>      delete the routine and its scheduling state
 `
 
-func routinesRun(args []string, keep bool) int {
-	if len(args) != 1 {
-		verb := "run"
-		if !keep {
-			verb = "test"
-		}
-		return fail(fmt.Errorf("usage: openroutines routines %s <name>", verb))
-	}
-	name, err := routineName(args[0])
+func routinesRun(args []string) int {
+	nameArg, noMemory, err := parseRoutineRunArgs(args)
 	if err != nil {
 		return fail(err)
 	}
-	res, err := runner.Run(".", name, keep)
+	name, err := routineName(nameArg)
+	if err != nil {
+		return fail(err)
+	}
+	res, err := runner.Run(".", name, noMemory)
 	if err != nil {
 		return fail(err)
 	}
@@ -88,8 +82,8 @@ func routinesRun(args []string, keep bool) int {
 	if res.Hint != "" {
 		fmt.Println(res.Hint)
 	}
-	if !keep {
-		fmt.Println("dry run: outbound tools were disabled and credentials withheld; routine memory writes discarded (first runs may still have initialized the memory worktree)")
+	if noMemory {
+		fmt.Println("memory discarded: external actions were still performed and credentials were available (first runs may still have initialized the memory worktree)")
 	} else if res.Commit != "" {
 		fmt.Printf("memory updated: commit %s on the %s branch\n", res.Commit, "memory")
 	}
@@ -97,6 +91,29 @@ func routinesRun(args []string, keep bool) int {
 		return 1
 	}
 	return 0
+}
+
+func parseRoutineRunArgs(args []string) (string, bool, error) {
+	noMemory := false
+	var nameArg string
+	for _, arg := range args {
+		switch arg {
+		case "--no-memory":
+			if noMemory {
+				return "", false, fmt.Errorf("usage: openroutines routines run <name> [--no-memory]")
+			}
+			noMemory = true
+		default:
+			if strings.HasPrefix(arg, "-") || nameArg != "" {
+				return "", false, fmt.Errorf("usage: openroutines routines run <name> [--no-memory]")
+			}
+			nameArg = arg
+		}
+	}
+	if nameArg == "" {
+		return "", false, fmt.Errorf("usage: openroutines routines run <name> [--no-memory]")
+	}
+	return nameArg, noMemory, nil
 }
 
 func routinesNew(args []string) int {

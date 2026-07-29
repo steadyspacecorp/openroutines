@@ -82,20 +82,20 @@ mcp: [steady]
 credentials: [steady_token]
 ```
 
-The grant opens the server's tools to this routine's runs; every other routine keeps them denied, and dry runs deny them regardless -- MCP tools act on external systems, which a rehearsal must not do. Auth headers reference the run environment, so the server is only reachable when the routine also grants the credential that fills them: the `mcp` grant scopes the tool surface, the credential grant scopes the connection. `check` fails a grant naming a server `opencode.json` doesn't define.
+The grant opens the server's tools to this routine's runs; every other routine keeps them denied. Auth headers reference the run environment, so the server is only reachable when the routine also grants the credential that fills them: the `mcp` grant scopes the tool surface, the credential grant scopes the connection. `check` fails a grant naming a server `opencode.json` doesn't define.
 
 What works: remote servers with static-token or client-credentials auth (a typed `oauth2_client` credential mints the bearer at spawn). OAuth-interactive servers have no headless path, and local stdio servers are out of scope by design -- the runtime image ships no language runtimes.
 
-## Running and testing
+## Running locally
 
-Both `routines run` and `routines test` start opencode in a disposable Docker container, with the same runtime image, opencode version, constructed environment, and assembled workspace as production.
+`routines run` starts opencode in a disposable Docker container, with the same runtime image, opencode version, constructed environment, and assembled workspace as production.
 
 ```bash
-openroutines routines run doc-drift    # the real thing; memory writes are kept
-openroutines routines test doc-drift   # dry run
+openroutines routines run doc-drift                 # memory writes are kept
+openroutines routines run doc-drift --no-memory     # memory writes are discarded
 ```
 
-`test` is a behavioral rehearsal: the routine's credentials are withheld (only the model provider key is injected), acting tools are denied, the standing instruction says to narrate intended external actions instead of taking them, and memory writes are discarded. You rehearse against the real model without the routine authenticating to anything or leaving a trace -- and what you rehearse is what production runs.
+Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; `--no-memory` changes only what happens afterward, discarding staged memory writes and the run record. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target and use `--no-memory` when you do not want the result retained in agent memory.
 
 ## Recording work
 
