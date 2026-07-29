@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -257,5 +258,45 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	events, _ := os.ReadFile(filepath.Join(b, "memory", "events.md"))
 	if !strings.Contains(string(events), "generation one fact") {
 		t.Fatalf("adopted events missing: %q", events)
+	}
+}
+
+func TestGitChildEnvExcludesSupervisorSecrets(t *testing.T) {
+	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+	t.Setenv("OPENROUTINES_MASTER_KEY", masterKey)
+	t.Setenv("OPENROUTINES_DEPLOY_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_SSL_CAINFO", "/etc/ssl/certs/corporate-proxy.pem")
+
+	env := newGitCmd(t.TempDir(), []string{"status"}).Env
+
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "OPENROUTINES_") {
+			t.Errorf("git child inherits framework variable: %q", strings.SplitN(kv, "=", 2)[0])
+		}
+		if strings.Contains(kv, masterKey) {
+			t.Errorf("git child carries the master key: %q", strings.SplitN(kv, "=", 2)[0])
+		}
+	}
+	for _, want := range []string{
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"GIT_SSL_CAINFO=" + os.Getenv("GIT_SSL_CAINFO"),
+	} {
+		if !slices.Contains(env, want) {
+			t.Errorf("git child env missing %q: %v", want, env)
+		}
+	}
+}
+
+func TestGitChildEnvCarriesDeployKeySSHCommand(t *testing.T) {
+	prev := sshCommand
+	t.Cleanup(func() { sshCommand = prev })
+	sshCommand = "ssh -i /root/.ssh/openroutines_deploy"
+
+	if !slices.Contains(newGitCmd(t.TempDir(), []string{"push"}).Env, "GIT_SSH_COMMAND="+sshCommand) {
+		t.Error("GIT_SSH_COMMAND missing from git child env")
 	}
 }

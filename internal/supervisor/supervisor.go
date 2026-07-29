@@ -516,7 +516,12 @@ func (s *Supervisor) verifySandbox() error {
 		if err != nil {
 			return err
 		}
-		out, probeErr := exec.Command(self, "sandbox-probe").Output()
+		// Constructed, like every other child: an inherited environment
+		// would republish the supervisor's keys in the probe's own
+		// /proc/<pid>/environ. TMPDIR is the scratch scope it confines.
+		probe := exec.Command(self, "sandbox-probe")
+		probe.Env = []string{"TMPDIR=" + os.Getenv("TMPDIR")}
+		out, probeErr := probe.Output()
 		if probeErr == nil {
 			s.Log.Printf("filesystem sandbox: %s active for model processes", strings.TrimSpace(string(out)))
 			return nil
