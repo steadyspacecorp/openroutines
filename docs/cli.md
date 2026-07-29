@@ -32,7 +32,7 @@ Creates a fresh git repository with the agent's skeleton: `openroutines.yaml`, a
 openroutines configure
 ```
 
-Idempotent -- run it whenever. Fills in `openroutines.yaml` (name, job description, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
+Idempotent -- run it whenever. Fills in `openroutines.yaml` (name, [job description](getting-started.md#name-and-job-description), owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
 
 ## check
 
