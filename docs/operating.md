@@ -40,7 +40,7 @@ docker run -d --name my-agent --restart unless-stopped --stop-timeout 30 \
   my-agent
 ```
 
-The image contains the pinned `openroutines` binary, opencode, git, `gh` (can authenticate via `GH_TOKEN`/`GITHUB_TOKEN`; the typed `github_app` credential injects `GH_TOKEN`), `jq`, and your repo's `main` branch. The entrypoint is the supervisor: every minute it re-reads your routines' frontmatter and runs whatever is due. Two secrets arrive at boot, and neither is ever in the image:
+The image contains the pinned `openroutines` binary, opencode, git, `gh` (can authenticate via `GH_TOKEN`/`GITHUB_TOKEN`; the typed `github_app` credential injects `GH_TOKEN`), `jq`, and your repo's `main` branch. The entrypoint is the supervisor: every minute it re-reads your routines' frontmatter -- from the copy of the repo baked into the image -- and runs whatever is due. Two secrets arrive at boot, and neither is ever in the image:
 
 - **The master key** (a copy of `master.key`) decrypts the credentials file. Routines receive only the credentials their frontmatter declares.
 - **The deploy key** lets the agent push its memory. On boot the supervisor fetches the `memory` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
@@ -53,13 +53,14 @@ A few properties fall out of the design (see [docs/design.md](design.md) for the
 
 - **Run exactly one instance.** One agent, one runtime -- the agent is the sole writer to its memory branch, so there is nothing to scale horizontally. If a platform asks how many replicas, the answer is 1, and the supervisor enforces it with a lease: an accidental second instance waits instead of corrupting memory. The lease is released on a clean shutdown, so an ordinary redeploy hands over immediately; an instance killed without SIGTERM leaves its lease to expire, and the replacement waits out the 30-minute TTL before it dispatches anything.
 - **Redeploys are safe.** A routine killed mid-run fires again on the next boot, and a scheduled moment that passes while the container is down runs late instead of never. Missed is recoverable; silently skipped is not.
+- **Changes arrive by redeploy.** The only branch a running agent exchanges with origin is `memory`. Everything else -- routines, skills, credentials, config -- is read from the copy of the repo baked into the image, so a push to `main` changes nothing in production until the image is rebuilt and redeployed. (Locally the boundary doesn't exist: the supervisor reads your working tree, and an edit lands on the next tick.)
 - **One broken routine is one broken routine.** A frontmatter typo takes out the routine whose file it is in, not the agent: the others keep their schedules. The supervisor records an event naming the file, so the gap is visible in memory and not only in the log.
 - **Memory survives.** Code rolls back with the image; memory lives on its own branch and persists, like a database, but versioned.
 - **No application ingress.** The shipped container listens on no ports. Routine output and run records go to stdout -- read them with `docker logs` or your platform's log tooling. This does not replace normal host and deployment access controls.
 
 ## Continuous deployment
 
-For continuous deployment, wire the usual hooks: run `openroutines check` on every push, rebuild and redeploy on merge to `main`. Pushes to the `memory` branch never trigger a deploy -- that separation is by design.
+For continuous deployment, wire the usual hooks: run `openroutines check` on every push, rebuild and redeploy on merge to `main`. The redeploy is not just delivery hygiene -- it is the only way routine changes reach a running agent. Pushes to the `memory` branch never trigger a deploy; that separation is by design.
 
 ## Updating the framework
 
