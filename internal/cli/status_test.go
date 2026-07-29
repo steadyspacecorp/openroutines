@@ -50,6 +50,15 @@ func saveState(t *testing.T, dir string, st *schedule.State) {
 	}
 }
 
+// writeRunLog writes the settlement records the supervisor would have appended.
+func writeRunLog(t *testing.T, dir string, lines ...string) {
+	t.Helper()
+	path := filepath.Join(memory.At(dir).Worktree(), "runs.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // capture runs a command from dir and returns everything it printed.
 func capture(t *testing.T, dir string, run func()) string {
 	t.Helper()
@@ -101,11 +110,10 @@ func TestStatusShowsSchedulingState(t *testing.T) {
 	out := capture(t, dir, func() { cmdStatus(nil) })
 
 	for _, want := range []string{
-		"cooling down until " + now.Add(2*time.Hour).Format("Mon 15:04"),
-		"circuit breaker: 4 consecutive abandonments",
+		"circuit breaker: 4 consecutive abandonments -- no new run starts until " + now.Add(2*time.Hour).Format("Mon 15:04"),
 		"pending run_abcdefghij for " + now.Add(-time.Hour).Format("Mon 15:04"),
 		"2/5 attempts, next attempt " + now.Add(time.Minute).Format("Mon 15:04"),
-		"watermark " + now.Add(-25*time.Hour).Format("Jan 2 15:04"),
+		"watermark " + now.Add(-25*time.Hour).Format("Mon 15:04"),
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status missing %q:\n%s", want, out)
@@ -146,6 +154,135 @@ func TestStatusReportsSpentAttemptBudget(t *testing.T) {
 	out := capture(t, dir, func() { cmdStatus(nil) })
 	if !strings.Contains(out, "5/5 attempts, budget spent -- the next tick abandons it") {
 		t.Fatalf("status should report the spent budget:\n%s", out)
+	}
+}
+
+// The tick skips a routine that is inactive or declares neither a schedule nor
+// a trigger, before it ever reads the state -- so a pending run left on one is
+// going nowhere, and naming a next attempt would be the same lie the
+// cool-down case fixes. The cool-down's end has to appear on the breaker line
+// itself: the header clause that used to carry it prints only when active.
+func TestStatusHoldsPendingTheSupervisorWillNotAdvance(t *testing.T) {
+	now := time.Now().UTC()
+	dir := statusAgent(t, map[string]string{
+		"parked":  "---\nschedule: \"*/5 * * * *\"\nactive: false\n---\nDeactivated mid-retry.\n",
+		"nosched": "---\nactive: true\n---\nNo schedule, no trigger.\n",
+	})
+	pending := func(runID string) *schedule.Pending {
+		return &schedule.Pending{
+			RunID: runID, ScheduledFor: now.Add(-time.Hour), CreatedAt: now.Add(-time.Hour),
+			Attempts: 2, LastAttemptAt: now.Add(-time.Minute),
+		}
+	}
+	saveState(t, dir, &schedule.State{
+		Routine: "parked", Watermark: now.Add(-3 * time.Hour), Pending: pending("run_parkedaaa"),
+		ConsecutiveAbandons: 4, CooldownUntil: now.Add(2 * time.Hour),
+	})
+	saveState(t, dir, &schedule.State{
+		Routine: "nosched", Watermark: now.Add(-3 * time.Hour), Pending: pending("run_noschedaa"),
+	})
+
+	out := capture(t, dir, func() { cmdStatus(nil) })
+
+	if n := strings.Count(out, "held -- the supervisor skips this routine"); n != 2 {
+		t.Fatalf("both skipped routines should hold their pending run, got %d:\n%s", n, out)
+	}
+	if strings.Contains(out, "next attempt") {
+		t.Fatalf("a routine the supervisor skips must not promise an attempt:\n%s", out)
+	}
+	// "until then" with no antecedent: the header says only "inactive" here.
+	if !strings.Contains(out, "no new run starts until "+now.Add(2*time.Hour).Format("Mon 15:04")) {
+		t.Fatalf("the breaker line must carry the cool-down's end:\n%s", out)
+	}
+}
+
+// Reserving an attempt and failing one leave identical state on disk, so the
+// state file alone cannot say whether a run is executing. The run record,
+// written at settlement, is what distinguishes them -- and absent a log to
+// read, the retry rendering is the safe answer rather than a false "in flight".
+func TestStatusDistinguishesAnAttemptInFlight(t *testing.T) {
+	now := time.Now().UTC()
+	routines := map[string]string{
+		"live":    "---\nschedule: \"*/5 * * * *\"\n---\nExecuting now.\n",
+		"backoff": "---\nschedule: \"*/5 * * * *\"\n---\nFailed, waiting.\n",
+	}
+	states := []*schedule.State{
+		{Routine: "live", Watermark: now.Add(-10 * time.Minute), Pending: &schedule.Pending{
+			RunID: "run_liveaaaaaa", ScheduledFor: now.Add(-2 * time.Minute),
+			CreatedAt: now.Add(-2 * time.Minute), Attempts: 1, LastAttemptAt: now.Add(-10 * time.Second)}},
+		{Routine: "backoff", Watermark: now.Add(-10 * time.Minute), Pending: &schedule.Pending{
+			RunID: "run_backoffaaa", ScheduledFor: now.Add(-2 * time.Minute),
+			CreatedAt: now.Add(-2 * time.Minute), Attempts: 2, LastAttemptAt: now.Add(-30 * time.Second)}},
+	}
+
+	t.Run("with run records", func(t *testing.T) {
+		dir := statusAgent(t, routines)
+		for _, st := range states {
+			saveState(t, dir, st)
+		}
+		// Only backoff's attempt settled.
+		writeRunLog(t, dir, `{"run_id":"run_backoffaaa","routine":"backoff","attempt":2,"outcome":"failed"}`)
+
+		out := capture(t, dir, func() { cmdStatus(nil) })
+		if !strings.Contains(out, "attempt 1 started "+now.Add(-10*time.Second).Format("Mon 15:04")+", still in flight") {
+			t.Fatalf("a reserved, unsettled attempt is running, not backing off:\n%s", out)
+		}
+		if !strings.Contains(out, "2/5 attempts, next attempt "+now.Add(90*time.Second).Format("Mon 15:04")) {
+			t.Fatalf("a settled failed attempt should report its retry:\n%s", out)
+		}
+	})
+
+	t.Run("without a run log", func(t *testing.T) {
+		dir := statusAgent(t, routines)
+		for _, st := range states {
+			saveState(t, dir, st)
+		}
+
+		out := capture(t, dir, func() { cmdStatus(nil) })
+		if strings.Contains(out, "in flight") {
+			t.Fatalf("no run log is no evidence -- do not claim a run is in flight:\n%s", out)
+		}
+		if n := strings.Count(out, "next attempt "); n != 2 {
+			t.Fatalf("expected both routines to fall back to the retry line, got %d:\n%s", n, out)
+		}
+	})
+}
+
+// A pending run whose retry is already due, or which no attempt has touched,
+// must not print a past time under the word "next".
+func TestStatusReportsAnOverdueAttemptAsDue(t *testing.T) {
+	now := time.Now().UTC()
+	dir := statusAgent(t, map[string]string{
+		"minted": "---\nschedule: \"*/5 * * * *\"\n---\nMinted, not yet dispatched.\n",
+	})
+	saveState(t, dir, &schedule.State{
+		Routine: "minted", Watermark: now.Add(-10 * time.Minute),
+		Pending: &schedule.Pending{
+			RunID: "run_mintedaaaa", ScheduledFor: now.Add(-time.Minute), CreatedAt: now.Add(-time.Minute),
+		},
+	})
+
+	out := capture(t, dir, func() { cmdStatus(nil) })
+	if !strings.Contains(out, "0/5 attempts, due now") {
+		t.Fatalf("a pending run with no attempts is due, not scheduled:\n%s", out)
+	}
+}
+
+// A held run is old by definition -- that is why it is on screen -- so the
+// stamp has to stay unambiguous past the week that a weekday name covers.
+func TestStampWidensAsTimesGetDistant(t *testing.T) {
+	now := time.Date(2026, 7, 29, 14, 30, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name, want string
+		t          time.Time
+	}{
+		{"within the week", "Mon 09:00", time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)},
+		{"beyond the week", "Jul 15 09:00", time.Date(2026, 7, 15, 9, 0, 0, 0, time.UTC)},
+		{"another year", "Dec 30 2025 09:00", time.Date(2025, 12, 30, 9, 0, 0, 0, time.UTC)},
+	} {
+		if got := stamp(c.t, now, time.UTC); got != c.want {
+			t.Errorf("%s: stamp = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

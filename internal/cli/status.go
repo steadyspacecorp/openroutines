@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -69,8 +70,10 @@ func cmdStatus(_ []string) int {
 	// Routines.
 	now := time.Now().In(loc)
 	stateDir := memory.At(dir).StateDir()
+	settled := settledAttempts(dir)
 	routines, parseErrs := routine.LoadAgent(dir)
 	fmt.Printf("\nroutines (%d):\n", len(routines))
+	reported := false
 	for _, r := range routines {
 		st, stErr := schedule.Load(stateDir, r.Name)
 		state := "inactive"
@@ -79,11 +82,12 @@ func cmdStatus(_ []string) int {
 			state = "active"
 			// A routine in cool-down does not fire at its next occurrence, so
 			// don't print one: a confident time that will not happen is worse
-			// than no time at all.
+			// than no time at all. The cool-down's end is on the breaker line
+			// below, which is the one place it lives.
 			if st != nil && st.CoolingDown(now) {
-				next = " -- cooling down until " + st.CooldownUntil.In(loc).Format("Mon 15:04")
+				next = " -- cooling down"
 			} else if spec, err := schedule.Parse(r.FM.Schedule, loc); err == nil {
-				next = " -- next " + spec.Next(now).Format("Mon 15:04")
+				next = " -- next " + stamp(spec.Next(now), now, loc)
 			}
 		}
 		grants := ""
@@ -94,8 +98,18 @@ func cmdStatus(_ []string) int {
 		if stErr != nil {
 			fmt.Printf("      ! %v\n", stErr)
 		}
-		for _, line := range scheduleStateLines(st, now, loc) {
+		for _, line := range scheduleStateLines(st, r, now, loc, settled) {
+			reported = true
 			fmt.Printf("      %s\n", line)
+		}
+	}
+	// The lines above came out of the memory worktree, so they are only as
+	// current as the last fetch. The memory section says so too, but it is
+	// screens away by then and these are the most staleness-sensitive numbers
+	// the command prints.
+	if reported {
+		if ms := memory.At(dir).Status(); ms.Behind > 0 {
+			fmt.Printf("  ! scheduling state above is from memory %d commit(s) behind origin/%s -- run openroutines sync\n", ms.Behind, memory.Branch)
 		}
 	}
 	for _, e := range parseErrs {
@@ -168,24 +182,87 @@ func cmdStatus(_ []string) int {
 // cool-down, reads exactly like a healthy one. Nil state means the supervisor
 // has never seen the routine, which every local checkout looks like -- silence
 // is the honest rendering of that.
-func scheduleStateLines(st *schedule.State, now time.Time, loc *time.Location) []string {
+func scheduleStateLines(st *schedule.State, r *routine.Routine, now time.Time, loc *time.Location, settled map[string]bool) []string {
 	if st == nil {
 		return nil
 	}
 	var lines []string
 	if st.CoolingDown(now) {
-		lines = append(lines, fmt.Sprintf("! circuit breaker: %d consecutive abandonments -- no new run starts until then",
-			st.ConsecutiveAbandons))
+		lines = append(lines, fmt.Sprintf("! circuit breaker: %d consecutive abandonments -- no new run starts until %s; the next success resets it",
+			st.ConsecutiveAbandons, stamp(st.CooldownUntil, now, loc)))
 	}
 	if p := st.Pending; p != nil {
-		when := "next attempt " + schedule.NextRetryAt(p).In(loc).Format("Mon 15:04")
-		if p.Attempts >= supervisor.MaxAttempts {
-			when = "budget spent -- the next tick abandons it"
-		}
 		lines = append(lines, fmt.Sprintf("pending %s for %s -- %d/%d attempts, %s",
-			p.RunID, p.ScheduledFor.In(loc).Format("Mon 15:04"), p.Attempts, supervisor.MaxAttempts, when))
+			p.RunID, stamp(p.ScheduledFor, now, loc), p.Attempts, supervisor.MaxAttempts,
+			pendingDisposition(p, r, now, loc, settled)))
 	}
-	return append(lines, "watermark "+st.Watermark.In(loc).Format("Jan 2 15:04"))
+	return append(lines, "watermark "+stamp(st.Watermark, now, loc))
+}
+
+// pendingDisposition says what becomes of a pending run, which the attempt
+// count alone does not tell. The order matters: a routine the tick skips is
+// held whatever its budget says, and an attempt that is still running only
+// looks like one that failed.
+func pendingDisposition(p *schedule.Pending, r *routine.Routine, now time.Time, loc *time.Location, settled map[string]bool) string {
+	switch {
+	case !supervisor.Schedulable(r):
+		return "held -- the supervisor skips this routine, so no attempt is coming"
+	case p.Attempts > 0 && settled != nil && !settled[attemptKey(p.RunID, p.Attempts)]:
+		// Reserved and not yet settled. The state file cannot tell this from
+		// an attempt that failed and is backing off -- reserve writes the
+		// count, and a non-final failure leaves it untouched -- so the run
+		// record, which only exists once an attempt settles, is the tell.
+		return fmt.Sprintf("attempt %d started %s, still in flight", p.Attempts, stamp(p.LastAttemptAt, now, loc))
+	case p.Attempts >= supervisor.MaxAttempts:
+		return "budget spent -- the next tick abandons it"
+	case !schedule.NextRetryAt(p).After(now):
+		return "due now"
+	default:
+		return "next attempt " + stamp(schedule.NextRetryAt(p), now, loc)
+	}
+}
+
+func attemptKey(runID string, attempt int) string {
+	return fmt.Sprintf("%s#%d", runID, attempt)
+}
+
+// settledAttempts collects the attempts runs.jsonl has a record for; a record
+// is appended at settlement, so a reserved attempt missing from it is still
+// running. Nil when there is no log to read at all (never run, or a release
+// that predates it): absent evidence must not be read as "in flight".
+func settledAttempts(dir string) map[string]bool {
+	raw, err := os.ReadFile(filepath.Join(memory.At(dir).Worktree(), "runs.jsonl"))
+	if err != nil {
+		return nil
+	}
+	settled := map[string]bool{}
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		var rec struct {
+			RunID   string `json:"run_id"`
+			Attempt int    `json:"attempt"`
+		}
+		if json.Unmarshal([]byte(line), &rec) != nil || rec.RunID == "" {
+			continue
+		}
+		settled[attemptKey(rec.RunID, rec.Attempt)] = true
+	}
+	return settled
+}
+
+// stamp formats a scheduling time at the coarsest precision that stays
+// unambiguous: weekday and clock inside a week, calendar date beyond it, the
+// year once it differs. A held pending run is old by definition -- that is
+// why it is on screen -- and "Mon 21:12" nine days stale reads as two.
+func stamp(t time.Time, now time.Time, loc *time.Location) string {
+	t = t.In(loc)
+	switch d := t.Sub(now); {
+	case t.Year() != now.Year():
+		return t.Format("Jan 2 2006 15:04")
+	case d > -6*24*time.Hour && d < 6*24*time.Hour:
+		return t.Format("Mon 15:04")
+	default:
+		return t.Format("Jan 2 15:04")
+	}
 }
 
 // printTokenUsage shows the one-line total; the numbers live in

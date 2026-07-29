@@ -39,6 +39,15 @@ const (
 	MaxAttempts  = 5
 )
 
+// Schedulable reports whether a tick will act on a routine at all. Exported
+// because reporting has to agree with dispatch: the tick skips these before
+// it reads their state, so whatever a skipped routine's state still owes,
+// nothing is coming to advance it -- and a surface that says otherwise is
+// promising a retry that cannot happen.
+func Schedulable(r *routine.Routine) bool {
+	return r.FM.IsActive() && (r.FM.Schedule != "" || r.FM.Trigger != nil)
+}
+
 // Supervisor is the tick loop: it re-reads routines, mints and dispatches
 // runs, and syncs memory with origin.
 type Supervisor struct {
@@ -224,7 +233,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	}
 	var due []dispatch
 	for _, r := range routines {
-		if !r.FM.IsActive() || (r.FM.Schedule == "" && r.FM.Trigger == nil) {
+		if !Schedulable(r) {
 			continue
 		}
 		var spec *schedule.Spec
