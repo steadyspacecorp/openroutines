@@ -44,6 +44,11 @@ case "$mode" in
      echo "consumed" ;;
   probe) [ -d "$d/replacement" ] || git clone -q -b memory "$(cat "$d/origin")" "$d/replacement" || true
      echo "probed" ;;
+  orphan) # A detached grandchild in its own process group, holding the run's
+     # stdout: the group kill cannot reach it and it outlives the attempt.
+     if command -v setsid >/dev/null 2>&1; then setsid sleep 120 &
+     else (set -m; sleep 120 &) fi
+     sleep 120 ;;
   *) mkdir -p memory/ledgers
      echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
      echo "done" ;;
@@ -924,6 +929,35 @@ func TestFailedIntentCommitHoldsRunsAndRecordsATask(t *testing.T) {
 
 // A supervised run's record carries the usage the runner captured from the
 // attempt home's session storage, plus the resolved model.
+// Killing the process group does not reach a grandchild that left it, and
+// that grandchild still holds the run's output pipe. The kill path must stop
+// draining the pipe on a deadline instead of parking the supervisor forever.
+func TestOrphanHoldingTheOutputPipeDoesNotParkTheTick(t *testing.T) {
+	dir := fixture(t, "orphan")
+	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
+		"---\nschedule: \"* * * * *\"\ntimeout: 2s\n---\nDo the fake thing.\n"), 0o644)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+	s.Tick(ctx, t0) // register
+
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		s.Tick(ctx, t0.Add(61*time.Second))
+	}()
+	select {
+	case <-returned:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the tick never returned: the kill path is still waiting on the abandoned pipe")
+	}
+
+	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	if !strings.Contains(records, `"outcome":"timeout"`) {
+		t.Fatalf("expected the killed attempt to be recorded as a timeout: %q", records)
+	}
+}
+
 func TestRunRecordCarriesUsage(t *testing.T) {
 	dir := fixture(t, "ok")
 	s := newSupervisor(t, dir)
