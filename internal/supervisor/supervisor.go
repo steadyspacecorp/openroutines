@@ -67,6 +67,7 @@ type Supervisor struct {
 	syncBlocked   bool          // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool          // blocker already raised for the current sync problem
 	unreachWarned bool
+	originWarned  bool // origin unreachable: blocker already raised for this outage
 	// blockedTip is the memory tip this instance stranded on the blocked ref
 	// while sync was refused: what tells a later successful push that the
 	// stranded copy is redundant, and what keeps a repeat push idle. Only what
@@ -540,10 +541,16 @@ func (s *Supervisor) syncOnce() {
 		s.blockOnce("sync", "memory sync conflict -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
 		s.strandBlocked()
 	case rep.Unreachable:
-		s.Log.Printf("origin unreachable: %s", rep.Detail)
+		// Recorded locally, published when origin returns. The tick gives up
+		// a few lines below this one -- the lease heartbeat needs the same
+		// origin -- so nothing downstream will record it, and an outage whose
+		// only trace is a log line in a container that gets replaced is no
+		// trace at all.
+		s.blockOnce("origin", "origin unreachable -- memory is not durable and no new runs start until it returns: "+rep.Detail, &s.originWarned)
 	default:
 		s.syncBlocked = false
 		s.recover("sync", "memory sync with origin recovered", &s.syncWarned)
+		s.recover("origin", "origin reachable again -- memory sync resumed", &s.originWarned)
 		if rep.Adopted {
 			s.Log.Printf("memory: adopted remote commits")
 		}
