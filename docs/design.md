@@ -236,7 +236,7 @@ sequenceDiagram
     Note over S: one run at a time, in due order
     S->>W: record pending run (run_id, scheduled_for, covered_through)
     S->>O: push intent commit, required before acting
-    S->>O: renew the single-instance lease (CAS heartbeat);<br/>a lost lease stops dispatch for this tick
+    S->>O: renew the single-instance lease (CAS heartbeat) --<br/>a lost lease stops dispatch for this tick
     S->>St: snapshot memory files into staging
     S->>S: flock routine, build clean env (declared credentials and run metadata)
     S->>R: spawn model process in the run container,<br/>generated agent definition (declared skills only)
