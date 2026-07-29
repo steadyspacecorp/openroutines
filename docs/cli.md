@@ -2,6 +2,8 @@
 
 Run any command from inside an agent repository (except `scaffold`).
 
+Commands that change the agent -- routines, skills, plugins, credentials -- edit files in the repository, not a running container. Local runs see the change immediately; a deployed agent runs the copy baked into its image and picks the change up on the next rebuild and redeploy (see [Operating in production](operating.md)).
+
 ```
 openroutines scaffold <path>      create a new agent repository
 openroutines configure            fill in openroutines.yml, generate the master key
@@ -86,6 +88,8 @@ openroutines routines remove <name>      delete the routine and its scheduling s
 
 A routine that does not load still holds its name: `new` refuses rather than overwrite it, `run` reports the parse error instead of "no routine", and `edit` and `remove` operate on the file so you can fix or drop it.
 
+Deactivating a routine that is misbehaving in production stops it at the next redeploy, not the next tick -- the deployed supervisor keeps reading the copy in its image until then.
+
 ## skills
 
 ```
@@ -113,6 +117,8 @@ openroutines credentials list           credential names and which routines decl
 openroutines credentials set <name>     add or replace one value (prompted, hidden)
 openroutines credentials remove <name>  refuses while any routine declares it
 ```
+
+`set` writes the encrypted store in the repository. A deployed agent decrypts the copy in its image, so a rotated value reaches production with the next rebuild and redeploy -- until then, runs keep using the old one.
 
 ## supervise
 
