@@ -49,7 +49,7 @@ Nobody is watching, so failure has to be survivable by design: nothing silently 
 | What | Why |
 |------|-----|
 | **Cron scheduling with a durable watermark** -- missed firings collapse into one late run instead of being skipped | A scheduled moment that passes while the container is down runs late instead of never. Missed is recoverable; silently skipped is not. |
-| **Persist-before-act run identity** -- every run's intent is committed before the model process spawns, and retries reuse the same run id | The run id is an idempotency key worth having: a container can act, crash, and restart without repeating the action under a fresh identity. |
+| **Persist-before-act run identity** -- every attempt's intent, the run id and the attempt itself, is committed and pushed before the model process spawns, and retries reuse the same run id | The run id is an idempotency key worth having: a container can act, crash, and restart without repeating the action under a fresh identity -- and a routine that keeps taking its container down still drains its retry budget instead of retrying forever. |
 | **Serial runs, skip-don't-queue, circuit breaker** -- one run at a time, overlapping firings collapse, repeated failures cool down | An unattended agent must degrade predictably: no pileups after downtime, no infinite retry loops burning model spend against a broken dependency. |
 | **One instance, enforced** -- the supervisor holds a lease; memory sync rejects history rewrites | The agent is the sole writer to its memory branch. An accidental second instance waits instead of corrupting memory, and a rewritten remote never silently replaces what the agent knows. |
 
