@@ -4,7 +4,7 @@ The decisions behind OpenRoutines, and why we made them. The [README](../README.
 
 ## One agent, one job description, one runtime
 
-**Decision.** An OpenRoutines agent (ORA) is a single agent with a single mandate, defined in `openroutines.yaml`. There is no fleet management, no orchestration graph, no agent-to-agent protocol.
+**Decision.** An OpenRoutines agent (ORA) is a single agent with a single mandate, defined in `openroutines.yaml`. Its name and description are standing context, not repository metadata: the runtime injects both into every run before the routine-specific instructions. The description states the durable mandate; routine bodies define the individual recurring ways the agent carries it out. There is no fleet management, no orchestration graph, no agent-to-agent protocol.
 
 **Why.** Most of the complexity -- and most of the failure modes -- in agent frameworks comes from coordination between agents. A single agent with a clear job description is easy to reason about, easy to secure, and easy to hold accountable: "what did it do?" is one log and one memory. If you need two jobs done, deploy two agents. It also makes the security model tractable: exactly one runtime means exactly one writer to memory, one credential set, one blast radius.
 

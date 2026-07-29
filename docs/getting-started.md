@@ -54,6 +54,21 @@ A `memory/` directory appears on first run -- a checkout of the agent's dedicate
 
 `configure` is idempotent -- run it whenever. It fills in `openroutines.yaml` (name, job description, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
 
+### Name and job description
+
+The agent's `name` and `description` are standing context, not metadata for people reading the repository. Every run begins by telling the model its name and injecting the description as "your job description"; the routine body then supplies the instructions for that particular run. A routine inherits the job description and does not need to restate it.
+
+Choose both at the altitude where the agent will remain coherent as you add routines. Name the domain, not the first routine. Write the description as a durable mandate: what outcomes the agent owns and where its responsibility ends. A tagline is usually too vague to guide a run, while a checklist of current routines is too specific -- schedules and individual procedures belong in routine files.
+
+For example, an agent that starts by checking documentation but may later synthesize research and report on releases could use:
+
+```yaml
+name: Product intelligence
+description: Maintain an accurate picture of what customers need and what the product team has shipped, then surface gaps and decisions to the team.
+```
+
+`Documentation checker` would corner the same agent around its first routine. Conversely, "Help the product team" would give every routine too little direction. If the work needs a genuinely different mandate, create another agent -- one agent still means one job.
+
 ## Pick your models
 
 `configure` sets the agent's default model in `openroutines.yaml` -- any provider opencode supports works, and any routine can override the default in its own frontmatter (see [Creating routines](routines.md)).
