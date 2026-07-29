@@ -92,6 +92,13 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 // human learns the cause was configuration.
 var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key`)
 
+// ErrFatal marks a start failure that no retry can fix: the next attempt
+// would fail identically, so a caller spending a retry budget should give up
+// now and let a person read the error. Classification lives here because the
+// runner is what assembles the run and knows why it could not; the supervisor
+// only asks whether the failure it was handed is one of these.
+var ErrFatal = errors.New("not retryable")
+
 // Staging is the attempt's staged memory, awaiting import or discard.
 type Staging struct {
 	MemoryDir string
@@ -555,6 +562,9 @@ func prepareInbox(dir, workspace, consumer string) (string, error) {
 	if cursor != nil {
 		from = cursor.ConsumedThrough
 		if changes, err = mem.Changes(from, through); err != nil {
+			if errors.Is(err, memory.ErrCursorUnreachable) {
+				return "", fmt.Errorf("%w: %w -- repair or delete state/cursors/%s.json on the memory branch", ErrFatal, err, consumer)
+			}
 			return "", err
 		}
 	}

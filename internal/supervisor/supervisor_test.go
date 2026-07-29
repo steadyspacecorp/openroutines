@@ -506,6 +506,40 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	}
 }
 
+// A consumer cursor pointing off the memory branch fails at inbox assembly,
+// before the model starts, and fails the same way every time. Spending the
+// whole retry budget on it buys nothing but delay and noise: the run is
+// abandoned on its first attempt, with a task naming the file to repair.
+func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
+	dir := fixture(t, "consume")
+	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
+		"---\nschedule: \"* * * * *\"\nconsumes: memory\n---\nReport the fake thing.\n"), 0o644)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0) // register
+	if err := memory.At(dir).SaveCursor("every-minute", memory.Cursor{
+		ConsumedThrough: "0123456789abcdef0123456789abcdef01234567",
+		ByRun:           "run_gone",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tick(ctx, t0.Add(61*time.Second))
+
+	st := loadState(t, s)
+	if st.Pending != nil {
+		t.Fatalf("an unrepeatable failure should abandon at once, still pending: %+v", st.Pending)
+	}
+	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
+	if !strings.Contains(tasks, "abandoned after 1 attempts") {
+		t.Fatalf("expected abandonment on the first attempt: %q", tasks)
+	}
+	if !strings.Contains(tasks, "cursors/every-minute.json") {
+		t.Fatalf("task should name the cursor file to repair: %q", tasks)
+	}
+}
+
 // A rewritten origin must halt dispatch -- and stay halted on every later
 // tick. Runs taken while blocked would act under identities that exist only
 // in this container: lost on replacement, duplicated on recovery.

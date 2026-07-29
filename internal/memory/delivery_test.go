@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,6 +148,37 @@ func TestRetentionTrimIsNotDelivered(t *testing.T) {
 	}
 	if len(changes) != 0 {
 		t.Fatalf("retention trim re-entered the feed: %+v", changes)
+	}
+}
+
+// A cursor whose commit is not on the memory branch names no change set, and
+// no retry will make it name one: the feed reports that as its own error so
+// the caller can tell it apart from an attempt worth repeating.
+func TestChangesRejectsUnreachableCursor(t *testing.T) {
+	dir := deliveryFixture(t)
+	through, _ := At(dir).Head()
+
+	if _, err := At(dir).Changes("0123456789abcdef0123456789abcdef01234567", through); !errors.Is(err, ErrCursorUnreachable) {
+		t.Fatalf("a missing commit should report ErrCursorUnreachable, got %v", err)
+	}
+
+	// Present but off the branch: a repaired history leaves the old commit in
+	// the object store, where from..through would deliver the wrong set.
+	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: a fact")
+	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
+		t.Fatal(err)
+	}
+	orphan, _ := At(dir).Head()
+	if _, err := git(At(dir).Worktree(), "reset", "--hard", "HEAD~1"); err != nil {
+		t.Fatal(err)
+	}
+	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: the repaired fact")
+	if _, err := At(dir).Commit("Run doc-drift (run_b): completed"); err != nil {
+		t.Fatal(err)
+	}
+	through, _ = At(dir).Head()
+	if _, err := At(dir).Changes(orphan, through); !errors.Is(err, ErrCursorUnreachable) {
+		t.Fatalf("an off-branch commit should report ErrCursorUnreachable, got %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ package memory
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -116,6 +117,28 @@ type FileDelta struct {
 // (scheduling state, cursors, run records) and routine-private ledgers.
 var deliveryExcludes = []string{":(exclude)state", ":(exclude)runs.jsonl", ":(exclude)ledgers"}
 
+// ErrCursorUnreachable reports a cursor that no longer names a commit on the
+// memory branch -- a repaired history, a hand-edited cursor file. The range
+// cannot be walked until a person fixes the cursor, so callers should treat
+// it as a failure to diagnose rather than one to retry.
+var ErrCursorUnreachable = errors.New("consumer cursor is not on the memory branch")
+
+// reachable checks the precondition for from..through naming a change set:
+// the cursor commit exists and the boundary descends from it. Both halves
+// matter -- a commit left behind by a repaired history is still in the object
+// store, and walking from it would deliver a change set nobody made.
+func (m *Memory) reachable(from, through string) error {
+	wt := m.Worktree()
+	full, err := git(wt, "rev-parse", "--verify", "--quiet", from+"^{commit}")
+	if err != nil {
+		return fmt.Errorf("%w: commit %.12s is not in this repository", ErrCursorUnreachable, from)
+	}
+	if base, err := git(wt, "merge-base", full, through); err != nil || base != full {
+		return fmt.Errorf("%w: commit %.12s is not an ancestor of %.12s", ErrCursorUnreachable, from, through)
+	}
+	return nil
+}
+
 // Changes walks every commit in (from, through], returning per-commit line
 // additions and removals. Commit-by-commit, never a net endpoint diff: an
 // event added and later pruned by retention must still reach a consumer that
@@ -123,6 +146,9 @@ var deliveryExcludes = []string{":(exclude)state", ":(exclude)runs.jsonl", ":(ex
 func (m *Memory) Changes(from, through string) ([]CommitChange, error) {
 	if from == "" || through == "" {
 		return nil, fmt.Errorf("delivery changes: empty commit range")
+	}
+	if err := m.reachable(from, through); err != nil {
+		return nil, err
 	}
 	// The commit sentinel and field separators are emitted by git itself
 	// (%x00/%x1f) -- argv cannot carry a literal NUL. Retention trims are
