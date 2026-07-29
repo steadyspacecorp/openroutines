@@ -20,10 +20,11 @@ deployed container runs whatever routine is due.
 - **Routines are markdown**: YAML frontmatter declares the scope --
   `schedule` (cron), `trigger` (event-driven wake-up: an outbound
   change-detection poll; keep a slow `schedule` as its heartbeat backstop),
-  `timeout`, `active`, `skills`, `credentials`, `model`, `effort` (reasoning
-  effort, e.g. `high`), `events`, `consumes` -- and the body is the prompt.
-  The filename is the routine's identity: renaming a routine retires it and
-  starts a new one with fresh scheduling state.
+  `timeout` (capped at 15m -- work that needs longer belongs in several runs
+  with memory between them), `active`, `skills`, `credentials`, `model`,
+  `effort` (reasoning effort, e.g. `high`), `events`, `consumes` -- and the
+  body is the prompt. The filename is the routine's identity: renaming a
+  routine retires it and starts a new one with fresh scheduling state.
 - **Grants are explicit**: a routine gets only the skills and credentials its
   frontmatter declares. When adding a capability, add the grant in the same
   change so the diff shows what the routine can now touch.

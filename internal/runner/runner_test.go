@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
@@ -30,6 +31,26 @@ func genDef(t *testing.T, meta Meta, fm ...routine.Frontmatter) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+// A run may not outlast the single-instance lease, so the ceiling is applied
+// where attempts actually read it -- not left to a `check` the operator may
+// never run. The declared value stays readable for `check` to warn about.
+func TestTimeoutIsCappedAtTheLeaseCeiling(t *testing.T) {
+	agent := &config.Agent{Name: "a", Description: "d"}
+	agent.Defaults.Timeout = "90m"
+	marathon := &routine.Routine{Name: "marathon"}
+	if got := DeclaredTimeout(agent, marathon); got != 90*time.Minute {
+		t.Fatalf("declared timeout = %s, want 90m", got)
+	}
+	if got := EffectiveTimeout(agent, marathon); got != memory.MaxRunTimeout {
+		t.Fatalf("effective timeout = %s, want the %s ceiling", got, memory.MaxRunTimeout)
+	}
+
+	sprint := &routine.Routine{Name: "sprint", FM: routine.Frontmatter{Timeout: "10m"}}
+	if got := EffectiveTimeout(agent, sprint); got != 10*time.Minute {
+		t.Fatalf("effective timeout = %s, want the declared 10m untouched", got)
+	}
 }
 
 // A dry run's permission block is deny-all-first: "*" matches every tool

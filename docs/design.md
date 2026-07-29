@@ -66,9 +66,9 @@ A **webhook receiver** was rejected -- not because receivers can't be secured, b
 
 ## Timeouts kill the process group
 
-**Decision.** Every run has a timeout (`openroutines.yml` default, frontmatter override). On expiry the supervisor signals the routine's entire process group -- SIGTERM, a grace period, then SIGKILL -- and records the outcome. Timeouts have a ceiling: 15 minutes, half of what the single-instance lease covers (see "The lease is renewed per run, not per tick"), and `openroutines check` warns above it.
+**Decision.** Every run has a timeout (`openroutines.yml` default, frontmatter override). On expiry the supervisor signals the routine's entire process group -- SIGTERM, a grace period, then SIGKILL -- and records the outcome. Timeouts have a ceiling: 15 minutes, half of what the single-instance lease covers (see "The lease is renewed per run, not per tick"). The ceiling is applied where attempts read the timeout, so a larger declared value is silently capped rather than honoured; `openroutines check` warns above it so the capping is visible before deploy rather than as a routine mysteriously killed in production.
 
-**Why.** A routine run spawns children (tools, shells); signalling only the direct child leaks grandchildren. Recording outcomes (`completed` / `timeout` / `crashed`, duration) into memory gives run history that survives redeploys and reads as a git log.
+**Why.** A routine run spawns children (tools, shells); signalling only the direct child leaks grandchildren. Recording outcomes (`completed` / `timeout` / `crashed`, duration) into memory gives run history that survives redeploys and reads as a git log. The ceiling is enforced and not merely advised because the lease's correctness argument depends on it: a warning is only as good as the operator's habit of running `check`, and single-writer safety cannot rest on a habit.
 
 ## Execution: headless opencode, fresh session per run
 
