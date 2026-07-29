@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -152,7 +153,14 @@ func cmdStatus(_ []string) int {
 			for name, c := range cursors {
 				lag := ""
 				if head != "" && !strings.HasPrefix(head, c.ConsumedThrough) && head != c.ConsumedThrough {
-					if changes, err := mem.Changes(c.ConsumedThrough, head); err == nil && len(changes) > 0 {
+					changes, err := mem.Changes(c.ConsumedThrough, head)
+					switch {
+					// Silence here would read as caught up, which is the one
+					// thing a stuck consumer is not: its runs are abandoned on
+					// sight until a person repairs the file.
+					case errors.Is(err, memory.ErrCursorUnreachable):
+						lag = fmt.Sprintf(" -- ! not on the memory branch, delivery is stuck: repair or delete %s", memory.CursorFile(name))
+					case err == nil && len(changes) > 0:
 						lag = fmt.Sprintf(" -- %d change(s) pending", len(changes))
 					}
 				}
