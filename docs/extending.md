@@ -38,7 +38,7 @@ Non-secret configuration -- a repo name, a docs URL -- goes in a `variables:` ma
 A whole capability -- one or more routines, their skills, the names of the credentials to fill in -- can arrive as a plugin:
 
 ```bash
-openroutines plugin add steadyspacecorp/openroutines --path examples/plugins/steady
+openroutines plugin add steadyspacecorp/openroutines-plugins --path steady
 openroutines plugin list
 openroutines plugin update steady
 ```
@@ -57,4 +57,4 @@ mcp:
     credential: steady_token
 ```
 
-To author one, copy a reference plugin from [`examples/plugins/`](../examples/plugins/) and edit: the `PLUGIN.md` manifest names the bundle and the credentials, variables, and MCP servers it needs; `routines/`, `skills/`, and `memory/ledgers/` stubs are the payload.
+To author one, copy a reference plugin from the [openroutines-plugins](https://github.com/steadyspacecorp/openroutines-plugins) repository and edit: the `PLUGIN.md` manifest names the bundle and the credentials, variables, and MCP servers it needs; `routines/`, `skills/`, and `memory/ledgers/` stubs are the payload.

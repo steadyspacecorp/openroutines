@@ -66,6 +66,13 @@ cat > opencode.json <<'EOF'
       "npm": "@ai-sdk/openai-compatible",
       "options": { "baseURL": "https://gateway.example.invalid/compat" }
     }
+  },
+  "mcp": {
+    "reporter_feed": {
+      "type": "remote",
+      "url": "https://mcp.example.invalid/feed",
+      "headers": { "Authorization": "Bearer {env:REPORTER_TOKEN}" }
+    }
   }
 }
 EOF
@@ -77,30 +84,37 @@ grep -q 'provider "smoke_gateway" in opencode.json is not referenced' "$work/out
 step "check accepts provider config and flags unreferenced ids"
 
 # Plugins install from local paths too (the fixture and development path).
-# All three reference plugins go in: the grant summary must state what each
-# asks for, each stays grouped under plugins/<name>/, ledger stubs wait
-# for the memory worktree, and a reinstall is refused, not overwritten.
-if run plugin add "$repo/examples/plugins/steady"; then
+# The synthetic fixtures in testdata/plugins/ cover the feature matrix:
+# reporter (consumer routine + skill + raw credential + declared MCP server),
+# watcher (routine-only, typed credential + variable + ledger stub), and
+# toolkit (skills-only). The grant summary must state what each asks for,
+# each stays grouped under plugins/<name>/, ledger stubs wait for the memory
+# worktree, and a reinstall is refused, not overwritten.
+if run plugin add "$repo/testdata/plugins/reporter"; then
   die "non-interactive plugin add should require --yes"
 fi
 grep -q 'rerun with --yes' "$work/out" || die "non-interactive plugin refusal did not explain --yes"
-[[ ! -e plugins/steady/routines/steady-check-in.md ]] || die "plugin installed without non-interactive consent"
-for p in steady slack github-docs; do
-  run plugin add "$repo/examples/plugins/$p" --yes || die "plugin add $p"
+[[ ! -e plugins/reporter/routines/reporter-digest.md ]] || die "plugin installed without non-interactive consent"
+cp opencode.json "$work/opencode.json.pre-plugins"
+run plugin add "$repo/testdata/plugins/reporter" --yes || die "plugin add reporter"
+grep -q "add to opencode.json's mcp block" "$work/out" || die "declared mcp server not surfaced as a next step"
+cmp -s opencode.json "$work/opencode.json.pre-plugins" || die "non-interactive install wrote opencode.json"
+for p in toolkit watcher; do
+  run plugin add "$repo/testdata/plugins/$p" --yes || die "plugin add $p"
 done
-grep -q 'trigger: polls' "$work/out" && die "github-docs declares no active trigger, summary invented one"
-[[ -f plugins/steady/routines/steady-check-in.md && -d plugins/slack/skills/slack-webhook && -f plugins/github-docs/routines/doc-watch.md ]] || die "plugin files missing"
-[[ -f plugins/steady/.openroutines-source.yaml ]] || die "plugin provenance missing"
-grep -q '^active: false$' plugins/steady/routines/steady-check-in.md || die "installed plugin routine is active"
-[[ -e memory/ledgers/doc-watch.md ]] && die "ledger stub installed with no memory worktree"
-grep -q 'seed memory/ledgers/doc-watch.md' "$work/out" || die "pending stub not surfaced as a next step"
-grep -q 'credentials set github_app_private_key' "$work/out" || die "credential next-step missing"
+grep -q 'trigger: polls' "$work/out" && die "no fixture declares a trigger, summary invented one"
+[[ -f plugins/reporter/routines/reporter-digest.md && -d plugins/toolkit/skills/toolkit-notes && -f plugins/watcher/routines/watcher.md ]] || die "plugin files missing"
+[[ -f plugins/reporter/.openroutines-source.yaml ]] || die "plugin provenance missing"
+grep -q '^active: false$' plugins/reporter/routines/reporter-digest.md || die "installed plugin routine is active"
+[[ -e memory/ledgers/watcher.md ]] && die "ledger stub installed with no memory worktree"
+grep -q 'seed memory/ledgers/watcher.md' "$work/out" || die "pending stub not surfaced as a next step"
+grep -q 'credentials set watcher_app_key' "$work/out" || die "credential next-step missing"
 grep -q 'type: github_app' "$work/out" || die "typed-credential openroutines.yml step missing"
-if run plugin add "$repo/examples/plugins/steady" --yes; then
+if run plugin add "$repo/testdata/plugins/reporter" --yes; then
   die "reinstalling over existing files should be refused"
 fi
 grep -q 'refusing to replace' "$work/out" || die "collision refusal message missing"
-step "plugin add installs all three reference plugins, refuses reinstall"
+step "plugin add installs all three fixtures, refuses reinstall"
 
 # A local upstream exercises the update contract: provenance supplies the
 # merge base, a local schedule edit survives, and an upstream prompt edit
@@ -143,13 +157,12 @@ step "plugin update merges upstream with local edits and advances provenance"
 
 # The installed routines must satisfy check once their credentials exist and
 # the typed entry is declared (values are fake; check only wires names).
-printf 'fake\n' | run credentials set steady_token || die "credentials set steady_token"
-printf 'fake\n' | run credentials set slack_webhook_url || die "credentials set slack_webhook_url"
-printf 'fake\n' | run credentials set github_app_private_key || die "credentials set github_app_private_key"
+printf 'fake\n' | run credentials set reporter_token || die "credentials set reporter_token"
+printf 'fake\n' | run credentials set watcher_app_key || die "credentials set watcher_app_key"
 printf 'fake\n' | run credentials set support_desk_secret || die "credentials set support_desk_secret"
 cat >> openroutines.yml <<'EOF'
 credentials:
-  github_app_private_key:
+  watcher_app_key:
     type: github_app
     app_id: "12345"
   support_desk_secret:
@@ -158,7 +171,7 @@ credentials:
     client_id: "client-abc"
     inject_as: support_desk_token
 variables:
-  docs_repos: "acme/docs"
+  watch_repos: "acme/docs"
 EOF
 run check || die "check after plugin installs"
 step "check passes with the installed plugins wired up"
