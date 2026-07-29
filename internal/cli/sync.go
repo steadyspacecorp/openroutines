@@ -62,8 +62,10 @@ func cmdSync(args []string) int {
 		return fail(fmt.Errorf("origin unreachable: %s", rep.Detail))
 	case rep.Rewritten:
 		// The refusal text already explains the repair; do not paraphrase it.
+		reportStranded(mem)
 		return fail(fmt.Errorf("%s", rep.Detail))
 	case rep.Conflict:
+		reportStranded(mem)
 		return fail(fmt.Errorf("memory does not reconcile cleanly: %s\n\nresolve inside memory/, commit, then rerun openroutines sync", rep.Detail))
 	case rep.Detail != "":
 		return fail(fmt.Errorf("%s", rep.Detail))
@@ -95,4 +97,20 @@ func cmdSync(args []string) int {
 	}
 	fmt.Printf("  published %d commit(s) to origin/%s\n", st.Unpushed, memory.Branch)
 	return 0
+}
+
+// reportStranded names the memory a supervisor could not put on the branch
+// while its sync was blocked -- typically carrying the blocker task that
+// explains this same refusal, since the block that stops sync also stops the
+// runs that would otherwise report it. Dated, because a snapshot from a
+// container that has since been replaced is a record to read, not a repair in
+// progress.
+func reportStranded(mem *memory.Memory) {
+	snap := mem.Blocked()
+	if snap.Tip == "" {
+		return
+	}
+	fmt.Printf("  ! the agent stranded memory it could not publish on %s (snapshot taken %s)\n", memory.BlockedRef, snap.When)
+	fmt.Printf("    read it: git -C memory show %s:tasks.md -- compare: git -C memory diff %s %s\n",
+		memory.BlockedRef, memory.Branch, memory.BlockedRef)
 }
