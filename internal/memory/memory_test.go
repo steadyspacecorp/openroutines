@@ -62,6 +62,43 @@ func TestValidateRejectsHardLinks(t *testing.T) {
 	}
 }
 
+// Staging is not quiescent between validation and import: a descendant of
+// the model process can outlive it and swap a staged file for a symlink
+// after Validate has walked the tree. The copy path is therefore tested
+// directly, with no Validate in front of it: what it copies has to be
+// decided by the descriptor it reads from, not by an earlier walk.
+func TestStagedCopyNeverFollowsSymlinks(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	os.WriteFile(secret, []byte("SECRET"), 0o644)
+	staging, wt := t.TempDir(), t.TempDir()
+	if err := os.Symlink(secret, filepath.Join(staging, "events.md")); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	if err := copyStaged(staging, wt); err == nil {
+		t.Error("expected the copy to refuse a symlinked staged file")
+	}
+	if raw, _ := os.ReadFile(filepath.Join(wt, "events.md")); strings.Contains(string(raw), "SECRET") {
+		t.Fatalf("the symlink target was copied into the worktree: %q", raw)
+	}
+}
+
+// Same window, the alias a path check cannot see: a hard link the copy path
+// must recognize on the open file, not trust Validate to have caught.
+func TestStagedCopyRefusesHardLinks(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	os.WriteFile(outside, []byte("SECRET"), 0o644)
+	staging, wt := t.TempDir(), t.TempDir()
+	if err := os.Link(outside, filepath.Join(staging, "events.md")); err != nil {
+		t.Skip("hard links unavailable")
+	}
+	if err := copyStaged(staging, wt); err == nil || !strings.Contains(err.Error(), "hard link") {
+		t.Errorf("expected hard-link rejection, got %v", err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(wt, "events.md")); strings.Contains(string(raw), "SECRET") {
+		t.Fatalf("the hard link's content was copied into the worktree: %q", raw)
+	}
+}
+
 // Import must refuse to overwrite uncommitted human curation -- there is no
 // reflog for edits that were never committed. Supervisor-owned paths are the
 // attempt's own in-flight bookkeeping and do not gate.
