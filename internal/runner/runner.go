@@ -711,8 +711,10 @@ func buildWorkspace(dir, workspace, name string) error {
 	// A file another routine owns is not this run's problem: an unparseable
 	// sibling is simply absent from the workspace, the same posture the
 	// supervisor's tick takes when it schedules around one. Only an error
-	// about this routine -- its own frontmatter, or a name it collides on --
-	// fails the attempt.
+	// about this routine -- its own frontmatter, a name it collides on, or an
+	// unattributed one that could be hiding it -- fails the attempt. The tick
+	// never dispatches the first two (LoadAgent drops those names), so in
+	// practice this catches a manual run and the read failures nobody owns.
 	routines, errs := routine.LoadAgent(dir)
 	for _, err := range errs {
 		if routine.Concerns(err, name) {

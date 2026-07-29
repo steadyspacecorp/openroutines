@@ -14,8 +14,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -54,6 +57,7 @@ type Supervisor struct {
 	syncBlocked   bool   // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool   // blocker already raised for the current sync problem
 	unreachWarned bool
+	loadFailed    map[string]string // routine name -> the load failure already recorded
 	secrets       map[string]string // the supervisor's own secrets, for redacting its output
 
 	// Trigger bookkeeping that is deliberately not durable: last-poll times
@@ -205,9 +209,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	}
 
 	routines, parseErrs := routine.LoadAgent(s.Dir)
-	for _, e := range parseErrs {
-		s.Log.Printf("routine parse error: %v", e)
-	}
+	s.reportLoadFailures(parseErrs, now)
 
 	// Phase 1: reconcile scheduling state; collect runnable pending runs.
 	type dispatch struct {
@@ -457,6 +459,61 @@ func (s *Supervisor) syncOnce() {
 			s.Log.Printf("memory: adopted remote commits")
 		}
 	}
+}
+
+// reportLoadFailures records in memory that a routine has stopped loading --
+// and, later, that it loads again. The tick schedules around a broken file
+// (design decision "A broken routine is one broken routine"), so without this
+// the only trace of a routine that quietly stopped running is a log line
+// nobody is tailing. The transitions are events rather than human-owned tasks:
+// a broken file heals by being edited and the next tick notices, so there is
+// nothing for a person to close. Unattributed failures -- a directory that
+// would not read -- are left out: they fail every attempt, and abandonment
+// already files a task for each.
+func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
+	failing := map[string]string{}
+	for _, e := range errs {
+		s.Log.Printf("routine load error: %v", e)
+		var re *routine.Error
+		if !errors.As(e, &re) {
+			continue
+		}
+		// The path is absolute in the container; the event is read in the
+		// repository, where the file is routines/<name>.md. And load errors
+		// quote file contents, which memory events push.
+		text := strings.TrimPrefix(e.Error(), s.Dir+string(filepath.Separator))
+		failing[re.Name] = scrub.Redact(text, s.secrets)
+	}
+
+	var news []string
+	for _, name := range slices.Sorted(maps.Keys(failing)) {
+		if s.loadFailed[name] != failing[name] {
+			news = append(news, fmt.Sprintf("routine %s does not load (%s) -- it will not run until the file is fixed", name, failing[name]))
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.loadFailed)) {
+		if _, still := failing[name]; !still {
+			news = append(news, fmt.Sprintf("routine %s loads again", name))
+		}
+	}
+	s.loadFailed = failing
+	if len(news) == 0 {
+		return
+	}
+
+	date := now.UTC().Format("2006-01-02")
+	for _, line := range news {
+		if err := s.mem.AppendEvent(fmt.Sprintf("%s supervisor: %s", date, line)); err != nil {
+			s.Log.Printf("recording routine load status: %v", err)
+			return
+		}
+		s.Log.Print(line)
+	}
+	if _, err := s.mem.Commit("Record routine load status"); err != nil {
+		s.Log.Printf("routine load status commit failed: %v", err)
+		return
+	}
+	s.pushBestEffort()
 }
 
 // blockOnce records a blocking condition when it first appears -- as a

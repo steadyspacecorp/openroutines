@@ -253,6 +253,17 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 	routines, parseErrs := routine.LoadDir(filepath.Join(dir, "routines"))
 	p.Routines = routines
 	for _, e := range parseErrs {
+		// Every other finding names the file relative to the payload; a load
+		// error carries an absolute path into the clone, which says nothing
+		// to the person reviewing the plugin.
+		var re *routine.Error
+		if errors.As(e, &re) && re.Path != "" {
+			rel, relErr := filepath.Rel(dir, re.Path)
+			if relErr == nil {
+				badf("%s: %v", rel, re.Err)
+				continue
+			}
+		}
 		badf("%v", e)
 	}
 	skills, skillErrs := skill.List(filepath.Join(dir, "skills"))
@@ -331,10 +342,12 @@ func parseManifestFile(path string) (*Manifest, string, error) {
 }
 
 // agentNamespace returns the agent's global routine and skill namespaces, or
-// an error if that namespace is already invalid. Duplicate names are dropped
-// from the lists LoadAgent/ListAgent return, so a caller that ignored the
-// errors would check collisions against a namespace missing exactly the names
-// already in conflict -- and install on top of them. Fail closed instead.
+// an error if that namespace is already invalid. A name any load error is
+// about is dropped from the lists LoadAgent/ListAgent return, so a caller that
+// ignored the errors would check collisions against a namespace missing
+// exactly the names already in trouble -- and install on top of them. Fail
+// closed instead: this is the one place a single broken routine blocks work
+// on the others, because a namespace with a hole in it is not a namespace.
 func agentNamespace(agentDir string) ([]*routine.Routine, []*skill.Skill, error) {
 	routines, routineErrs := routine.LoadAgent(agentDir)
 	skills, skillErrs := skill.ListAgent(agentDir)
