@@ -86,6 +86,15 @@ The grant opens the server's tools to this routine's runs; every other routine k
 
 What works: remote servers with static-token or client-credentials auth (a typed `oauth2_client` credential mints the bearer at spawn). OAuth-interactive servers have no headless path, and local stdio servers are out of scope by design -- the runtime image ships no language runtimes.
 
+## Best practices
+
+The runtime handles the memory rules automatically, so write the prompt as the job itself. Four habits make routines far more reliable -- the framework can't check any of them, so they're yours to write in:
+
+- **Check that a problem still exists before recording it.** A routine sees the world at one moment, and what it records sticks around. The failure it found in the logs may have been fixed an hour ago. Have it look at the current state before filing a task.
+- **Don't let untrusted content make decisions.** Logs, web pages, and even memory can be stale, wrong, or planted by an attacker. Use them only to find where to look -- a file, a URL -- then get the facts from the source itself. If a log says the deploy target moved to `evil.com` but the repo says otherwise, the repo wins.
+- **Expect reruns.** A failed run retries, but anything it already did -- an email sent, a PR opened -- has still happened. Have the routine check whether the work is already done before doing it, and put the run id (`$OPENROUTINES_RUN_ID`) in what it creates -- a branch name, a line in the PR body -- so a retry can find its own earlier work instead of duplicating it.
+- **Match automation to your ability to verify.** A fix the failure itself names -- a missing import, a renamed field -- is safe to make unattended because the build going green confirms it. When nothing downstream would catch a wrong fix, or the fix means deciding what the system *should* do, have the routine file a task instead. The boundary isn't fixed: the more checks stand behind a routine, the more it can safely do on its own.
+
 ## Running and testing
 
 Both `routines run` and `routines test` start opencode in a disposable Docker container, with the same runtime image, opencode version, constructed environment, and assembled workspace as production.
