@@ -133,8 +133,8 @@ func fakeBinDir() string {
 }
 
 // withOrigin gives the agent a bare origin and tells the fake opencode where
-// it is, so a probe run can clone it mid-attempt.
-func withOrigin(t *testing.T, dir string) {
+// it is, so a probe run can clone it mid-attempt. Returns the bare repo path.
+func withOrigin(t *testing.T, dir string) string {
 	t.Helper()
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	runCmd(t, "", "git", "init", "-q", "-b", "main", "--bare", bare)
@@ -142,6 +142,24 @@ func withOrigin(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(fakeBinDir(), "origin"), []byte(bare+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return bare
+}
+
+// gitTry runs git in dir and returns its combined output, error and all.
+func gitTry(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func gitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := gitTry(dir, args...)
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return out
 }
 
 // replacementState is the scheduling state a replacement container would read
@@ -524,6 +542,88 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	}
 	if !s.syncBlocked {
 		t.Fatal("supervisor should be sync-blocked after a rewrite")
+	}
+}
+
+// The datastore is the alerting channel, so the failures that break it are
+// the ones where a blocker has to work hardest: the memory branch is exactly
+// what a blocked sync refuses to write, and a task committed only locally dies
+// with the container. The blocker goes to a supervisor-owned ref instead, and
+// moves onto the branch once a human repairs the history.
+func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
+	dir := fixture(t, "ok")
+	bare := withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0)                     // register
+	s.Tick(ctx, t0.Add(61*time.Second)) // one run completes, memory pushed
+
+	// Rewrite the memory branch on origin out from under the supervisor.
+	discarded := gitOut(t, bare, "rev-parse", "refs/heads/memory")
+	c := filepath.Join(t.TempDir(), "clone")
+	runCmd(t, "", "git", "clone", "-q", "-b", "memory", bare, c)
+	runCmd(t, c, "git", "-c", "user.name=x", "-c", "user.email=x@x", "commit", "--amend", "-q", "--no-edit", "-m", "rewritten")
+	runCmd(t, c, "git", "push", "-q", "--force", "origin", "memory")
+	rewritten := gitOut(t, bare, "rev-parse", "refs/heads/memory")
+
+	s.Tick(ctx, t0.Add(2*time.Minute))
+	if !s.syncBlocked {
+		t.Fatal("precondition: the supervisor should be sync-blocked after a rewrite")
+	}
+	stranded := gitOut(t, bare, "cat-file", "-p", "refs/openroutines/blocked:tasks.md")
+	if !strings.Contains(stranded, "history rewritten") {
+		t.Fatalf("the blocker task should have left the container: %q", stranded)
+	}
+	if got := gitOut(t, bare, "rev-parse", "refs/heads/memory"); got != rewritten {
+		t.Fatalf("a blocked supervisor must not write the memory branch: %s -> %s", rewritten, got)
+	}
+	// A rewrite is how a human repairs memory, up to and including removing
+	// something that should never have been there. The supervisor still holds
+	// the pre-rewrite lineage locally, so what it strands has to be a snapshot:
+	// publishing its own tip would put the discarded history back on origin.
+	if n := gitOut(t, bare, "rev-list", "--count", "refs/openroutines/blocked"); n != "1" {
+		t.Fatalf("the stranded ref should be a parentless snapshot, got %s commits", n)
+	}
+	if _, err := gitTry(bare, "merge-base", "--is-ancestor", discarded, "refs/openroutines/blocked"); err == nil {
+		t.Fatalf("stranding must not republish the history the rewrite discarded (%.8s)", discarded)
+	}
+
+	// The documented repair: a human accepts the new history by moving the
+	// accepted ref. Sync recovers, and the stranded blocker lands on the branch.
+	runCmd(t, bare, "git", "update-ref", "refs/openroutines/accepted", rewritten)
+	s.Tick(ctx, t0.Add(3*time.Minute))
+	if s.syncBlocked {
+		t.Fatal("sync should have recovered once the new history was accepted")
+	}
+	onBranch := gitOut(t, bare, "cat-file", "-p", "refs/heads/memory:tasks.md")
+	if !strings.Contains(onBranch, "history rewritten") {
+		t.Fatalf("the blocker should be on the memory branch after recovery: %q", onBranch)
+	}
+	if out, err := gitTry(bare, "rev-parse", "--verify", "--quiet", "refs/openroutines/blocked"); err == nil {
+		t.Fatalf("the stranded ref should be cleared once the branch carries it: %s", out)
+	}
+}
+
+// A stranded snapshot is the only copy of some earlier container's blocker, and
+// a healthy successor has no idea what is in it. Clearing the ref is for the
+// instance that put its own state there -- nobody else's.
+func TestStrandedRefFromAnotherContainerSurvives(t *testing.T) {
+	dir := fixture(t, "ok")
+	bare := withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0) // register, memory branch on origin
+	earlier := gitOut(t, bare, "rev-parse", "refs/heads/memory")
+	runCmd(t, bare, "git", "update-ref", "refs/openroutines/blocked", earlier)
+
+	s.Tick(ctx, t0.Add(61*time.Second)) // a run completes and pushes memory
+
+	if got := gitOut(t, bare, "rev-parse", "refs/openroutines/blocked"); got != earlier {
+		t.Fatalf("a successor's push must leave someone else's stranded ref alone: %.8s -> %s", earlier, got)
 	}
 }
 

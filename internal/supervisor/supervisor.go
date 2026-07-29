@@ -67,9 +67,15 @@ type Supervisor struct {
 	syncBlocked   bool          // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool          // blocker already raised for the current sync problem
 	unreachWarned bool
-	commitWarned  bool              // intent commit failing: dispatch is halted, someone must look
-	loadFailed    map[string]string // routine name -> the load failure already recorded
-	secrets       map[string]string // the supervisor's own secrets, for redacting its output
+	// blockedTip is the memory tip this instance stranded on the blocked ref
+	// while sync was refused: what tells a later successful push that the
+	// stranded copy is redundant, and what keeps a repeat push idle. Only what
+	// this instance stranded: a ref left by a previous container is the only
+	// copy of its blocker and must outlive it.
+	blockedTip   string
+	commitWarned bool              // intent commit failing: dispatch is halted, someone must look
+	loadFailed   map[string]string // routine name -> the load failure already recorded
+	secrets      map[string]string // the supervisor's own secrets, for redacting its output
 
 	// Trigger bookkeeping that is deliberately not durable: last-poll times
 	// (persisting them would dirty the memory worktree every tick) and
@@ -528,9 +534,11 @@ func (s *Supervisor) syncOnce() {
 	case rep.Rewritten:
 		s.syncBlocked = true
 		s.blockOnce("sync", "memory branch history rewritten on origin -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
+		s.strandBlocked()
 	case rep.Conflict:
 		s.syncBlocked = true
 		s.blockOnce("sync", "memory sync conflict -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
+		s.strandBlocked()
 	case rep.Unreachable:
 		s.Log.Printf("origin unreachable: %s", rep.Detail)
 	default:
@@ -634,13 +642,46 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	s.pushBestEffort()
 }
 
+// pushBestEffort publishes what the memory worktree carries. While sync is
+// blocked the memory branch is the thing being refused, so the record goes to
+// the supervisor-owned blocked ref instead -- otherwise the blocker that
+// reports a broken datastore would live only on a container that is about to
+// be replaced. Once the branch carries the same state, the stranded copy is
+// dropped.
 func (s *Supervisor) pushBestEffort() {
-	if s.noOrigin || s.syncBlocked {
+	if s.noOrigin {
+		return
+	}
+	if s.syncBlocked {
+		s.strandBlocked()
 		return
 	}
 	if err := s.mem.Push(); err != nil {
 		s.Log.Printf("memory push failed (will retry): %v", err)
+		return
 	}
+	if s.blockedTip != "" {
+		s.blockedTip = ""
+		s.mem.ClearBlocked()
+	}
+}
+
+// strandBlocked publishes memory to the blocked ref, and is called on every
+// blocked tick rather than only when the blocker is first raised: the record
+// is the whole point of stranding it, so an attempt that fails has to be
+// retried by the next tick instead of dying with the log line that announced
+// it. Keyed on the memory tip, so a tick that changed nothing pushes nothing.
+func (s *Supervisor) strandBlocked() {
+	tip, err := s.mem.Head()
+	if err != nil || tip == s.blockedTip {
+		return
+	}
+	if err := s.mem.PublishBlocked(); err != nil {
+		s.Log.Printf("publishing blocked memory to origin failed (will retry): %v", err)
+		return
+	}
+	s.blockedTip = tip
+	s.Log.Printf("memory: stranded on %s until sync is repaired", memory.BlockedRef)
 }
 
 // verifySandbox enforces the fail-closed policy at boot, not mid-run. Only
