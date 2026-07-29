@@ -449,7 +449,12 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 
 	res, staging, err := runner.Execute(ctx, s.Dir, agent, r, meta)
 	detail := ""
+	fatal := false
 	if err != nil {
+		// The runner classifies; the supervisor only asks. A start failure
+		// nothing can repeat past is abandoned on the spot rather than
+		// retried to the budget's end for the same error five times.
+		fatal = errors.Is(err, runner.ErrFatal)
 		s.Log.Printf("%s: %s failed to start: %v", r.Name, p.RunID, err)
 		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
 		detail = err.Error()
@@ -472,7 +477,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 			st.Watermark = p.CoveredThrough
 			st.Pending = nil
 			st.RecordSuccess()
-		case p.Attempts >= MaxAttempts:
+		case fatal, p.Attempts >= MaxAttempts:
 			abandoned = true
 			s.abandon(r.Name, st, fin.Detail, now)
 		}
