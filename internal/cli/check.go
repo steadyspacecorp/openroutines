@@ -166,6 +166,16 @@ func cmdCheck(_ []string) int {
 				errs = append(errs, fmt.Sprintf("timeout %q is not a valid duration", r.FM.Timeout))
 			}
 		}
+		// The single-instance lease is heartbeated between runs, so a run
+		// longer than the lease can cover leaves it stale mid-flight -- long
+		// enough for a second supervisor to judge this one dead and take over.
+		// The runner caps the timeout at the ceiling; say so here, because a
+		// routine silently cut short is worse news than a rejected setting.
+		if agent != nil {
+			if declared := runner.DeclaredTimeout(agent, r); declared > memory.MaxRunTimeout {
+				warnf("%s: timeout %s exceeds the %s a single run may take -- the single-instance lease cannot cover a run that long, so attempts are capped at %s; split the work into shorter runs", r.Name, declared, memory.MaxRunTimeout, memory.MaxRunTimeout)
+			}
+		}
 		if r.FM.Model != "" && !strings.Contains(r.FM.Model, "/") {
 			errs = append(errs, fmt.Sprintf("model %q must be provider/model", r.FM.Model))
 		}
@@ -285,15 +295,6 @@ func cmdCheck(_ []string) int {
 			for name, spec := range agent.Credentials {
 				if _, ok := store[name]; !ok {
 					warnf("credential entry %q (type %s) has no stored value in %s", name, spec.Type, creds.FileName)
-				}
-			}
-			// github_app tokens expire after one hour; a routine that can run
-			// close to that may lose authentication late in the attempt.
-			for _, r := range routines {
-				for _, c := range r.FM.Credentials {
-					if agent.Credentials[c].Type == "github_app" && runner.EffectiveTimeout(agent, r) >= 50*time.Minute {
-						warnf("%s: timeout %s approaches the one-hour github_app token life -- authentication may fail late in a run", r.Name, runner.EffectiveTimeout(agent, r))
-					}
 				}
 			}
 		}

@@ -154,8 +154,19 @@ func EffectiveModel(agent *config.Agent, r *routine.Routine) (string, error) {
 	return model, nil
 }
 
-// EffectiveTimeout resolves frontmatter over agent defaults over 5m.
+// EffectiveTimeout is what an attempt actually gets: the declared timeout
+// under the lease ceiling. The cap is applied here rather than left to
+// `check`, because the single-instance lease is heartbeated between runs and
+// a run that outlasts what the lease covers lets a second supervisor judge
+// this one dead and take over mid-run -- a correctness property cannot rest
+// on a command the operator may never run.
 func EffectiveTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
+	return min(DeclaredTimeout(agent, r), memory.MaxRunTimeout)
+}
+
+// DeclaredTimeout resolves frontmatter over agent defaults over 5m, before the
+// ceiling applies. `check` reports on it; execution uses EffectiveTimeout.
+func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 	timeout := 5 * time.Minute
 	for _, t := range []string{agent.Defaults.Timeout, r.FM.Timeout} {
 		if t != "" {

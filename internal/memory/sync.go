@@ -160,7 +160,7 @@ const (
 	LeaseTTL = 30 * time.Minute
 
 	// MaxRunTimeout is the longest effective timeout the lease can cover.
-	// `openroutines check` warns above it.
+	// Attempts are capped at it; `openroutines check` warns above it.
 	MaxRunTimeout = LeaseTTL / 2
 )
 
