@@ -52,6 +52,8 @@ openroutines status
 
 Shows master key state, models, routines and schedules, skills, memory sync state, and token usage.
 
+The grants in parentheses are the routine's declared authority -- skills, credentials, MCP servers, and web access.
+
 ## usage
 
 ```

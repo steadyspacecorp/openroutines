@@ -108,7 +108,7 @@ openroutines routines run doc-drift
 Day to day:
 
 ```bash
-openroutines status                   # master key, models, routines and schedules, skills, memory sync state, token usage
+openroutines status                   # master key, models, routines and what they owe, skills, memory sync state, token usage
 openroutines routines list            # also: edit, activate, deactivate, remove
 openroutines routines run <name> --no-memory
                                       # real external actions; memory discarded

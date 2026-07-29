@@ -272,16 +272,32 @@ func routinesList() int {
 	}
 	fmt.Printf("%-20s %-16s %-8s %s\n", "NAME", "SCHEDULE", "ACTIVE", "GRANTS")
 	for _, r := range routines {
-		grants := []string{}
-		if len(r.FM.Skills) > 0 {
-			grants = append(grants, fmt.Sprintf("skills:%d", len(r.FM.Skills)))
-		}
-		if len(r.FM.Credentials) > 0 {
-			grants = append(grants, fmt.Sprintf("creds:%d", len(r.FM.Credentials)))
-		}
-		fmt.Printf("%-20s %-16s %-8v %s\n", r.Name, scheduleSummary(r), r.FM.IsActive(), strings.Join(grants, " "))
+		fmt.Printf("%-20s %-16s %-8v %s\n", r.Name, scheduleSummary(r), r.FM.IsActive(), strings.Join(grantSummary(r), " "))
 	}
 	return 0
+}
+
+// grantSummary names every authority a routine declares. Web access and MCP
+// servers are grants like skills and credentials -- a surface that answers
+// "what can this routine reach" and omits them answers it wrong.
+func grantSummary(r *routine.Routine) []string {
+	var grants []string
+	if n := len(r.FM.Skills); n > 0 {
+		grants = append(grants, fmt.Sprintf("skills:%d", n))
+	}
+	if n := len(r.FM.Credentials); n > 0 {
+		grants = append(grants, fmt.Sprintf("creds:%d", n))
+	}
+	if n := len(r.FM.MCP); n > 0 {
+		grants = append(grants, fmt.Sprintf("mcp:%d", n))
+	}
+	if r.FM.Webfetch {
+		grants = append(grants, "webfetch")
+	}
+	if r.FM.Websearch {
+		grants = append(grants, "websearch")
+	}
+	return grants
 }
 
 // scheduleSummary describes when a routine runs: its cron schedule, its
