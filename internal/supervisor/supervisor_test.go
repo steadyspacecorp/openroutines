@@ -1,8 +1,10 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
@@ -939,5 +942,45 @@ func TestRunRecordCarriesUsage(t *testing.T) {
 		if !strings.Contains(last, want) {
 			t.Fatalf("run record missing %s: %s", want, last)
 		}
+	}
+}
+
+// Env delivery of the master key stays supported -- some platforms cannot
+// mount a file -- but boot names it as the weaker choice, because a
+// deployment that picked it once is never told again.
+func TestBootWarnsOnEnvDeliveredMasterKey(t *testing.T) {
+	dir := fixture(t, "ok")
+	s := newSupervisor(t, dir)
+	var out bytes.Buffer
+	s.Log = log.New(&out, "", 0)
+
+	t.Setenv(creds.EnvMasterKey, creds.GenerateKey())
+	s.warnKeyDelivery()
+	if out.Len() > 0 {
+		t.Errorf("outside the container there is nothing to warn about: %q", out.String())
+	}
+
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	s.warnKeyDelivery()
+	if !strings.Contains(out.String(), creds.EnvMasterKeyFile) {
+		t.Errorf("warning should point at the file delivery: %q", out.String())
+	}
+
+	keyFile := filepath.Join(t.TempDir(), "master.key")
+	if err := os.WriteFile(keyFile, []byte(creds.GenerateKey()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(creds.EnvMasterKeyFile, keyFile)
+	out.Reset()
+	s.warnKeyDelivery()
+	if !strings.Contains(out.String(), creds.EnvMasterKey) {
+		t.Errorf("a leftover variable still publishes the value, file delivery or not: %q", out.String())
+	}
+
+	t.Setenv(creds.EnvMasterKey, "")
+	out.Reset()
+	s.warnKeyDelivery()
+	if out.Len() > 0 {
+		t.Errorf("file delivery with no leftover variable is the recommended path: %q", out.String())
 	}
 }

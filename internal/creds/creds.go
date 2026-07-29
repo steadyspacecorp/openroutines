@@ -87,6 +87,18 @@ func LoadKey(dir string) ([]byte, error) {
 	return key, nil
 }
 
+// KeyValueInEnv reports whether the master key *value* is present in this
+// process's environment, which is the exposure worth naming: an environment
+// value is visible wherever the process environment is (platform
+// introspection, crash dumps, anything running as root), while a path leads
+// to a file outside the model sandbox. Deliberately not "which delivery did
+// LoadKey resolve" -- a deployment that moved to file delivery and left the
+// old variable set still publishes the value, so the variable being set at
+// all is the condition.
+func KeyValueInEnv() bool {
+	return os.Getenv(EnvMasterKey) != ""
+}
+
 func seal(key, plaintext []byte) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
