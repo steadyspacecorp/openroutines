@@ -23,8 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/robfig/cron/v3"
-
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
@@ -229,10 +227,10 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		if !r.FM.IsActive() || (r.FM.Schedule == "" && r.FM.Trigger == nil) {
 			continue
 		}
-		var spec cron.Schedule
+		var spec *schedule.Spec
 		if r.FM.Schedule != "" {
 			var err error
-			spec, err = cron.ParseStandard(r.FM.Schedule)
+			spec, err = schedule.Parse(r.FM.Schedule, s.loc)
 			if err != nil {
 				s.Log.Printf("%s: bad schedule %q: %v", r.Name, r.FM.Schedule, err)
 				continue

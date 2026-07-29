@@ -9,12 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/robfig/cron/v3"
-
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/schedule"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
@@ -31,7 +30,15 @@ func cmdStatus(_ []string) int {
 	fmt.Printf("agent      %s\n", orUnset(agent.Name))
 	fmt.Printf("job        %s\n", orUnset(firstLine(agent.Description)))
 	fmt.Printf("owner      %s <%s>\n", orUnset(agent.Owner.Name), orUnset(agent.Owner.Email))
-	fmt.Printf("timezone   %s\n", orUnset(agent.Timezone))
+	// The supervisor refuses to start on an unloadable timezone; status is a
+	// diagnostic, so it says so and carries on in UTC rather than quietly
+	// printing fire times the agent would never use.
+	loc, err := time.LoadLocation(agent.Timezone)
+	tzNote := ""
+	if err != nil {
+		loc, tzNote = time.UTC, " -- INVALID, times below shown in UTC"
+	}
+	fmt.Printf("timezone   %s%s\n", orUnset(agent.Timezone), tzNote)
 	fmt.Printf("model      %s (default)\n", orUnset(agent.Defaults.Model))
 	if len(agent.Variables) > 0 {
 		names := slices.Sorted(maps.Keys(agent.Variables))
@@ -59,10 +66,7 @@ func cmdStatus(_ []string) int {
 	}
 
 	// Routines.
-	now := time.Now()
-	if loc, err := time.LoadLocation(agent.Timezone); err == nil {
-		now = now.In(loc)
-	}
+	now := time.Now().In(loc)
 	routines, parseErrs := routine.LoadAgent(dir)
 	fmt.Printf("\nroutines (%d):\n", len(routines))
 	for _, r := range routines {
@@ -70,7 +74,7 @@ func cmdStatus(_ []string) int {
 		next := ""
 		if r.FM.IsActive() {
 			state = "active"
-			if spec, err := cron.ParseStandard(r.FM.Schedule); err == nil {
+			if spec, err := schedule.Parse(r.FM.Schedule, loc); err == nil {
 				next = " -- next " + spec.Next(now).Format("Mon 15:04")
 			}
 		}

@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,20 +47,29 @@ case "$mode" in
 esac
 `
 
-const agentYAML = `name: test-agent
+// agentYAML is the test agent's config, in the given timezone.
+func agentYAML(tz string) string {
+	return fmt.Sprintf(`name: test-agent
 description: Tests the supervisor
 owner:
   name: CI
   email: ci@example.invalid
-timezone: UTC
+timezone: %s
 defaults:
   model: fake/model
   timeout: 30s
-`
+`, tz)
+}
 
-// fixture builds an agent repo (no origin: local mode) and puts a fake
-// opencode on PATH.
+// fixture builds a UTC agent whose one routine fires every minute.
 func fixture(t *testing.T, mode string) string {
+	t.Helper()
+	return fixtureIn(t, mode, "UTC", "every-minute", "* * * * *")
+}
+
+// fixtureIn builds an agent repo (no origin: local mode) in the given
+// timezone with one scheduled routine, and puts a fake opencode on PATH.
+func fixtureIn(t *testing.T, mode, tz, name, spec string) string {
 	t.Helper()
 	dir := t.TempDir()
 	run := func(args ...string) {
@@ -70,10 +80,10 @@ func fixture(t *testing.T, mode string) string {
 		}
 	}
 	run("git", "init", "-q", "-b", "main", ".")
-	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(agentYAML), 0o644)
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(agentYAML(tz)), 0o644)
 	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
-	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
-		"---\nschedule: \"* * * * *\"\n---\nDo the fake thing.\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "routines", name+".md"), []byte(
+		fmt.Sprintf("---\nschedule: %q\n---\nDo the fake thing.\n", spec)), 0o644)
 	binDir := t.TempDir()
 	os.WriteFile(filepath.Join(binDir, "opencode"), []byte(fakeOpencode), 0o755)
 	os.WriteFile(filepath.Join(binDir, "fake-mode"), []byte(mode+"\n"), 0o644)
@@ -259,6 +269,46 @@ func TestShadowedRoutineNameIsNotScheduled(t *testing.T) {
 	events := readFile(t, filepath.Join(dir, "memory", "events.md"))
 	if !strings.Contains(events, "routine every-minute does not load") {
 		t.Errorf("the collision should be recorded: %q", events)
+	}
+}
+
+// A schedule is a wall-clock promise: a 06:00 routine on a New York agent
+// fires at 06:00 on both sides of a DST transition. The watermark it scans
+// from has round-tripped through the state file by then, so this only holds
+// if the supervisor evaluates cron in the agent's timezone rather than in
+// whatever zone the persisted timestamp came back carrying.
+func TestScheduleHoldsAgentWallClockAcrossDST(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no tz database")
+	}
+	// The release container sets no TZ; pin time.Local to match it, so the
+	// watermark rehydrates into a fabricated fixed-offset zone here too
+	// instead of whatever zone the developer's machine happens to be in.
+	defer func(l *time.Location) { time.Local = l }(time.Local)
+	time.Local = time.UTC
+
+	// "fail" keeps the pending run on disk after dispatch, where its
+	// scheduled_for can be read back.
+	dir := fixtureIn(t, "fail", "America/New_York", "daily", "0 6 * * *")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+
+	s.Tick(ctx, time.Date(2026, 10, 31, 12, 0, 0, 0, ny)) // register, EDT
+	s.Tick(ctx, time.Date(2026, 11, 2, 12, 0, 0, 0, ny))  // after fall-back, EST
+
+	st, err := schedule.Load(s.stateDir(), "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st == nil || st.Pending == nil {
+		t.Fatalf("expected a pending run, got %+v", st)
+	}
+	if got := st.Pending.ScheduledFor.In(ny); got.Hour() != 6 || got.Day() != 1 {
+		t.Fatalf("scheduled_for = %v, want 06:00 New York on Nov 1", got)
+	}
+	if got := st.Pending.CoveredThrough.In(ny); got.Hour() != 6 || got.Day() != 2 {
+		t.Fatalf("covered_through = %v, want 06:00 New York on Nov 2", got)
 	}
 }
 
@@ -540,7 +590,7 @@ func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
 
 	other := t.TempDir()
 	os.MkdirAll(filepath.Join(other, "routines"), 0o755)
-	os.WriteFile(filepath.Join(other, "openroutines.yml"), []byte(agentYAML), 0o644)
+	os.WriteFile(filepath.Join(other, "openroutines.yml"), []byte(agentYAML("UTC")), 0o644)
 	writeRoutines(other)
 	run(other, "git", "init", "-q", "-b", "main", ".")
 	run(other, "git", "remote", "add", "origin", bare)
