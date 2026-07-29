@@ -627,6 +627,44 @@ func TestStrandedRefFromAnotherContainerSurvives(t *testing.T) {
 	}
 }
 
+// An unreachable origin breaks the alerting channel from the other side, and
+// it fails early enough in the tick -- the lease heartbeat -- that nothing
+// downstream of it runs. The condition still has to leave a record a person
+// can find, which means recording it locally while it lasts and publishing it
+// when origin comes back.
+func TestUnreachableOriginRecordsADurableBlocker(t *testing.T) {
+	dir := fixture(t, "ok")
+	bare := withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0) // register, origin healthy
+
+	gone := bare + ".gone"
+	if err := os.Rename(bare, gone); err != nil {
+		t.Fatal(err)
+	}
+	s.Tick(ctx, t0.Add(61*time.Second))
+	s.Tick(ctx, t0.Add(122*time.Second))
+	if err := os.Rename(gone, bare); err != nil {
+		t.Fatal(err)
+	}
+
+	s.Tick(ctx, t0.Add(183*time.Second))
+
+	tasks := gitOut(t, bare, "cat-file", "-p", "refs/heads/memory:tasks.md")
+	if !strings.Contains(tasks, "origin unreachable") {
+		t.Fatalf("the outage should be recorded where a person looks: %q", tasks)
+	}
+	if got := strings.Count(tasks, "origin unreachable"); got != 1 {
+		t.Fatalf("the outage is recorded once, not once per tick (%d): %q", got, tasks)
+	}
+	if !strings.Contains(tasks, "[x]") {
+		t.Fatalf("the blocker should be resolved in place once origin returned: %q", tasks)
+	}
+}
+
 // Two instances, one origin. A tick has no bounded wall time -- every due
 // routine executes serially to completion -- so a lease heartbeated only at
 // the top of the tick goes stale while the holder is still working, and a
