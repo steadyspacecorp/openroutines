@@ -3,6 +3,7 @@ package supervisor
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
@@ -82,7 +83,17 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 	credential := ""
 	cleanup := func() {}
 	if spec.Credential != "" {
-		value, release, err := s.triggerCredential(spec.Credential)
+		// The rule `check` errors on, enforced again at the point that
+		// materializes the value: a poll uses a credential only when the
+		// routine's own credentials list grants it.
+		if !slices.Contains(r.FM.Credentials, spec.Credential) {
+			if !s.pollFailed[r.Name] {
+				s.pollFailed[r.Name] = true
+				s.Log.Printf("%s: trigger credential %q is not listed in the routine's credentials", r.Name, spec.Credential)
+			}
+			return trigger.Result{}, false
+		}
+		derived, err := s.triggerCredential(spec.Credential)
 		if err != nil {
 			if !s.pollFailed[r.Name] {
 				s.pollFailed[r.Name] = true
@@ -90,8 +101,9 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 			}
 			return trigger.Result{}, false
 		}
-		credential = value
-		cleanup = release
+		credential = derived.Bearer
+		cleanup = derived.Cleanup
+		s.registerScrub(derived.Scrub)
 	}
 	defer cleanup()
 	res, err := trigger.Poll(trigger.Client, spec, credential, r.Name, prior)
@@ -113,35 +125,40 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 // credentials retain their verbatim bearer behavior. Typed credentials are
 // derived by the trusted supervisor, and only the type's explicit bearer
 // surface leaves this function -- never its stored root secret. The caller
-// must release derived material immediately after the poll.
-func (s *Supervisor) triggerCredential(name string) (string, func(), error) {
+// must run Cleanup immediately after the poll and register Scrub with the
+// supervisor's own log scrubber.
+func (s *Supervisor) triggerCredential(name string) (*creds.Derived, error) {
 	agent, err := config.Load(s.Dir)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	key, err := creds.LoadKey(s.Dir)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	store, err := creds.Read(s.Dir, key)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	value, ok := store[name]
 	if !ok {
-		return "", nil, errors.New("not present in the credentials store")
+		return nil, errors.New("not present in the credentials store")
 	}
 	spec, typed := agent.Credentials[name]
 	if !typed {
-		return value, func() {}, nil
+		return &creds.Derived{
+			Bearer:  value,
+			Scrub:   map[string]string{name: value},
+			Cleanup: func() {},
+		}, nil
 	}
 	derived, err := creds.Derive(name, spec, value)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	if derived.Bearer == "" {
 		derived.Cleanup()
-		return "", nil, fmt.Errorf("credential type %s does not produce bearer material", spec.Type)
+		return nil, fmt.Errorf("credential type %s does not produce bearer material", spec.Type)
 	}
-	return derived.Bearer, derived.Cleanup, nil
+	return derived, nil
 }

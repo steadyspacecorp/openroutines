@@ -26,11 +26,13 @@ func testKeyPEM(t *testing.T) string {
 }
 
 // githubStub serves the three-call mint flow plus revocation. installations
-// is mutable so tests can present zero, one, or two installations.
+// is mutable so tests can present zero, one, or two installations;
+// failBotLookup makes the post-mint identity call fail.
 type githubStub struct {
 	installations []map[string]any
 	revocations   int
 	mintBodies    []string
+	failBotLookup bool
 }
 
 func (g *githubStub) server(t *testing.T) *httptest.Server {
@@ -49,6 +51,11 @@ func (g *githubStub) server(t *testing.T) *httptest.Server {
 			g.mintBodies = append(g.mintBodies, string(body[:n]))
 			payload = map[string]any{"token": "test-installation-token", "expires_at": "2099-01-01T00:00:00Z"}
 		case r.URL.Path == "/users/test-app[bot]":
+			if g.failBotLookup {
+				w.WriteHeader(500)
+				_, _ = w.Write([]byte(`{"message":"boom"}`))
+				return
+			}
 			payload = map[string]any{"id": 4242}
 		case r.URL.Path == "/installation/token" && r.Method == "DELETE":
 			g.revocations++
@@ -133,6 +140,18 @@ func TestDeriveGitHubAppRefusesAmbiguity(t *testing.T) {
 	}
 	if stub.revocations+stub2.revocations != 0 {
 		t.Fatal("no token should have been minted, so nothing should revoke")
+	}
+}
+
+func TestDeriveGitHubAppRevokesOnPartialFailure(t *testing.T) {
+	stub := &githubStub{installations: oneInstallation(), failBotLookup: true}
+	srv := stub.server(t)
+	defer srv.Close()
+	if _, err := deriveGitHubApp(Spec{Type: "github_app", AppID: "456"}, testKeyPEM(t), srv.URL); err == nil {
+		t.Fatal("a failed bot lookup must fail derivation")
+	}
+	if stub.revocations != 1 {
+		t.Fatalf("a token minted by a failed derivation must be revoked, got %d revocations", stub.revocations)
 	}
 }
 

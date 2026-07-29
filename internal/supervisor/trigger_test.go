@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -292,5 +293,41 @@ func TestTriggerDerivesTypedCredential(t *testing.T) {
 	}
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("unchanged polls must not fire, got %d runs", got)
+	}
+	if got := scrub.Redact("derived-installation-token", s.secrets); strings.Contains(got, "derived-installation-token") {
+		t.Fatalf("derived bearer must be redactable in supervisor logs, got %q", got)
+	}
+}
+
+// A trigger credential the routine's own credentials list does not grant is
+// refused before it is materialized -- the rule `check` errors on, enforced
+// again at runtime.
+func TestTriggerRefusesUnlistedCredential(t *testing.T) {
+	srv := newTriggerServer("v1")
+	defer srv.Close()
+	dir := fixture(t, "ok")
+	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.Write(dir, key, map[string]string{"gh_token": "a-raw-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	writeTriggerRoutine(t, dir, srv.URL, "  credential: gh_token\n  interval: 1m\n")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0)
+	s.Tick(ctx, t0.Add(1*time.Minute))
+	s.Tick(ctx, t0.Add(2*time.Minute))
+	if srv.pollCount() != 0 {
+		t.Fatalf("an unlisted trigger credential must never reach the wire, got %d polls", srv.pollCount())
+	}
+	if got := runCount(t, dir); got != 0 {
+		t.Fatalf("refused poll must not fire, got %d runs", got)
 	}
 }
