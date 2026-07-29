@@ -14,7 +14,7 @@ var ErrRoutineLocked = errors.New("routine attempt already in flight")
 // LockRoutine takes the per-routine kernel lock (design decision "Overlap"): a
 // non-blocking flock on .openroutines-tmp/locks/<name>.lock, held for the
 // whole attempt lifecycle -- snapshot through import and settlement. Both
-// the manual path (routines run|test) and the supervisor cross this seam,
+// the manual path (routines run) and the supervisor cross this seam,
 // which is exactly what it exists for: a manual run colliding with the
 // supervisor's own run of the same routine would double external actions
 // and race the import. The kernel drops the lock if the holder dies.

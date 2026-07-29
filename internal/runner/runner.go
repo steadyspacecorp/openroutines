@@ -1,5 +1,5 @@
 // Package runner executes one routine attempt: the per-run pipeline shared by
-// `openroutines routines run|test` and the supervisor.
+// `openroutines routines run` and the supervisor.
 //
 // The pipeline (design decision "Appendix: one run, end to end"): assemble a
 // disposable run workspace (repo files plus a staged copy of memory, no git
@@ -56,7 +56,6 @@ type Meta struct {
 	AttemptID      string
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
-	DryRun         bool   // routines test: acting tools denied, credentials withheld
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -119,7 +118,7 @@ func (s *Staging) Consumed() bool {
 	return err == nil
 }
 
-// Result is a completed manual run (routines run|test).
+// Result is a completed manual run (routines run).
 type Result struct {
 	RunID    string
 	Outcome  Outcome
@@ -196,7 +195,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		return nil, nil, err
 	}
 
-	secrets, err := resolveCredentials(dir, agent, r, model, meta.DryRun)
+	secrets, err := resolveCredentials(dir, agent, r, model)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -253,11 +252,6 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		"OPENROUTINES_RUN_ID=" + meta.RunID,
 		"OPENROUTINES_ATTEMPT_ID=" + meta.AttemptID,
 	}
-	if meta.DryRun {
-		// Skills and prompts can gate on this (e.g. a reporting helper that
-		// would otherwise write to an external system).
-		env = append(env, "OPENROUTINES_DRY_RUN=1")
-	}
 	if meta.ScheduledFor != "" {
 		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor)
 	}
@@ -274,8 +268,8 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	for _, k := range slices.Sorted(maps.Keys(secrets.env)) {
 		env = append(env, k+"="+secrets.env[k])
 	}
-	// Non-secret variables from openroutines.yml, injected into every run (dry runs
-	// included). On a name collision the credential wins; check flags it.
+	// Non-secret variables from openroutines.yml are injected into every run.
+	// On a name collision the credential wins; check flags it.
 	for _, k := range slices.Sorted(maps.Keys(agent.Variables)) {
 		if _, taken := secrets.env[strings.ToUpper(k)]; taken {
 			continue
@@ -418,9 +412,9 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	return res, staging, nil
 }
 
-// Run executes routine `name` manually. keep=true imports memory writes and
-// records the run (routines run); keep=false discards everything (test).
-func Run(dir, name string, keep bool) (*Result, error) {
+// Run executes routine `name` manually. noMemory discards staged memory
+// writes and the run record after the otherwise ordinary run completes.
+func Run(dir, name string, noMemory bool) (*Result, error) {
 	agent, err := config.Load(dir)
 	if err != nil {
 		return nil, fmt.Errorf("not an agent repository: %w", err)
@@ -438,15 +432,15 @@ func Run(dir, name string, keep bool) (*Result, error) {
 	}
 	defer release()
 	runID := newRunID()
-	exec, staging, err := Execute(context.Background(), dir, agent, r, Meta{RunID: runID, AttemptID: "attempt_01", DryRun: !keep})
+	exec, staging, err := Execute(context.Background(), dir, agent, r, Meta{RunID: runID, AttemptID: "attempt_01"})
 	if err != nil {
 		return nil, err
 	}
 	defer staging.Cleanup()
 
 	res := &Result{RunID: runID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
-	if !keep {
-		return res, nil // test: discard staging, record nothing
+	if noMemory {
+		return res, nil
 	}
 
 	settlement, err := Settle(dir, r, staging, exec, Meta{RunID: runID, AttemptID: "attempt_01"}, "", nil)
@@ -638,14 +632,14 @@ func (s *runSecrets) release() {
 // injects verbatim under its uppercase name; a typed credential (see
 // design decision "Credentials have types") is derived by the trusted runner and
 // injects its type's surface -- the stored root secret never enters the run.
-func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string, dryRun bool) (*runSecrets, error) {
+func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (*runSecrets, error) {
 	provider := strings.SplitN(model, "/", 2)[0]
 	providerKey := creds.ProviderKeyName(provider)
 	out := &runSecrets{env: map[string]string{}, scrub: map[string]string{}}
 
 	key, keyErr := creds.LoadKey(dir)
 	if keyErr != nil {
-		if len(r.FM.Credentials) > 0 && !dryRun {
+		if len(r.FM.Credentials) > 0 {
 			return nil, fmt.Errorf("routine declares credentials but %v", keyErr)
 		}
 		// No store: opencode may still have its own auth for the provider.
@@ -655,37 +649,32 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 	if err != nil {
 		return nil, err
 	}
-	if !dryRun {
-		// Dry runs never receive the routine's secrets: nothing real can be
-		// authenticated against, whatever the model decides to try. Derived
-		// credentials follow the same rule -- nothing is minted.
-		for _, name := range r.FM.Credentials {
-			v, present := store[name]
-			if !present {
-				return nil, fmt.Errorf("routine declares credential %q, not present in %s", name, creds.FileName)
+	for _, name := range r.FM.Credentials {
+		v, present := store[name]
+		if !present {
+			return nil, fmt.Errorf("routine declares credential %q, not present in %s", name, creds.FileName)
+		}
+		spec, typed := agent.Credentials[name]
+		if !typed {
+			if err := out.setEnv(strings.ToUpper(name), v); err != nil {
+				return nil, err
 			}
-			spec, typed := agent.Credentials[name]
-			if !typed {
-				if err := out.setEnv(strings.ToUpper(name), v); err != nil {
-					return nil, err
-				}
-				out.scrub[name] = v
-				continue
-			}
-			derived, err := creds.Derive(name, spec, v)
-			if err != nil {
+			out.scrub[name] = v
+			continue
+		}
+		derived, err := creds.Derive(name, spec, v)
+		if err != nil {
+			out.release()
+			return nil, err
+		}
+		out.cleanup = append(out.cleanup, derived.Cleanup)
+		for _, k := range slices.Sorted(maps.Keys(derived.Env)) {
+			if err := out.setEnv(k, derived.Env[k]); err != nil {
 				out.release()
 				return nil, err
 			}
-			out.cleanup = append(out.cleanup, derived.Cleanup)
-			for _, k := range slices.Sorted(maps.Keys(derived.Env)) {
-				if err := out.setEnv(k, derived.Env[k]); err != nil {
-					out.release()
-					return nil, err
-				}
-			}
-			maps.Copy(out.scrub, derived.Scrub)
 		}
+		maps.Copy(out.scrub, derived.Scrub)
 	}
 	if v, present := store[providerKey]; present {
 		if err := out.setEnv(strings.ToUpper(providerKey), v); err != nil {
@@ -795,7 +784,7 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 
 // The standing instruction lives in instruction.md -- editable prose,
 // compiled into the binary. Dynamic values and the conditional blocks
-// (dry-run, event recording, delivery inbox) render through text/template;
+// (event recording, delivery inbox) render through text/template;
 // the permission frontmatter stays code-generated because rule order is
 // load-bearing.
 //
@@ -809,7 +798,6 @@ type instructionData struct {
 	Description   string
 	RoutineName   string
 	RunID         string
-	DryRun        bool
 	RecordsEvents bool
 	IsConsumer    bool
 	Inbox         string
@@ -842,24 +830,10 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	fmt.Fprintf(&b, "description: Generated for routine %s -- derived from frontmatter, do not edit\n", r.Name)
 	b.WriteString("mode: primary\n")
 	b.WriteString("permission:\n")
-	if meta.DryRun {
-		// Dry run: deny-all first, then allow only what reading memory and
-		// writing the (discarded) staged copy requires. Permission keys are
-		// wildcard patterns over the underlying tool name -- built-ins,
-		// custom tools, and MCP tools alike -- so "*" closes the whole
-		// space, not just the three acting tools we can name. Order
-		// matters: last matching rule wins.
-		b.WriteString("  \"*\": deny\n")
-		for _, tool := range []string{"read", "grep", "glob", "list", "edit", "write", "patch", "todowrite", "todoread"} {
-			fmt.Fprintf(&b, "  %s: allow\n", tool)
-		}
-	}
 	// Web access is a grant, not a default: opencode allows webfetch out of
 	// the box, and fetched content is model context -- a prompt-injection
 	// vector. Both web tools get an explicit rule every run, deny unless the
-	// routine's frontmatter opts in. Emitted after the dry-run wildcard so
-	// an opted-in routine can rehearse its reads (last matching rule wins);
-	// everything a dry run must not do stays closed by deny-all.
+	// routine's frontmatter opts in.
 	for _, w := range []struct {
 		tool    string
 		granted bool
@@ -873,13 +847,10 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	// MCP servers are grants too: a configured server's tools reach a run
 	// only when the routine's frontmatter names the server. opencode
 	// registers MCP tools as <server>_<tool>, so one glob per configured
-	// server closes or opens its whole surface. Dry runs never get MCP
-	// regardless of grant -- the tools act on external systems, which a
-	// rehearsal must not do (credentials are withheld anyway; this makes
-	// the denial structural rather than an auth failure).
+	// server closes or opens its whole surface.
 	for _, server := range servers {
 		action := "deny"
-		if !meta.DryRun && slices.Contains(r.FM.MCP, server) {
+		if slices.Contains(r.FM.MCP, server) {
 			action = "allow"
 		}
 		fmt.Fprintf(&b, "  %q: %s\n", server+"_*", action)
@@ -896,7 +867,6 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 		Description:   strings.TrimSpace(agent.Description),
 		RoutineName:   r.Name,
 		RunID:         meta.RunID,
-		DryRun:        meta.DryRun,
 		RecordsEvents: r.FM.RecordsEvents(),
 		IsConsumer:    r.FM.IsConsumer(),
 		Inbox:         memory.InboxFileName,
@@ -912,8 +882,8 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 // as a run would, without running anything. check uses it to validate
 // routine wiring -- frontmatter through generated definition, MCP rules
 // included -- offline, with no provider key and no Docker.
-func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string, dryRun bool) (string, error) {
-	return renderDefinition(agent, r, servers, Meta{RunID: "run_check", AttemptID: "attempt_00", DryRun: dryRun})
+func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string) (string, error) {
+	return renderDefinition(agent, r, servers, Meta{RunID: "run_check", AttemptID: "attempt_00"})
 }
 
 // variablesLine renders the agent's variable names for the standing
