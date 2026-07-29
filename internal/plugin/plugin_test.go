@@ -9,52 +9,61 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
-func examples(t *testing.T, name string) string {
+func fixture(t *testing.T, name string) string {
 	t.Helper()
-	return filepath.Join("..", "..", "examples", "plugins", name)
+	return filepath.Join("..", "..", "testdata", "plugins", name)
 }
 
-// The reference plugins are the fixtures: each exercises a different slice
-// of the format, and this test is what keeps them loadable.
-func TestLoadReferencePlugins(t *testing.T) {
-	steady, err := Load(examples(t, "steady"), nil)
+// The synthetic fixtures cover the plugin feature matrix: each exercises a
+// different slice of the format, and this test is what keeps them loadable.
+func TestLoadFixturePlugins(t *testing.T) {
+	reporter, err := Load(fixture(t, "reporter"), nil)
 	if err != nil {
-		t.Fatalf("steady: %v", err)
+		t.Fatalf("reporter: %v", err)
 	}
-	if len(steady.Routines) != 2 || len(steady.Skills) != 2 || len(steady.Stubs) != 1 {
-		t.Fatalf("steady shape: %d routines, %d skills, %d stubs", len(steady.Routines), len(steady.Skills), len(steady.Stubs))
+	if len(reporter.Routines) != 1 || len(reporter.Skills) != 1 || len(reporter.Stubs) != 0 {
+		t.Fatalf("reporter shape: %d routines, %d skills, %d stubs", len(reporter.Routines), len(reporter.Skills), len(reporter.Stubs))
 	}
-	if _, ok := steady.Manifest.Credentials["steady_token"]; !ok {
-		t.Fatal("steady manifest missing steady_token")
+	if _, ok := reporter.Manifest.Credentials["reporter_token"]; !ok {
+		t.Fatal("reporter manifest missing reporter_token")
+	}
+	if _, ok := reporter.Manifest.MCP["reporter_feed"]; !ok {
+		t.Fatal("reporter manifest missing the reporter_feed mcp declaration")
 	}
 
-	slack, err := Load(examples(t, "slack"), nil)
+	watcher, err := Load(fixture(t, "watcher"), nil)
 	if err != nil {
-		t.Fatalf("slack: %v", err)
+		t.Fatalf("watcher: %v", err)
 	}
-	if len(slack.Routines) != 1 || len(slack.Skills) != 1 {
-		t.Fatalf("slack shape: %d routines, %d skills", len(slack.Routines), len(slack.Skills))
+	if len(watcher.Routines) != 1 || len(watcher.Skills) != 0 || len(watcher.Stubs) != 1 {
+		t.Fatalf("watcher shape: %d routines, %d skills, %d stubs", len(watcher.Routines), len(watcher.Skills), len(watcher.Stubs))
+	}
+	if watcher.Manifest.Credentials["watcher_app_key"].Type != "github_app" {
+		t.Fatal("watcher credential should be typed github_app")
+	}
+	if _, ok := watcher.Manifest.Variables["watch_repos"]; !ok {
+		t.Fatal("watcher manifest missing the watch_repos variable")
 	}
 
-	docs, err := Load(examples(t, "github-docs"), nil)
+	toolkit, err := Load(fixture(t, "toolkit"), nil)
 	if err != nil {
-		t.Fatalf("github-docs: %v", err)
+		t.Fatalf("toolkit: %v", err)
 	}
-	if len(docs.Routines) != 1 || len(docs.Skills) != 0 {
-		t.Fatalf("github-docs shape: %d routines, %d skills", len(docs.Routines), len(docs.Skills))
-	}
-	if docs.Manifest.Credentials["github_app_private_key"].Type != "github_app" {
-		t.Fatal("github-docs credential should be typed github_app")
-	}
-	if _, ok := docs.Manifest.Variables["docs_repos"]; !ok {
-		t.Fatal("github-docs manifest missing the docs_repos variable")
+	if len(toolkit.Routines) != 0 || len(toolkit.Skills) != 1 {
+		t.Fatalf("toolkit shape: %d routines, %d skills", len(toolkit.Routines), len(toolkit.Skills))
 	}
 
 	// The grant summary must state the authorities the bundle asks for.
-	sum := docs.Summary()
-	for _, want := range []string{"doc-watch", "github_app_private_key", "typed: github_app", "docs_repos"} {
+	sum := watcher.Summary()
+	for _, want := range []string{"watcher", "watcher_app_key", "typed: github_app", "watch_repos"} {
 		if !strings.Contains(sum, want) {
-			t.Fatalf("github-docs summary missing %q:\n%s", want, sum)
+			t.Fatalf("watcher summary missing %q:\n%s", want, sum)
+		}
+	}
+	sum = reporter.Summary()
+	for _, want := range []string{"reporter_feed", "https://mcp.example.invalid/feed", "auth via credential reporter_token"} {
+		if !strings.Contains(sum, want) {
+			t.Fatalf("reporter summary missing %q:\n%s", want, sum)
 		}
 	}
 }
