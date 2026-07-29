@@ -21,6 +21,10 @@ const OpenCodeFileName = "opencode.json"
 // zero value is the view of an agent with no opencode.json.
 type OpenCode struct {
 	cfg map[string]any
+
+	// Missing distinguishes an absent file from an empty one: absent means
+	// the scaffolded baseline policy is gone, which check warns about.
+	Missing bool
 }
 
 // LoadOpenCode parses dir's opencode.json. A missing file is an agent
@@ -30,7 +34,7 @@ type OpenCode struct {
 func LoadOpenCode(dir string) (*OpenCode, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, OpenCodeFileName))
 	if os.IsNotExist(err) {
-		return &OpenCode{}, nil
+		return &OpenCode{Missing: true}, nil
 	}
 	if err != nil {
 		return &OpenCode{}, err
