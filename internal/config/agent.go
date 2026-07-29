@@ -109,12 +109,21 @@ func Load(dir string) (*Agent, error) {
 
 // Save writes the configuration back to the file dir actually has -- a
 // legacy-named agent keeps its name until its operator renames it.
+// Two-space indentation, matching the scaffold template and routine
+// frontmatter: this is hand-edited, reviewed config, and a tool that
+// reformats it on every run undercuts that (#65) -- yaml.v3's default
+// is 4.
 func (a *Agent) Save(dir string) error {
-	out, err := yaml.Marshal(a)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(a); err != nil {
 		return err
 	}
-	return os.WriteFile(Path(dir), out, 0o644)
+	if err := enc.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(Path(dir), buf.Bytes(), 0o644)
 }
 
 // isPlaceholder reports whether a value is still a {{SCAFFOLD}} placeholder.

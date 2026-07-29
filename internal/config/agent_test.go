@@ -64,6 +64,35 @@ func TestPathResolvesLegacySpellings(t *testing.T) {
 	}
 }
 
+// Save keeps the scaffold's 2-space indentation: this file is hand-edited,
+// reviewed config, and configure must not reformat it (#65).
+func TestSaveUsesTwoSpaceIndent(t *testing.T) {
+	dir := t.TempDir()
+	a := Agent{
+		Name:        "a",
+		Description: "d",
+		Owner:       Owner{Name: "o", Email: "o@example.com"},
+		Timezone:    "UTC",
+		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
+		Variables:   map[string]string{"product_repo": "acme/widgets"},
+	}
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"owner:\n  name: o", "defaults:\n  model: anthropic/claude-sonnet-5", "variables:\n  product_repo: acme/widgets"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("saved yaml should nest with 2 spaces, missing %q:\n%s", want, raw)
+		}
+	}
+	if strings.Contains(string(raw), "    ") {
+		t.Fatalf("saved yaml contains 4-space indentation:\n%s", raw)
+	}
+}
+
 // openroutines.yml decodes strictly: a misspelled key is an error, not silently
 // ignored configuration.
 func TestLoadRejectsUnknownKeys(t *testing.T) {
