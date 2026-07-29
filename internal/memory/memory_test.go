@@ -301,7 +301,9 @@ func TestGitChildEnvExcludesSupervisorSecrets(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("GIT_SSL_CAINFO", "/etc/ssl/certs/corporate-proxy.pem")
 
-	env := newGitCmd(t.TempDir(), []string{"status"}).Env
+	cmd := newGitCmd(t.TempDir(), []string{"status"})
+	defer cmd.cancel()
+	env := cmd.Env
 
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "OPENROUTINES_") {
@@ -329,7 +331,9 @@ func TestGitChildEnvCarriesDeployKeySSHCommand(t *testing.T) {
 	t.Cleanup(func() { sshCommand = prev })
 	sshCommand = "ssh -i /root/.ssh/openroutines_deploy"
 
-	if !slices.Contains(newGitCmd(t.TempDir(), []string{"push"}).Env, "GIT_SSH_COMMAND="+sshCommand) {
+	cmd := newGitCmd(t.TempDir(), []string{"push"})
+	defer cmd.cancel()
+	if !slices.Contains(cmd.Env, "GIT_SSH_COMMAND="+sshCommand) {
 		t.Error("GIT_SSH_COMMAND missing from git child env")
 	}
 }
