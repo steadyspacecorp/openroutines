@@ -16,11 +16,13 @@ import (
 // fakeOpencode is a stand-in for the real binary: it reads fake-mode from
 // its own directory (the workspace is allow-list built and carries no test
 // scaffolding) to decide whether to succeed (writing memory) or fail. The
-// probe mode clones the memory branch from origin at spawn time -- exactly
-// what a replacement container would materialize if this attempt killed the
-// supervisor.
+// probe mode clones the memory branch from origin at the first spawn --
+// exactly what a replacement container would materialize if that attempt
+// killed the supervisor. Only the first: the snapshot has to be the moment
+// one attempt started, not the moment the last one did.
 const fakeOpencode = `#!/bin/sh
-mode=$(cat "$(dirname "$0")/fake-mode" 2>/dev/null || echo ok)
+d=$(dirname "$0")
+mode=$(cat "$d/fake-mode" 2>/dev/null || echo ok)
 # Every mode leaves the session storage a real opencode leaves in the
 # attempt home -- the surface the runner captures token usage from.
 mkdir -p .home/.local/share/opencode/storage/message/ses_fake
@@ -36,8 +38,7 @@ case "$mode" in
   consume) cp inbox.md memory/inbox-copy.md
      : > CONSUMED
      echo "consumed" ;;
-  probe) rm -rf "$(dirname "$0")/replacement"
-     git clone -q -b memory "$(cat "$(dirname "$0")/origin")" "$(dirname "$0")/replacement" || true
+  probe) [ -d "$d/replacement" ] || git clone -q -b memory "$(cat "$d/origin")" "$d/replacement" || true
      echo "probed" ;;
   *) mkdir -p memory/ledgers
      echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
@@ -134,11 +135,11 @@ func withOrigin(t *testing.T, dir string) {
 }
 
 // replacementState is the scheduling state a replacement container would read
-// after materializing memory from origin, as of the moment the last probe
-// attempt's model process started.
-func replacementState(t *testing.T) *schedule.State {
+// for a routine after materializing memory from origin, as of the moment the
+// first probe attempt's model process started.
+func replacementState(t *testing.T, name string) *schedule.State {
 	t.Helper()
-	st, err := schedule.Load(filepath.Join(fakeBinDir(), "replacement", "state"), "every-minute")
+	st, err := schedule.Load(filepath.Join(fakeBinDir(), "replacement", "state"), name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,12 +585,46 @@ func TestAttemptIsDurableBeforeTheModelStarts(t *testing.T) {
 	s.Tick(ctx, t0)                     // register
 	s.Tick(ctx, t0.Add(61*time.Second)) // mint the run, attempt 1
 
-	seen := replacementState(t)
+	seen := replacementState(t, "every-minute")
 	if seen == nil || seen.Pending == nil {
 		t.Fatalf("a replacement mid-attempt should see the pending run, got %+v", seen)
 	}
 	if seen.Pending.Attempts != 1 {
 		t.Fatalf("a replacement mid-attempt should see attempts=1, got %d", seen.Pending.Attempts)
+	}
+}
+
+// The reservation belongs to the attempt, not to the tick that scheduled it:
+// a container lost mid-attempt must cost a retry only for the run that was
+// actually running. Otherwise one routine that reliably kills its container
+// drains the budget of everything else that happened to be due alongside it
+// -- and catch-up after downtime makes every routine due at once.
+func TestOnlyTheRunningAttemptIsReserved(t *testing.T) {
+	dir := fixture(t, "probe")
+	if err := os.WriteFile(filepath.Join(dir, "routines", "second.md"), []byte(
+		"---\nschedule: \"* * * * *\"\n---\nDo the other fake thing.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0)                     // register both
+	s.Tick(ctx, t0.Add(61*time.Second)) // mint both, dispatch serially
+
+	// The snapshot is the first routine's spawn: both runs exist durably, but
+	// only the one that started has spent an attempt.
+	reserved := 0
+	for _, name := range []string{"every-minute", "second"} {
+		seen := replacementState(t, name)
+		if seen == nil || seen.Pending == nil {
+			t.Fatalf("%s should be pending in the replacement, got %+v", name, seen)
+		}
+		reserved += seen.Pending.Attempts
+	}
+	if reserved != 1 {
+		t.Fatalf("a lost container should cost one attempt, not one per routine due that tick: %d reserved", reserved)
 	}
 }
 
@@ -657,9 +692,42 @@ func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
 
 	s.Tick(ctx, t0.Add(time.Minute)) // dispatches the orphaned pending run
 
-	seen := replacementState(t)
+	seen := replacementState(t, "every-minute")
 	if seen == nil || seen.Pending == nil || seen.Pending.RunID != "run_orphaned" {
 		t.Fatalf("the run's identity should have reached origin before it acted, replacement sees %+v", seen)
+	}
+}
+
+// A supervisor that cannot record what it is about to do must not do it --
+// and has to say so where a person will look. A stale index lock is what a
+// killed git leaves behind; on logs alone the agent would just quietly stop
+// running anything.
+func TestFailedIntentCommitHoldsRunsAndRecordsATask(t *testing.T) {
+	dir := fixture(t, "ok")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0) // register
+
+	cmd := exec.Command("git", "rev-parse", "--absolute-git-dir")
+	cmd.Dir = filepath.Join(dir, "memory")
+	gitDir, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(strings.TrimSpace(string(gitDir)), "index.lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s.Tick(ctx, t0.Add(61*time.Second))
+
+	if got := runCount(t, dir); got != 0 {
+		t.Fatalf("an intent that cannot be committed must not dispatch, got %d runs", got)
+	}
+	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
+	if !strings.Contains(tasks, "intent commit failed") {
+		t.Fatalf("a halted supervisor should hand the blocker to a human: %q", tasks)
 	}
 }
 

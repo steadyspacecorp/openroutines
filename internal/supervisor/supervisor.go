@@ -60,6 +60,7 @@ type Supervisor struct {
 	syncBlocked   bool          // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool          // blocker already raised for the current sync problem
 	unreachWarned bool
+	commitWarned  bool              // intent commit failing: dispatch is halted, someone must look
 	loadFailed    map[string]string // routine name -> the load failure already recorded
 	secrets       map[string]string // the supervisor's own secrets, for redacting its output
 
@@ -318,52 +319,24 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		if now.Before(schedule.NextRetryAt(st.Pending)) {
 			continue // backing off after a failed attempt
 		}
-		// Reserve the attempt here, so the increment rides the intent commit
-		// and push below: no model process starts unless the attempt that
-		// spawned it is durable. A container lost mid-attempt is replaced by
-		// one that reads this record, and the budget drains as it should.
-		st.Pending.Attempts++
-		st.Pending.LastAttemptAt = now
-		if err := st.Save(s.stateDir()); err != nil {
-			s.Log.Printf("%s: %v", r.Name, err)
-			continue
-		}
 		due = append(due, dispatch{r, st})
 	}
 
-	// Persist-before-act: intent must be durable before any run acts. The
-	// commit is unconditional -- an earlier tick that wrote state and then
-	// failed to commit it leaves the record on disk and nowhere else, and no
-	// later tick would mint anything to notice. What the worktree carries is
-	// the intent; Commit no-ops on a clean tree.
-	intent, err := s.mem.Commit("Record pending runs")
-	if err != nil {
-		s.Log.Printf("intent commit failed: %v", err)
+	// This tick's own bookkeeping -- minted pending records, refreshed trigger
+	// baselines, abandonments -- has to be durable before anything acts on it.
+	if !s.commitIntent("Record scheduling state") {
 		return
 	}
-	if !s.noOrigin && (intent != "" || len(due) > 0) && !s.syncBlocked {
-		if err := s.mem.Push(); err != nil {
-			// An identity that isn't durable is how duplicates happen: without
-			// a pushed intent, no new logical run starts.
-			s.blockOnce("push", "intent push failed -- runs held until origin is reachable: "+err.Error(), &s.unreachWarned)
-			return
-		}
-		s.recover("push", "push to origin recovered -- runs resumed", &s.unreachWarned)
-	}
 
-	// Phase 2: execute serially, in due order.
+	// Phase 2: execute serially, in due order. Each attempt reserves itself
+	// just before it starts (see execute), so a lost container costs a retry
+	// only for the run that was actually running.
 	sort.Slice(due, func(i, j int) bool {
 		return due[i].st.Pending.ScheduledFor.Before(due[j].st.Pending.ScheduledFor)
 	})
-	for i, d := range due {
+	for _, d := range due {
 		if ctx.Err() != nil {
-			// Shutting down: stop launching, and give back the attempts
-			// reserved for runs that never started -- a redeploy must not
-			// spend a run's retry budget.
-			for _, held := range due[i:] {
-				s.releaseAttempt(held.r.Name, held.st)
-			}
-			return
+			return // shutting down: stop launching, nothing is reserved yet
 		}
 		// Heartbeat before every run, not once per tick: a tick runs every due
 		// routine to completion, so its wall time is unbounded and a per-tick
@@ -379,18 +352,43 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	}
 }
 
-// releaseAttempt gives back an attempt that was reserved in the intent phase
-// but never spawned a model process -- a shutdown, a lock held by a manual
-// run. The reservation is durable by design, so returning it is an ordinary
-// state change: the next tick's intent commit (or the shutdown commit)
-// carries it.
-func (s *Supervisor) releaseAttempt(name string, st *schedule.State) {
-	if st.Pending == nil {
-		return
+// commitIntent makes the memory worktree durable before anything acts on it,
+// and reports whether it got there. Persist-before-act rests on the data, not
+// on control flow: a tick that wrote state and then failed to commit it leaves
+// the record on disk and nowhere else, and no later tick would mint anything
+// to notice. So whatever the worktree carries is the intent -- Commit no-ops
+// on a clean tree, and the normal path costs nothing.
+func (s *Supervisor) commitIntent(message string) bool {
+	sha, err := s.mem.Commit(message)
+	if err != nil {
+		// Dispatch halts until this clears, and only a person can clear it:
+		// a supervisor that cannot record what it is about to do must not do it.
+		s.blockOnce("commit", "intent commit failed -- runs held: "+err.Error(), &s.commitWarned)
+		return false
 	}
-	st.Pending.Attempts--
-	if err := st.Save(s.stateDir()); err != nil {
-		s.Log.Printf("%s: %v", name, err)
+	s.recover("commit", "intent commit recovered -- runs resumed", &s.commitWarned)
+	if s.noOrigin || s.syncBlocked || sha == "" {
+		return true
+	}
+	if err := s.mem.Push(); err != nil {
+		// An identity that isn't durable is how duplicates happen: without
+		// a pushed intent, no new logical run starts.
+		s.blockOnce("push", "intent push failed -- runs held until origin is reachable: "+err.Error(), &s.unreachWarned)
+		return false
+	}
+	s.recover("push", "push to origin recovered -- runs resumed", &s.unreachWarned)
+	return true
+}
+
+// reserve claims the attempt a routine is about to run. Returns the give-back
+// for an attempt that never becomes a run: a shutdown, a failed intent commit.
+func reserve(p *schedule.Pending, now time.Time) (giveBack func()) {
+	prior := p.LastAttemptAt
+	p.Attempts++
+	p.LastAttemptAt = now
+	return func() {
+		p.Attempts--
+		p.LastAttemptAt = prior
 	}
 }
 
@@ -425,7 +423,6 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		} else {
 			s.Log.Printf("%s: routine lock: %v", r.Name, lockErr)
 		}
-		s.releaseAttempt(r.Name, st)
 		return
 	}
 	defer release()
@@ -433,10 +430,28 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	agent, err := config.Load(s.Dir)
 	if err != nil {
 		s.Log.Printf("%s: %v", r.Name, err)
-		s.releaseAttempt(r.Name, st)
 		return
 	}
+
+	// Reserve the attempt before spawning anything, and make the reservation
+	// durable in its own right: no model process starts unless the attempt
+	// that spawned it is committed and pushed. A container lost mid-attempt is
+	// replaced by one that reads this record, so the budget drains as it
+	// should instead of retrying forever at attempts: 0.
 	p := st.Pending
+	giveBack := reserve(p, now)
+	if err := st.Save(s.stateDir()); err != nil {
+		s.Log.Printf("%s: %v", r.Name, err)
+		return
+	}
+	if !s.commitIntent(fmt.Sprintf("Reserve %s attempt %d (%s)", r.Name, p.Attempts, p.RunID)) {
+		giveBack()
+		if err := st.Save(s.stateDir()); err != nil {
+			s.Log.Printf("%s: %v", r.Name, err)
+		}
+		return
+	}
+
 	meta := runner.Meta{
 		RunID:          p.RunID,
 		AttemptID:      fmt.Sprintf("attempt_%02d", p.Attempts),
@@ -467,7 +482,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	settlement, serr := runner.Settle(s.Dir, r, staging, res, meta, detail, func(fin *runner.Settlement) {
 		switch {
 		case fin.Outcome == runner.Canceled:
-			p.Attempts--
+			giveBack()
 		case fin.Outcome == runner.Completed:
 			st.Watermark = p.CoveredThrough
 			st.Pending = nil

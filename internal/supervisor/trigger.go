@@ -43,6 +43,7 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 		// mirroring how a new consumer starts at the current commit.
 		if err := res.Next.Save(s.stateDir()); err != nil {
 			s.Log.Printf("%s: %v", r.Name, err)
+			return false
 		}
 		s.Log.Printf("%s: trigger baseline established", r.Name)
 		return false
