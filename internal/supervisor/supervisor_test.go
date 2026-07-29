@@ -25,6 +25,11 @@ printf '{"role":"assistant","modelID":"fake","tokens":{"input":100,"output":20,"
   > .home/.local/share/opencode/storage/message/ses_fake/msg_1.json
 case "$mode" in
   fail) echo "boom"; exit 1 ;;
+  slow) echo "$OPENROUTINES_RUN_ID" >> "$(dirname "$0")/started"
+     sleep 3
+     mkdir -p memory/ledgers
+     echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
+     echo "slept" ;;
   consume) cp inbox.md memory/inbox-copy.md
      : > CONSUMED
      echo "consumed" ;;
@@ -343,6 +348,99 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	}
 	if !s.syncBlocked {
 		t.Fatal("supervisor should be sync-blocked after a rewrite")
+	}
+}
+
+// Two instances, one origin. A tick has no bounded wall time -- every due
+// routine executes serially to completion -- so a lease heartbeated only at
+// the top of the tick goes stale while the holder is still working, and a
+// second instance booting into that window (a rolling deploy's overlap) reads
+// an expired lease and starts dispatching the very runs the first is running.
+// The heartbeat has to keep up with the work.
+func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
+	dir := fixture(t, "slow")
+	base := t.TempDir()
+	bare := filepath.Join(base, "origin.git")
+	run := func(cwd string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v: %s", args, err, out)
+		}
+	}
+	run(base, "git", "init", "-q", "-b", "main", "--bare", bare)
+
+	// Three routines due in the same tick: the tick takes several times one
+	// run's wall time, which is exactly the gap a per-tick heartbeat leaves.
+	writeRoutines := func(dir string) {
+		for _, name := range []string{"every-minute", "second", "third"} {
+			os.WriteFile(filepath.Join(dir, "routines", name+".md"), []byte(
+				"---\nschedule: \"* * * * *\"\n---\nDo the fake thing.\n"), 0o644)
+		}
+	}
+	writeRoutines(dir)
+	run(dir, "git", "remote", "add", "origin", bare)
+
+	holder := newSupervisor(t, dir)
+	// Scaled down, with room on both sides: runs sleep 3s, so a per-tick
+	// heartbeat is 7.5s old at the assertion below (expired) while a per-run
+	// one is 1.5s old (live) -- neither margin is close enough that a slow
+	// git push flips the verdict.
+	holder.leaseTTL = 6 * time.Second
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+	holder.Tick(ctx, t0) // register
+
+	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	started := filepath.Join(binDir, "started")
+	waitForRuns := func(n int) {
+		t.Helper()
+		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+			if got := strings.Count(readFile(t, started), "run_"); got >= n {
+				return
+			} else if time.Now().After(deadline) {
+				t.Fatalf("only %d of %d runs started", got, n)
+			}
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		holder.Tick(ctx, t0.Add(61*time.Second))
+	}()
+	waitForRuns(1) // intent is pushed: the second instance can adopt memory from origin
+
+	other := t.TempDir()
+	os.MkdirAll(filepath.Join(other, "routines"), 0o755)
+	os.WriteFile(filepath.Join(other, "openroutines.yml"), []byte(agentYAML), 0o644)
+	writeRoutines(other)
+	run(other, "git", "init", "-q", "-b", "main", ".")
+	run(other, "git", "remote", "add", "origin", bare)
+	second := newSupervisor(t, other)
+	second.InstanceID = "second-instance"
+	second.leaseTTL = holder.leaseTTL
+
+	waitForRuns(3)                      // the holder is deep into its tick
+	time.Sleep(1500 * time.Millisecond) // older than a per-tick heartbeat could survive
+
+	acquireCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	if err := second.acquireLease(acquireCtx); err == nil {
+		t.Fatal("second instance took a live lease while the first was mid-tick")
+	}
+	// The second instance's memory is the holder's, adopted from origin, so
+	// the ledger cannot say who ran what: count launches instead. Three
+	// routines are due, and only the lease holder may run them.
+	second.Tick(ctx, t0.Add(61*time.Second))
+	if got := strings.Count(readFile(t, started), "run_"); got != 3 {
+		t.Fatalf("second instance dispatched behind the lease holder: %d runs launched, want 3", got)
+	}
+
+	<-done
+	if got := strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_"); got != 3 {
+		t.Fatalf("lease holder should have run all 3 routines, got %d", got)
 	}
 }
 

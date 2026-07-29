@@ -51,7 +51,7 @@ Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEP
 
 A few properties fall out of the design (see [docs/design.md](design.md) for the reasoning):
 
-- **Run exactly one instance.** One agent, one runtime -- the agent is the sole writer to its memory branch, so there is nothing to scale horizontally. If a platform asks how many replicas, the answer is 1, and the supervisor enforces it with a lease: an accidental second instance waits instead of corrupting memory.
+- **Run exactly one instance.** One agent, one runtime -- the agent is the sole writer to its memory branch, so there is nothing to scale horizontally. If a platform asks how many replicas, the answer is 1, and the supervisor enforces it with a lease: an accidental second instance waits instead of corrupting memory. The lease is released on a clean shutdown, so an ordinary redeploy hands over immediately; an instance killed without SIGTERM leaves its lease to expire, and the replacement waits out the 30-minute TTL before it dispatches anything.
 - **Redeploys are safe.** A routine killed mid-run fires again on the next boot, and a scheduled moment that passes while the container is down runs late instead of never. Missed is recoverable; silently skipped is not.
 - **Memory survives.** Code rolls back with the image; memory lives on its own branch and persists, like a database, but versioned.
 - **No application ingress.** The shipped container listens on no ports. Routine output and run records go to stdout -- read them with `docker logs` or your platform's log tooling. This does not replace normal host and deployment access controls.

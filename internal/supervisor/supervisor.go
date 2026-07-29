@@ -50,9 +50,12 @@ type Supervisor struct {
 	loc           *time.Location
 	retention     time.Duration
 	lastTrim      time.Time
-	leaseSHA      string // CAS token: the lease blob we last wrote
-	syncBlocked   bool   // rewritten-history or conflict: stop adopting/pushing
-	syncWarned    bool   // blocker already raised for the current sync problem
+	leaseSHA      string        // CAS token: the lease blob we last wrote
+	leaseTTL      time.Duration // how long a lease survives without a heartbeat
+	leaseRenewed  time.Time     // wall clock of the last accepted heartbeat
+	leaseWarned   bool          // dispatch pause already announced for the current lease problem
+	syncBlocked   bool          // rewritten-history or conflict: stop adopting/pushing
+	syncWarned    bool          // blocker already raised for the current sync problem
 	unreachWarned bool
 	secrets       map[string]string // the supervisor's own secrets, for redacting its output
 
@@ -87,6 +90,7 @@ func New(dir string) (*Supervisor, error) {
 		InstanceID: memory.InstanceID(),
 		Log:        log.New(scrub.NewWriter(os.Stdout, secrets), "", log.LstdFlags|log.LUTC),
 		mem:        mem,
+		leaseTTL:   memory.LeaseTTL,
 		loc:        loc,
 		retention:  retention,
 		noOrigin:   !mem.HasOrigin(),
@@ -177,14 +181,17 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	// lease and pause dispatch entirely if we no longer hold it.
 	if !s.noOrigin {
 		s.syncOnce()
+		// Heartbeat before the sync verdict, not after: an instance that is
+		// blocked is still alive, and a lease that lapses while its holder
+		// runs would invite a replacement to start writing beside it.
+		if !s.renewLease() {
+			return
+		}
 		if s.syncBlocked {
 			// Rewritten history or a conflict needs a human. Dispatching
 			// anyway would take external actions under identities that exist
 			// only in this container -- lost on replacement, then re-run as
 			// duplicates. Same rule as an unreachable origin: hold.
-			return
-		}
-		if !s.renewLease(now) {
 			return
 		}
 	}
@@ -332,6 +339,16 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	for _, d := range due {
 		if ctx.Err() != nil {
 			return // shutting down: stop launching
+		}
+		// Heartbeat before every run, not once per tick: a tick runs every due
+		// routine to completion, so its wall time is unbounded and a per-tick
+		// heartbeat would leave the lease stale for as long as the work takes.
+		// Renewing here bounds staleness by one run -- which is why the TTL
+		// only has to outlast the longest supported timeout. Losing the lease
+		// means another instance is live: stop dispatching, like a blocked
+		// sync, rather than act as a second writer.
+		if !s.noOrigin && !s.leaseFresh() && !s.renewLease() {
+			return
 		}
 		s.execute(ctx, d.r, d.st, now)
 	}
@@ -561,12 +578,13 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 		eligible := lease == nil
 		if lease != nil {
 			expected = lease.SHA
-			eligible = lease.Holder == s.InstanceID || time.Since(lease.At) > memory.LeaseTTL
+			eligible = lease.Holder == s.InstanceID || time.Since(lease.At) > s.leaseTTL
 		}
 		if eligible {
-			sha, werr := s.mem.WriteLease(s.InstanceID, time.Now(), expected)
+			now := time.Now()
+			sha, werr := s.mem.WriteLease(s.InstanceID, now, expected)
 			if werr == nil {
-				s.leaseSHA = sha
+				s.holdLease(sha, now)
 				return nil
 			}
 			// CAS lost: someone else moved first. Loop and re-evaluate.
@@ -583,25 +601,59 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 }
 
 // renewLease heartbeats atomically against the lease we last wrote. Returns
-// false -- pause all dispatch -- when another live instance holds it.
-func (s *Supervisor) renewLease(now time.Time) bool {
+// false -- pause all dispatch -- when another live instance holds it. The
+// heartbeat carries wall-clock time, not the tick's time: liveness is about
+// this process still breathing, and staleness is judged against a real clock.
+func (s *Supervisor) renewLease() bool {
+	now := time.Now()
 	if sha, err := s.mem.WriteLease(s.InstanceID, now, s.leaseSHA); err == nil {
-		s.leaseSHA = sha
+		s.holdLease(sha, now)
 		return true
 	}
 	lease, err := s.mem.ReadLease()
-	if err == nil && lease != nil && lease.Holder != s.InstanceID && time.Since(lease.At) <= memory.LeaseTTL {
-		s.Log.Printf("BLOCKED: lease held by %s (heartbeat %s) -- pausing dispatch", lease.Holder, lease.At.Format(time.RFC3339))
-		return false
+	if err == nil && lease != nil && lease.Holder != s.InstanceID && time.Since(lease.At) <= s.leaseTTL {
+		return s.leaseLost(fmt.Sprintf("lease held by %s (last heartbeat %s ago, expires in %s) -- pausing dispatch",
+			lease.Holder, time.Since(lease.At).Round(time.Second), (s.leaseTTL - time.Since(lease.At)).Round(time.Second)))
 	}
 	expected := ""
 	if lease != nil {
 		expected = lease.SHA
 	}
 	if sha, werr := s.mem.WriteLease(s.InstanceID, now, expected); werr == nil {
-		s.leaseSHA = sha
+		s.holdLease(sha, now)
 		return true
 	}
-	s.Log.Printf("lease renewal failed -- pausing dispatch this tick")
+	return s.leaseLost("lease renewal failed -- pausing dispatch until origin accepts a heartbeat")
+}
+
+// leaseFresh reports whether the last heartbeat is recent enough that another
+// one before the next run would be redundant. What this permits stays inside
+// the TTL by construction: a run may begin with a lease up to a quarter of the
+// TTL old and last at most memory.MaxRunTimeout (half the TTL), leaving a
+// quarter to spare.
+func (s *Supervisor) leaseFresh() bool {
+	return time.Since(s.leaseRenewed) < s.leaseTTL/4
+}
+
+// holdLease records a successful heartbeat, announcing the recovery when the
+// previous one failed.
+func (s *Supervisor) holdLease(sha string, at time.Time) {
+	if s.leaseWarned {
+		s.leaseWarned = false
+		s.Log.Printf("lease heartbeat recovered -- dispatch resumed")
+	}
+	s.leaseSHA = sha
+	s.leaseRenewed = at
+}
+
+// leaseLost pauses dispatch and says why the first time. A rolling deploy's
+// overlap persists for many ticks; one line each would bury the transition
+// that matters. Unlike blockOnce this records nothing in memory -- an
+// instance that cannot prove it is the writer must not write.
+func (s *Supervisor) leaseLost(msg string) bool {
+	if !s.leaseWarned {
+		s.leaseWarned = true
+		s.Log.Printf("BLOCKED: %s", msg)
+	}
 	return false
 }
