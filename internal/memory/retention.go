@@ -23,6 +23,16 @@ const DefaultRetention = 30 * 24 * time.Hour
 // delivery feed reads (see delivery.go).
 var trimmedStreams = []string{"events.md", "context.md"}
 
+// trimTrailer marks a commit as a retention trim, and is the whole mechanism
+// keeping trims out of the delivery feed (see Changes). Nothing else on the
+// memory branch writes it: commit messages are the supervisor's own.
+const trimTrailer = "Openroutines-Retention-Trim: true"
+
+// TrimCommitMessage is how a trim must be committed for the feed to skip it.
+func TrimCommitMessage(keep time.Duration) string {
+	return fmt.Sprintf("Trim memory to retention window (%s)\n\n%s\n", keep, trimTrailer)
+}
+
 // ParseRetention accepts "30d" style (days) or any Go duration ("720h").
 // Empty means the default.
 func ParseRetention(s string) (time.Duration, error) {
