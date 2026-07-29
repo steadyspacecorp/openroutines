@@ -47,6 +47,22 @@ fi
 rm routines/broken.md
 step "check fails on a broken routine"
 
+# A routine that does not load at all: check must name the file, and the name
+# stays claimed -- `routines new` over it would replace the prompt with the
+# template.
+printf -- '---\nschedule: "0 9 * * *"\nactve: false\n---\nPrecious.\n' > routines/unparseable.md
+if run check; then
+  die "check passed on an unparseable routine"
+fi
+grep -q 'routines/unparseable.md' "$work/out" || die "check did not name the unparseable file"
+if run routines new unparseable; then
+  die "routines new overwrote a routine that does not load"
+fi
+grep -q Precious routines/unparseable.md || die "routines new clobbered an unparseable routine"
+run routines remove unparseable || die "routines remove on an unparseable routine"
+[[ ! -e routines/unparseable.md ]] || die "routines remove left the unparseable file"
+step "an unparseable routine is named, protected, and removable"
+
 # opencode.json is the harness's config: the permission policy plus custom
 # provider endpoint definitions. A provider block is legitimate content --
 # check accepts it without a drift warning, flags the id when no model

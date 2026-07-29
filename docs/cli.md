@@ -84,6 +84,8 @@ openroutines routines deactivate <name>  set active: false
 openroutines routines remove <name>      delete the routine and its scheduling state
 ```
 
+A routine that does not load still holds its name: `new` refuses rather than overwrite it, `run` reports the parse error instead of "no routine", and `edit` and `remove` operate on the file so you can fix or drop it.
+
 ## skills
 
 ```
