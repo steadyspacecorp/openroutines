@@ -25,7 +25,7 @@ Design-first is the workflow here: behavior gets decided in docs/design.md befor
 
 - **Go, minimal dependencies.** Target roughly one dependency (a cron parser). The supervisor is the trusted component; its dependency tree is its attack surface. Stdlib first, always.
 - **The supervisor stays dumb.** Tick every minute, re-read frontmatter, run what's due -- serially, one run at a time. Enforcement lives elsewhere: skill, tool, web-access, and MCP scoping in generated opencode agent definitions, filesystem scoping via Landlock, credential scoping via built-from-scratch child environments. Do not add enforcement logic to the supervisor that a lower layer can provide.
-- **At-least-once, never silently skipped.** Durable two-phase runs: watermark + pending record (stable `run_id`, per-attempt ids, bounded retries) committed and pushed *before* execution; `flock` for overlap; process-group kills for timeouts.
+- **At-least-once, never silently skipped.** Durable two-phase runs: watermark + pending record + per-attempt reservation (stable `run_id`, per-attempt ids, bounded retries) committed and pushed *before* execution; `flock` for overlap; process-group kills for timeouts.
 - **Model processes never touch git.** Routines write to a disposable staged copy of memory; the supervisor validates and imports the diff into its own worktree. Never hand a routine a git worktree or metadata.
 - **Secrets discipline.** Child envs are constructed, never inherited -- every child the supervisor spawns, git and the boot probe included, not just routines (`OPENROUTINES_MASTER_KEY` and `OPENROUTINES_DEPLOY_KEY` must never leave the supervisor's own process). Injected secret values are scrubbed from log output.
 
