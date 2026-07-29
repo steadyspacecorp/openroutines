@@ -465,7 +465,8 @@ type Settlement struct {
 // one memory commit. stage, when set, runs before that commit so caller
 // bookkeeping (scheduling state, abandonment tasks) rides the same commit.
 // detail overrides the derived failure description -- for attempts that
-// failed before producing a result; pass it pre-redacted. A Canceled attempt
+// failed before producing a result; raw error text is fine, the append seam
+// redacts what it records. A Canceled attempt
 // gets only its run record: nothing settled -- the same logical run retries
 // -- and no commit of its own (the shutdown commit carries the record).
 func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, meta Meta, detail string, stage func(*Settlement)) (*Settlement, error) {
