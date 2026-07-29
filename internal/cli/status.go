@@ -15,6 +15,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
+	"github.com/steadyspacecorp/openroutines/internal/supervisor"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
@@ -67,14 +68,21 @@ func cmdStatus(_ []string) int {
 
 	// Routines.
 	now := time.Now().In(loc)
+	stateDir := memory.At(dir).StateDir()
 	routines, parseErrs := routine.LoadAgent(dir)
 	fmt.Printf("\nroutines (%d):\n", len(routines))
 	for _, r := range routines {
+		st, stErr := schedule.Load(stateDir, r.Name)
 		state := "inactive"
 		next := ""
 		if r.FM.IsActive() {
 			state = "active"
-			if spec, err := schedule.Parse(r.FM.Schedule, loc); err == nil {
+			// A routine in cool-down does not fire at its next occurrence, so
+			// don't print one: a confident time that will not happen is worse
+			// than no time at all.
+			if st != nil && st.CoolingDown(now) {
+				next = " -- cooling down until " + st.CooldownUntil.In(loc).Format("Mon 15:04")
+			} else if spec, err := schedule.Parse(r.FM.Schedule, loc); err == nil {
 				next = " -- next " + spec.Next(now).Format("Mon 15:04")
 			}
 		}
@@ -83,6 +91,12 @@ func cmdStatus(_ []string) int {
 			grants = " (" + strings.Join(g, " ") + ")"
 		}
 		fmt.Printf("  %-20s %-14s %s%s%s\n", r.Name, scheduleSummary(r), state, next, grants)
+		if stErr != nil {
+			fmt.Printf("      ! %v\n", stErr)
+		}
+		for _, line := range scheduleStateLines(st, now, loc) {
+			fmt.Printf("      %s\n", line)
+		}
 	}
 	for _, e := range parseErrs {
 		fmt.Printf("  ! %v\n", e)
@@ -146,6 +160,32 @@ func cmdStatus(_ []string) int {
 		}
 	}
 	return 0
+}
+
+// scheduleStateLines renders the supervisor's durable scheduling record for
+// one routine: what it still owes, and what is holding it. Without them a
+// routine four attempts into a retry, or sitting out a 24h circuit-breaker
+// cool-down, reads exactly like a healthy one. Nil state means the supervisor
+// has never seen the routine, which every local checkout looks like -- silence
+// is the honest rendering of that.
+func scheduleStateLines(st *schedule.State, now time.Time, loc *time.Location) []string {
+	if st == nil {
+		return nil
+	}
+	var lines []string
+	if st.CoolingDown(now) {
+		lines = append(lines, fmt.Sprintf("! circuit breaker: %d consecutive abandonments -- no new run starts until then",
+			st.ConsecutiveAbandons))
+	}
+	if p := st.Pending; p != nil {
+		when := "next attempt " + schedule.NextRetryAt(p).In(loc).Format("Mon 15:04")
+		if p.Attempts >= supervisor.MaxAttempts {
+			when = "budget spent -- the next tick abandons it"
+		}
+		lines = append(lines, fmt.Sprintf("pending %s for %s -- %d/%d attempts, %s",
+			p.RunID, p.ScheduledFor.In(loc).Format("Mon 15:04"), p.Attempts, supervisor.MaxAttempts, when))
+	}
+	return append(lines, "watermark "+st.Watermark.In(loc).Format("Jan 2 15:04"))
 }
 
 // printTokenUsage shows the one-line total; the numbers live in
