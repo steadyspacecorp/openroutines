@@ -34,6 +34,9 @@ func TestDeriveOAuth2Client(t *testing.T) {
 	if d.Env["SUPPORT_DESK_TOKEN"] != "minted-bearer-123" || len(d.Env) != 1 {
 		t.Fatalf("env wrong: %v", d.Env)
 	}
+	if d.Bearer != "minted-bearer-123" {
+		t.Fatalf("bearer = %q, want minted access token", d.Bearer)
+	}
 	found := false
 	for _, v := range d.Scrub {
 		if v == "minted-bearer-123" {

@@ -76,6 +76,7 @@ func deriveOAuth2Client(name string, s Spec, stored string) (*Derived, error) {
 
 	return &Derived{
 		Env:     map[string]string{strings.ToUpper(s.InjectAs): token.AccessToken},
+		Bearer:  token.AccessToken,
 		Scrub:   map[string]string{"oauth2_client bearer (" + name + ")": token.AccessToken},
 		Cleanup: func() {},
 	}, nil

@@ -98,7 +98,8 @@ func deriveGitHubApp(s Spec, stored, apiBase string) (*Derived, error) {
 			"GIT_COMMITTER_NAME":  botName,
 			"GIT_COMMITTER_EMAIL": botEmail,
 		},
-		Scrub: map[string]string{"github_app installation token": token.Token},
+		Bearer: token.Token,
+		Scrub:  map[string]string{"github_app installation token": token.Token},
 		Cleanup: func() {
 			_ = githubRequest(apiBase, "DELETE", "/installation/token", token.Token, nil, nil)
 		},

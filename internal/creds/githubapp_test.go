@@ -101,6 +101,9 @@ func TestDeriveGitHubApp(t *testing.T) {
 	if !scrubbed {
 		t.Fatal("installation token missing from the scrub set")
 	}
+	if d.Bearer != "test-installation-token" {
+		t.Fatalf("bearer = %q, want installation token", d.Bearer)
+	}
 	for _, body := range stub.mintBodies {
 		if strings.TrimSpace(body) != "{}" {
 			t.Fatalf("token mint must be unscoped (the installation governs access), sent %q", body)
