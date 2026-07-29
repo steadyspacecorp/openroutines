@@ -10,7 +10,6 @@ package supervisor
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -24,7 +23,6 @@ import (
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
-	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
@@ -86,7 +84,7 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	secrets := supervisorSecrets(dir)
+	secrets := memory.SupervisorSecrets(dir)
 	mem := memory.At(dir)
 	return &Supervisor{
 		Dir:        dir,
@@ -101,33 +99,6 @@ func New(dir string) (*Supervisor, error) {
 		lastPolled: map[string]time.Time{},
 		pollFailed: map[string]bool{},
 	}, nil
-}
-
-// supervisorSecrets collects the secret values the supervisor itself holds
-// -- the master key and the deploy key -- so its own log lines and memory
-// events can be redacted. (The model's output stream has its own scrubber,
-// seeded with the run's credentials.) A git error quoting an origin URL or
-// key material would otherwise be logged verbatim and committed to memory.
-// The deploy key is multi-line, and logs are scrubbed line by line, so each
-// substantial line registers as its own value.
-func supervisorSecrets(dir string) map[string]string {
-	out := map[string]string{}
-	if key, err := creds.LoadKey(dir); err == nil {
-		out["master_key"] = hex.EncodeToString(key)
-	}
-	deployKey := os.Getenv(memory.EnvDeployKey)
-	if path := os.Getenv(memory.EnvDeployKeyFile); deployKey == "" && path != "" {
-		if raw, err := os.ReadFile(path); err == nil {
-			deployKey = string(raw)
-		}
-	}
-	for i, line := range strings.Split(deployKey, "\n") {
-		line = strings.TrimSpace(line)
-		if len(line) >= 16 && !strings.HasPrefix(line, "-----") {
-			out[fmt.Sprintf("deploy_key_%d", i)] = line
-		}
-	}
-	return out
 }
 
 func (s *Supervisor) stateDir() string { return s.mem.StateDir() }
@@ -463,9 +434,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	if err != nil {
 		s.Log.Printf("%s: %s failed to start: %v", r.Name, p.RunID, err)
 		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
-		// Start-failure text quotes raw errors (git, provider); memory events
-		// are committed and pushed, so redact before recording.
-		detail = scrub.Redact(err.Error(), s.secrets)
+		detail = err.Error()
 	} else {
 		defer staging.Cleanup()
 	}
@@ -551,10 +520,8 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 			continue
 		}
 		// The path is absolute in the container; the event is read in the
-		// repository, where the file is routines/<name>.md. And load errors
-		// quote file contents, which memory events push.
-		text := strings.TrimPrefix(e.Error(), s.Dir+string(filepath.Separator))
-		failing[re.Name] = scrub.Redact(text, s.secrets)
+		// repository, where the file is routines/<name>.md.
+		failing[re.Name] = strings.TrimPrefix(e.Error(), s.Dir+string(filepath.Separator))
 	}
 
 	var news []string
@@ -594,9 +561,6 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 // double-record the same fact. The task id is date-scoped so a supervisor
 // restart doesn't re-record it -- AppendHumanTask skips ids already present.
 func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
-	// Sync/push failure text quotes raw git errors, which can carry a
-	// tokened origin URL -- and the message below is committed to memory.
-	msg = scrub.Redact(msg, s.secrets)
 	s.Log.Printf("BLOCKED: %s", msg)
 	if !*warned {
 		*warned = true
