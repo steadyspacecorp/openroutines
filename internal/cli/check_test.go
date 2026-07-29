@@ -59,3 +59,22 @@ func TestCheckWarnsOnTimeoutsTheLeaseCannotCover(t *testing.T) {
 		t.Fatalf("a 10m timeout fits inside the lease and must not warn:\n%s", out)
 	}
 }
+
+// The scaffolded opencode.json carries the baseline permission policy; an
+// agent repo that lost it still runs, so check is where the loss surfaces.
+func TestCheckWarnsOnMissingOpencodeJSON(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
+	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, "opencode.json is missing") {
+		t.Fatalf("expected a missing-opencode.json warning:\n%s", out)
+	}
+
+	os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}\n"), 0o644)
+	out = checkOutput(t, dir)
+	if strings.Contains(out, "opencode.json is missing") {
+		t.Fatalf("a present opencode.json must not warn:\n%s", out)
+	}
+}

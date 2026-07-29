@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/robfig/cron/v3"
-
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
@@ -47,23 +45,26 @@ func prepareSchedule(dir, workspace string, r *routine.Routine, tz string, now t
 		loc = time.UTC
 	}
 	all, _ := routine.LoadAgent(dir)
-	rendered := RenderSchedule(all, r, now.In(loc))
+	rendered := renderSchedule(all, r, now, loc)
 	return os.WriteFile(filepath.Join(workspace, ScheduleFileName), []byte(rendered), 0o644)
 }
 
-// RenderSchedule formats the forward schedule a run receives: every active
+// renderSchedule formats the forward schedule a run receives: every active
 // routine's next fires, split eventless (reporting -- fire times are facts,
 // not forecast work) from eventful, and -- when the running routine is
 // scheduled -- the window through its next fire-day with the eventful
 // routines partitioned in-window/out. The running routine's window computes
 // even when it is inactive: a manually-run routine still has a schedule to
-// stand in.
-func RenderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time) string {
+// stand in. Everything is computed and displayed in loc, the agent's
+// timezone, by the same bound parser that dispatches runs -- so the forecast
+// a routine reads and the times it actually fires at cannot disagree.
+func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time, loc *time.Location) string {
+	now = now.In(loc)
 	until := now.AddDate(0, 0, scheduleHorizonDays)
 
 	var windowEnd time.Time
 	if self != nil && self.FM.Schedule != "" {
-		if spec, err := cron.ParseStandard(self.FM.Schedule); err == nil {
+		if spec, err := schedule.Parse(self.FM.Schedule, loc); err == nil {
 			windowEnd = schedule.WindowEnd(spec, now, until)
 		}
 	}
@@ -73,7 +74,7 @@ func RenderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time
 		if r.FM.Schedule == "" || !r.FM.IsActive() {
 			continue
 		}
-		spec, err := cron.ParseStandard(r.FM.Schedule)
+		spec, err := schedule.Parse(r.FM.Schedule, loc)
 		if err != nil {
 			continue
 		}

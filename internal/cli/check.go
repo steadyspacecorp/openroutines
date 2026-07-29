@@ -53,6 +53,8 @@ func cmdCheck(_ []string) int {
 	oc, err := config.LoadOpenCode(dir)
 	if err != nil {
 		failf("%v", err)
+	} else if oc.Missing {
+		warnf("%s is missing -- runs fall back to opencode's defaults (session-title agent on, question tool allowed); scaffold ships a baseline, restore it", config.OpenCodeFileName)
 	}
 	agent, err := config.Load(dir)
 	if err != nil {

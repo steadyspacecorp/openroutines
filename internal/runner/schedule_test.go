@@ -27,7 +27,7 @@ func scheduleFixture() []*routine.Routine {
 func TestRenderScheduleWindowSplit(t *testing.T) {
 	all := scheduleFixture()
 	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC) // Tuesday
-	got := RenderSchedule(all, all[0], now)
+	got := renderSchedule(all, all[0], now, time.UTC)
 
 	for _, want := range []string{
 		"now: Tue 2026-07-28 07:00 (UTC)",
@@ -65,7 +65,7 @@ func TestRenderScheduleDegradesWithoutSelfSchedule(t *testing.T) {
 	all := scheduleFixture()
 	unscheduled := &routine.Routine{Name: "on-demand", FM: routine.Frontmatter{}}
 	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
-	got := RenderSchedule(all, unscheduled, now)
+	got := renderSchedule(all, unscheduled, now, time.UTC)
 	if strings.Contains(got, "window:") || strings.Contains(got, "in-window") {
 		t.Fatalf("no window without a self schedule:\n%s", got)
 	}
@@ -82,9 +82,32 @@ func TestRenderScheduleInactiveSelfKeepsWindow(t *testing.T) {
 	}}
 	all := append(scheduleFixture(), probe)
 	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
-	got := RenderSchedule(all, probe, now)
+	got := renderSchedule(all, probe, now, time.UTC)
 	if !strings.Contains(got, "window: now → Wed 2026-07-29 07:00") {
 		t.Fatalf("inactive self must still compute its window:\n%s", got)
+	}
+}
+
+// The forecast is the agent's wall clock, not the container's: the same
+// instant expressed in UTC must render as New York time, or a routine reads
+// fire times an offset away from the ones the supervisor dispatches at.
+func TestRenderScheduleUsesAgentTimezoneNotArgumentZone(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no tz database")
+	}
+	all := scheduleFixture()
+	now := time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC) // Tuesday 07:00 EDT
+	got := renderSchedule(all, all[0], now, ny)
+
+	for _, want := range []string{
+		"now: Tue 2026-07-28 07:00 (America/New_York)",
+		"window: now → Wed 2026-07-29 07:00 (steady-check-in's next fire on its next fire-day)",
+		"eventless: steady-inbox next Tue 2026-07-28 08:45",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
 	}
 }
 

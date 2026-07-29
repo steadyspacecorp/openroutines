@@ -206,7 +206,7 @@ func TestTriggerRefusesTypedCredential(t *testing.T) {
 	srv := newTriggerServer("v1")
 	defer srv.Close()
 	dir := fixture(t, "ok")
-	typedYAML := agentYAML + "credentials:\n  gh_key:\n    type: github_app\n    app_id: \"1\"\n"
+	typedYAML := agentYAML("UTC") + "credentials:\n  gh_key:\n    type: github_app\n    app_id: \"1\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(typedYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}

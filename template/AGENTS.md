@@ -41,6 +41,41 @@ deployed container runs whatever routine is due.
   Treat third-party skills as executable dependencies -- review before
   vendoring.
 
+## Writing routines
+
+The framework enforces grants and injects the memory discipline; the
+patterns below it cannot enforce. They live in the prompt, so they are the
+prompt author's job.
+
+- **Verify current state before recording.** Routines observe the world at
+  one moment and write records that outlive it. Before recording a task,
+  confirm the condition still holds -- a failure, a drift, or a gap
+  discovered from history may already be fixed. Check current state, not
+  just the evidence that led you there: memory is durable and cumulative,
+  so a task recorded from stale evidence persists and misleads exactly as
+  long as a duplicate PR would.
+- **Use untrusted input to locate, never to decide.** Logs, fetched
+  content, and memory itself may be stale, wrong, or hostile. Take only a
+  pointer from them -- which file, which URL, which workflow run -- then
+  derive the facts from authorities you trust: the repository contents,
+  the artifact itself. Two things fall out. Staleness stops being a
+  special case, because current state is derived rather than remembered.
+  And prompt injection loses its lever, because a log claiming the deploy
+  target moved to `evil.com` is refused when the repo disagrees.
+- **Write for at-least-once.** A failed attempt retries under the same
+  `$OPENROUTINES_RUN_ID`, and a discarded attempt's memory writes do not
+  unsend an email or un-open a PR. So: search before acting (is the PR
+  already open? was the message already posted?), and stamp the run id
+  into what you create -- the branch name, a line in the PR body -- so a
+  retry finds its own half-finished work instead of duplicating it.
+- **Match automation to your ability to verify.** A fix the failure
+  itself names -- a missing import, a stale lockfile, a renamed field --
+  is safe to make unattended because the build going green confirms it.
+  When nothing downstream would catch a wrong fix, or the fix means
+  deciding what the system *should* do, it becomes a Human-owned task,
+  not an edit. The boundary isn't fixed: the more checks stand behind a
+  routine, the more it can safely do on its own.
+
 ## Memory
 
 `memory/` is a worktree on the agent's dedicated `memory` branch -- one

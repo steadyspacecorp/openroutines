@@ -3,13 +3,13 @@ package schedule
 import (
 	"testing"
 	"time"
-
-	"github.com/robfig/cron/v3"
 )
 
-func spec(t *testing.T, expr string) cron.Schedule {
+// spec parses a UTC-bound schedule; tests that care about a real zone call
+// Parse directly.
+func spec(t *testing.T, expr string) *Spec {
 	t.Helper()
-	s, err := cron.ParseStandard(expr)
+	s, err := Parse(expr, time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,10 @@ func TestOccurrencesAcrossSpringForwardGap(t *testing.T) {
 	if err != nil {
 		t.Skip("no tz database")
 	}
-	s := spec(t, "30 2 * * *")
+	s, err := Parse("30 2 * * *", ny)
+	if err != nil {
+		t.Fatal(err)
+	}
 	after := time.Date(2026, 3, 6, 12, 0, 0, 0, ny)
 	until := time.Date(2026, 3, 10, 12, 0, 0, 0, ny)
 	first, last, n := Occurrences(s, after, until)
@@ -76,7 +79,10 @@ func TestOccurrencesAcrossFallBack(t *testing.T) {
 	if err != nil {
 		t.Skip("no tz database")
 	}
-	s := spec(t, "30 1 * * *")
+	s, err := Parse("30 1 * * *", ny)
+	if err != nil {
+		t.Fatal(err)
+	}
 	after := time.Date(2026, 10, 30, 12, 0, 0, 0, ny)
 	until := time.Date(2026, 11, 3, 12, 0, 0, 0, ny)
 	prev := after
@@ -95,6 +101,51 @@ func TestOccurrencesAcrossFallBack(t *testing.T) {
 	}
 	if count < 3 || count > 5 {
 		t.Fatalf("expected 3-5 firings across fall-back, got %d", count)
+	}
+}
+
+func TestOccurrencesHoldWallClockAfterStateRoundTrip(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no tz database")
+	}
+	// The release container sets no TZ, so time.Local is UTC and a watermark
+	// that round-tripped through the state file comes back in a fabricated
+	// fixed-offset zone. Reproduce that here instead of inheriting whatever
+	// zone the developer's machine happens to be in.
+	defer func(l *time.Location) { time.Local = l }(time.Local)
+	time.Local = time.UTC
+
+	dir := t.TempDir()
+	st := &State{Routine: "daily", Watermark: time.Date(2026, 10, 30, 6, 0, 0, 0, ny)}
+	if err := st.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(dir, "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Parse("0 6 * * *", ny)
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Date(2026, 11, 2, 12, 0, 0, 0, ny)
+	first, last, n := Occurrences(s, loaded.Watermark, until)
+	if n != 3 {
+		t.Fatalf("expected 3 firings, got %d", n)
+	}
+	// Oct 31 is EDT, Nov 2 is EST: 06:00 in New York on both sides of the
+	// fall-back, not 06:00 at whatever offset the watermark froze.
+	for _, tc := range []struct {
+		label string
+		got   time.Time
+		day   int
+	}{{"first", first, 31}, {"last", last, 2}} {
+		wall := tc.got.In(ny)
+		if wall.Day() != tc.day || wall.Hour() != 6 || wall.Minute() != 0 {
+			t.Fatalf("%s firing = %v, want 06:00 New York on day %d", tc.label, wall, tc.day)
+		}
 	}
 }
 

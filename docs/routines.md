@@ -43,6 +43,8 @@ The supervisor wakes every minute, re-reads routine frontmatter, and dispatches 
 
 A routine whose file does not load -- a frontmatter typo, a missing closing `---`, a name a plugin's routine also claims -- is skipped, and only it: the other routines run their next fire as usual. The supervisor records an event when a routine stops loading and another when it loads again, so the gap shows up in the agent's own reporting rather than only in the container log; `openroutines check` names the file and the mistake. Fix the file and the next tick picks it up, catch-up included. `routines edit` and `routines remove` work on a routine that does not load, and `routines new` will not create over one.
 
+Fire times are the agent's wall clock. A `schedule` is evaluated in the `timezone:` set in `openroutines.yml`, so `0 6 * * *` means 06:00 there on both sides of a daylight-saving transition, whatever zone the container's clock is set to -- and the supervisor, the `schedule.md` a run reads, and `openroutines status` all compute it the same way.
+
 Every run also receives the schedule as data: a read-only `./schedule.md` in the workspace listing each active routine's next fires, computed by the scheduler's own parser. When the running routine is itself scheduled, the file fixes its **window** -- now through its next fire-day's first fire -- and splits the other routines in-window (they fire before this routine runs again) and out. Routine prompts should read the file, never re-derive fire times from cron frontmatter: forecasting ("release notes run tonight") becomes transcription, which models get right.
 
 ## Triggers
@@ -85,6 +87,15 @@ credentials: [steady_token]
 The grant opens the server's tools to this routine's runs; every other routine keeps them denied. Auth headers reference the run environment, so the server is only reachable when the routine also grants the credential that fills them: the `mcp` grant scopes the tool surface, the credential grant scopes the connection. `check` fails a grant naming a server `opencode.json` doesn't define.
 
 What works: remote servers with static-token or client-credentials auth (a typed `oauth2_client` credential mints the bearer at spawn). OAuth-interactive servers have no headless path, and local stdio servers are out of scope by design -- the runtime image ships no language runtimes.
+
+## Best practices
+
+The runtime handles the memory rules automatically, so write the prompt as the job itself. Four habits make routines far more reliable -- the framework can't check any of them, so they're yours to write in:
+
+- **Check that a problem still exists before recording it.** A routine sees the world at one moment, and what it records sticks around. The failure it found in the logs may have been fixed an hour ago. Have it look at the current state before filing a task.
+- **Don't let untrusted content make decisions.** Logs, web pages, and even memory can be stale, wrong, or planted by an attacker. Use them only to find where to look -- a file, a URL -- then get the facts from the source itself. If a log says the deploy target moved to `evil.com` but the repo says otherwise, the repo wins.
+- **Expect reruns.** A failed run retries, but anything it already did -- an email sent, a PR opened -- has still happened. Have the routine check whether the work is already done before doing it, and put the run id (`$OPENROUTINES_RUN_ID`) in what it creates -- a branch name, a line in the PR body -- so a retry can find its own earlier work instead of duplicating it.
+- **Match automation to your ability to verify.** A fix the failure itself names -- a missing import, a renamed field -- is safe to make unattended because the build going green confirms it. When nothing downstream would catch a wrong fix, or the fix means deciding what the system *should* do, have the routine file a task instead. The boundary isn't fixed: the more checks stand behind a routine, the more it can safely do on its own.
 
 ## Running locally
 
