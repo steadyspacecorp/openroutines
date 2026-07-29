@@ -569,6 +569,68 @@ func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
 	}
 }
 
+// The attempt that spawns a model process must be committed and pushed before
+// it starts. Production recovery is container replacement: an attempt that
+// takes the container down with it (OOM, host loss, eviction) never settles,
+// and a replacement that materializes memory from origin and reads attempts: 0
+// dispatches again -- forever, since the retry budget never drains.
+func TestAttemptIsDurableBeforeTheModelStarts(t *testing.T) {
+	dir := fixture(t, "probe")
+	withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0)                     // register
+	s.Tick(ctx, t0.Add(61*time.Second)) // mint the run, attempt 1
+
+	seen := replacementState(t)
+	if seen == nil || seen.Pending == nil {
+		t.Fatalf("a replacement mid-attempt should see the pending run, got %+v", seen)
+	}
+	if seen.Pending.Attempts != 1 {
+		t.Fatalf("a replacement mid-attempt should see attempts=1, got %d", seen.Pending.Attempts)
+	}
+}
+
+// Attempts that never settle still spend the retry budget, and a spent budget
+// is abandoned where the tick notices it: settlement is the usual place, but a
+// run that kills its container never reaches settlement.
+func TestSpentAttemptsAbandonWithoutSettlement(t *testing.T) {
+	dir := fixture(t, "ok")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0) // register
+	// What a run that killed the supervisor MaxAttempts times leaves behind.
+	scheduled := t0.Add(time.Minute)
+	st := loadState(t, s)
+	st.Pending = &schedule.Pending{
+		RunID: "run_crashloop", ScheduledFor: scheduled, CoveredThrough: scheduled,
+		CreatedAt: scheduled, Attempts: MaxAttempts, LastAttemptAt: scheduled,
+	}
+	if err := st.Save(s.stateDir()); err != nil {
+		t.Fatal(err)
+	}
+
+	s.Tick(ctx, t0.Add(time.Hour))
+
+	if st = loadState(t, s); st.Pending != nil {
+		t.Fatalf("a run with no attempts left must be abandoned, still pending: %+v", st.Pending)
+	}
+	if !st.Watermark.Equal(scheduled) {
+		t.Fatalf("abandonment should advance the watermark to %v, got %v", scheduled, st.Watermark)
+	}
+	if got := runCount(t, dir); got != 0 {
+		t.Fatalf("no attempt should have been dispatched, got %d runs", got)
+	}
+	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
+	if !strings.Contains(tasks, "task-run_crashloop") {
+		t.Fatalf("abandonment should hand run_crashloop to a human: %q", tasks)
+	}
+}
+
 // A tick that wrote pending state and then failed to commit it leaves the
 // record on disk and nowhere else -- and the next tick, seeing a pending run,
 // mints nothing and would dispatch under an identity that exists only here.
