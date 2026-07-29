@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -39,6 +40,9 @@ case "$mode" in
      mkdir -p memory/ledgers
      echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
      echo "slept" ;;
+  detach) sleep 60 </dev/null >/dev/null 2>&1 &
+     echo $! > "$d/detached.pid"
+     echo "detached" ;;
   consume) cp inbox.md memory/inbox-copy.md
      : > CONSUMED
      echo "consumed" ;;
@@ -336,6 +340,35 @@ func TestScheduleHoldsAgentWallClockAcrossDST(t *testing.T) {
 	if got := st.Pending.CoveredThrough.In(ny); got.Hour() != 6 || got.Day() != 2 {
 		t.Fatalf("covered_through = %v, want 06:00 New York on Nov 2", got)
 	}
+}
+
+// A model process that exits cleanly can leave a descendant behind, and that
+// descendant goes on writing to staging while the supervisor validates and
+// imports it. Every attempt therefore ends with its process group, not only
+// the ones that time out or are cancelled.
+func TestDetachedDescendantDoesNotSurviveACleanRun(t *testing.T) {
+	dir := fixture(t, "detach")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0) // register
+	s.Tick(ctx, t0.Add(61*time.Second))
+
+	var pid int
+	if _, err := fmt.Sscan(readFile(t, filepath.Join(fakeBinDir(), "detached.pid")), &pid); err != nil || pid == 0 {
+		t.Fatalf("the fake run did not report a detached child: %v", err)
+	}
+	// The signal is sent before the run settles; the wait is for the kernel
+	// to reap what it killed, which a zombie pid still answers.
+	for range 40 {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("detached child %d outlived the run", pid)
 }
 
 func TestCatchupCollapsesMissedFirings(t *testing.T) {
