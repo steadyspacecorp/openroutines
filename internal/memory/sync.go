@@ -300,10 +300,11 @@ func (m *Memory) ReleaseLease(ownedSHA string) {
 
 func gitStdin(dir, stdin string, args ...string) (string, error) {
 	cmd := newGitCmd(dir, append(hermeticConfig, args...))
+	defer cmd.cancel()
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", cmd.fail(args, err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

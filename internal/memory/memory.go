@@ -5,7 +5,9 @@ package memory
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
@@ -96,14 +99,22 @@ var gitPassthrough = []string{
 	"GIT_SSL_CAINFO", "GIT_PROXY_SSL_CAINFO",
 }
 
+// gitCmd is a git invocation together with the deadline that bounds it.
+type gitCmd struct {
+	*exec.Cmd
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
 // newGitCmd builds a git invocation with a hermetic environment: no system or
 // global config leaks in, and the environment is constructed rather than
 // inherited. Inheriting it put OPENROUTINES_MASTER_KEY in the child's
 // /proc/<pid>/environ under env-var key delivery -- readable by any same-UID
 // process, model processes included, because the supervisor's non-dumpable
 // flag does not survive execve.
-func newGitCmd(dir string, args []string) *exec.Cmd {
-	cmd := exec.Command("git", args...)
+func newGitCmd(dir string, args []string) *gitCmd {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
 	for _, name := range gitPassthrough {
@@ -114,8 +125,76 @@ func newGitCmd(dir string, args []string) *exec.Cmd {
 	if sshCommand != "" {
 		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND="+sshCommand)
 	}
-	return cmd
+	// git does the network through children (ssh, git-remote-https), so the
+	// deadline has to reach the whole group: killing git alone would leave the
+	// stalled transport holding the output pipe this call is reading.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return killGitGroup(cmd.Process.Pid) }
+	// The group is signalled and killed, but a descendant that left it may
+	// still hold the output pipe; stop reading it rather than waiting on EOF
+	// forever.
+	cmd.WaitDelay = gitDrainDeadline
+	return &gitCmd{Cmd: cmd, ctx: ctx, cancel: cancel}
 }
+
+// killGitGroup ends a timed-out invocation's whole process group: SIGTERM,
+// grace, SIGKILL -- the same escalation a run's group gets, and for a reason
+// specific to git. git removes the lock files it is holding (refs, the index,
+// packed-refs) when it takes SIGTERM and cannot when it takes SIGKILL, and a
+// lock left behind by a hard kill fails every later invocation until a human
+// or a fresh container clears it. Trading two seconds on a path that has
+// already spent the deadline is worth not wedging the repo.
+func killGitGroup(pid int) error {
+	pgid := -pid
+	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	time.Sleep(gitKillGrace)
+	if err := syscall.Kill(pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
+
+// fail wraps a failed invocation, naming the deadline when it was the cause.
+// Wait reports only the kill signal, and "signal: killed" on a fetch reads as
+// a bug in the supervisor rather than as an origin that went dark -- this
+// text reaches operators through sync reports, events, and tasks.
+//
+// An abandoned drain stays a failure even though git itself exited cleanly:
+// the output is truncated at an arbitrary byte, and callers parse it (a
+// half-written SHA out of rev-parse would be worse than an error). It is
+// named rather than reported as a generic failure so the operator looks for
+// the process holding the pipe instead of at the origin.
+func (c *gitCmd) fail(args []string, err error, out []byte) error {
+	switch {
+	case c.ctx.Err() != nil:
+		return fmt.Errorf("git %s: timed out after %s: %s", strings.Join(args, " "), gitTimeout, strings.TrimSpace(string(out)))
+	case errors.Is(err, exec.ErrWaitDelay):
+		return fmt.Errorf("git %s: exited cleanly but something it spawned still held the output pipe after %s, so the output is incomplete: %s", strings.Join(args, " "), gitDrainDeadline, strings.TrimSpace(string(out)))
+	}
+	return fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+}
+
+// The bounds on a git invocation: the deadline itself, the grace the group
+// gets to exit cleanly once the deadline expires, and how long the output
+// pipes are drained after that. The drain has to outlast the grace, or the
+// pipes are abandoned while the group is still being asked to leave.
+//
+// gitTimeout sits above the transport's own bounds (a stalled transfer is
+// abandoned after ~60s of no progress) because those only fire once bytes are
+// moving: a blackholed origin -- packets dropped rather than refused -- never
+// gets that far, and the connect parks until the TCP stack gives up, which is
+// many minutes at best. A tick makes several network calls; none of them may
+// be unbounded. Variables, not constants, so tests can drive them.
+var (
+	gitTimeout       = 2 * time.Minute
+	gitKillGrace     = 2 * time.Second
+	gitDrainDeadline = 5 * time.Second
+)
 
 // hermeticConfig is the -c configuration every git invocation carries: no
 // hooks, no file-protocol tricks, a fixed commit identity. No background
@@ -141,9 +220,10 @@ var hermeticConfig = []string{
 // no system/global config leaks in.
 func git(dir string, args ...string) (string, error) {
 	cmd := newGitCmd(dir, append(hermeticConfig, args...))
+	defer cmd.cancel()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", cmd.fail(args, err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
