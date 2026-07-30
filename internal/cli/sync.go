@@ -2,9 +2,7 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
-	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 )
 
@@ -26,12 +24,6 @@ func cmdSync(args []string) int {
 			continue
 		}
 		return fail(fmt.Errorf("usage: openroutines sync [--push]"))
-	}
-
-	// Ensure mints a memory branch when none exists, so make sure this is
-	// an agent repository before touching anything.
-	if _, err := os.Stat(config.Path(".")); err != nil {
-		return fail(fmt.Errorf("run sync from inside an agent repository"))
 	}
 
 	// A fresh clone has no memory worktree at all -- the exact checkout most

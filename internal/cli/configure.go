@@ -19,7 +19,7 @@ func cmdConfigure(_ []string) int {
 	dir := "."
 	agent, err := config.Load(dir)
 	if err != nil {
-		return fail(fmt.Errorf("not an agent repository (no %s): %w", config.FileName, err))
+		return fail(err)
 	}
 
 	in := bufio.NewReader(os.Stdin)

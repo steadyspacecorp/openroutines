@@ -35,7 +35,7 @@ func cmdUpdate(_ []string) int {
 	dir := "."
 	agent, err := config.Load(dir)
 	if err != nil {
-		return fail(fmt.Errorf("not an agent repository (no %s)", config.FileName))
+		return fail(err)
 	}
 
 	target := version.Version

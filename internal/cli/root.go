@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
@@ -28,6 +29,38 @@ Usage:
 Run any command from inside an agent repository (except scaffold).
 `
 
+// commands are recognized CLI subcommands, mapped to their handler.
+// scaffold, sandbox-exec, and sandbox-probe are exempt from the agent-repo
+// check below: scaffold creates the repository, and the sandbox commands
+// are internal re-exec shims that run in the sandboxed workspace, not the
+// agent checkout.
+var commands = map[string]func([]string) int{
+	"scaffold":      cmdScaffold,
+	"configure":     cmdConfigure,
+	"check":         cmdCheck,
+	"routines":      cmdRoutines,
+	"routine":       cmdRoutines,
+	"supervise":     cmdSupervise,
+	"status":        cmdStatus,
+	"usage":         cmdUsage,
+	"sync":          cmdSync,
+	"skills":        cmdSkills,
+	"skill":         cmdSkills,
+	"plugin":        cmdPlugin,
+	"plugins":       cmdPlugin,
+	"credentials":   cmdCredentials,
+	"credential":    cmdCredentials,
+	"update":        cmdUpdate,
+	"sandbox-exec":  cmdSandboxExec,
+	"sandbox-probe": cmdSandboxProbe,
+}
+
+var repoOptional = map[string]bool{
+	"scaffold":      true,
+	"sandbox-exec":  true,
+	"sandbox-probe": true,
+}
+
 // Run dispatches a CLI invocation and returns the process exit code.
 func Run(args []string) int {
 	if len(args) == 0 {
@@ -36,45 +69,34 @@ func Run(args []string) int {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
-	case "scaffold":
-		return cmdScaffold(rest)
-	case "configure":
-		return cmdConfigure(rest)
-	case "check":
-		return cmdCheck(rest)
-	case "routines", "routine":
-		return cmdRoutines(rest)
-	case "supervise":
-		return cmdSupervise(rest)
-	case "status":
-		return cmdStatus(rest)
-	case "usage":
-		return cmdUsage(rest)
-	case "sync":
-		return cmdSync(rest)
-	case "skills", "skill":
-		return cmdSkills(rest)
-	case "plugin", "plugins":
-		return cmdPlugin(rest)
-	case "credentials", "credential":
-		return cmdCredentials(rest)
-	case "update":
-		return cmdUpdate(rest)
-	case "sandbox-exec": // internal: Landlock re-exec shim (see runner)
-		return cmdSandboxExec(rest)
-	case "sandbox-probe": // internal: boot-time availability check
-		return cmdSandboxProbe(rest)
 	case "version", "--version", "-v":
 		fmt.Println(version.Version)
 		return 0
 	case "help", "--help", "-h":
 		fmt.Print(usage)
 		return 0
-	default:
+	}
+
+	handler, ok := commands[cmd]
+	if !ok {
 		fmt.Fprintf(os.Stderr, "openroutines: unknown command %q\n\n", cmd)
 		fmt.Print(usage)
 		return 2
 	}
+
+	// Every command but the ones above expects to run from inside an agent
+	// repository. Asserting that here, before any command-specific logic
+	// runs, means a wrong-directory mistake fails with an obvious message
+	// instead of surfacing as whatever the first thing that command reads
+	// happens to complain about -- e.g. credentials reporting "no master
+	// key" when the key was never the problem (#64).
+	if !repoOptional[cmd] {
+		if _, err := os.Stat(config.Path(".")); err != nil {
+			return fail(fmt.Errorf("not an agent repository (no %s found)", config.FileName))
+		}
+	}
+
+	return handler(rest)
 }
 
 func fail(err error) int {

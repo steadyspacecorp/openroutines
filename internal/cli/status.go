@@ -27,7 +27,7 @@ func cmdStatus(_ []string) int {
 	dir := "."
 	agent, err := config.Load(dir)
 	if err != nil {
-		return fail(fmt.Errorf("not an agent repository (no %s)", config.FileName))
+		return fail(err)
 	}
 
 	fmt.Printf("agent      %s\n", orUnset(agent.Name))
