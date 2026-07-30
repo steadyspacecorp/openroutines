@@ -272,6 +272,7 @@ func TestInstructionRendering(t *testing.T) {
 		"./inbox.md",
 		"memory/CONSUMED",
 		"$DOCS_URL, $PRODUCT_REPO",
+		"$TMPDIR",
 	} {
 		if !strings.Contains(full, want) {
 			t.Fatalf("instruction missing %q:\n%s", want, full)
