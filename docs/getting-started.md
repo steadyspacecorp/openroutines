@@ -47,7 +47,7 @@ openroutines configure
 - `openroutines.yml` -- the agent's identity and defaults
 - `routines/` -- a starter check-in routine, active by default (twice a day, your agent reports what it did, what it intends to do, and where it's blocked -- to the logs, until you point it somewhere better)
 - `skills/` -- empty, ready for you to add to
-- `AGENTS.md` -- so you can work on the agent with the coding agent of your choice
+- `AGENTS.md` -- so you can work on the agent with the coding agent of your choice (`CLAUDE.md` is a symlink to it, for the agents that read that name instead)
 - a baseline `opencode.json` permission policy, `.gitignore`, Dockerfile, and pinned framework version
 
 A `memory/` directory appears on first run -- a checkout of the agent's dedicated memory branch, kept out of `main`'s history.

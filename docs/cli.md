@@ -26,7 +26,7 @@ openroutines version              print the version
 openroutines scaffold <path>
 ```
 
-Creates a fresh git repository with the agent's skeleton: `openroutines.yml`, a starter check-in routine, an empty `skills/` directory, `AGENTS.md`, a baseline `opencode.json` permission policy, `.gitignore`, Dockerfile, and pinned framework version.
+Creates a fresh git repository with the agent's skeleton: `openroutines.yml`, a starter check-in routine, an empty `skills/` directory, `AGENTS.md` (with `CLAUDE.md` symlinked to it), a baseline `opencode.json` permission policy, `.gitignore`, Dockerfile, and pinned framework version.
 
 ## configure
 
