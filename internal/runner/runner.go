@@ -90,8 +90,30 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 // authFailurePattern matches provider authentication errors in run output.
 // A bad or missing API key otherwise reports as a bare "crashed" -- and in
 // production burns five attempts and trips the circuit breaker before a
-// human learns the cause was configuration.
-var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key`)
+// human learns the cause was configuration. The `error:` forms are opencode
+// passing a provider's status text through verbatim ("Error: Unauthorized"),
+// which carries no key-shaped phrase to match on.
+var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key|error:\s*unauthorized|invalid bearer token`)
+
+// authHint names what the framework knows about an authentication failure
+// and the provider's own message does not say: the provider it resolved,
+// the endpoint when opencode.json declares one, and the credential the run
+// injected -- or that none was. Without these, a bare "Unauthorized" sends
+// the investigation outside the framework entirely.
+func authHint(dir, model string, injected bool) string {
+	provider := strings.SplitN(model, "/", 2)[0]
+	keyName := creds.ProviderKeyName(provider)
+	endpoint := provider
+	if oc, err := config.LoadOpenCode(dir); err == nil {
+		if u := oc.ProviderBaseURL(provider); u != "" {
+			endpoint = provider + " at " + u
+		}
+	}
+	if injected {
+		return fmt.Sprintf("provider authentication failed -- %s rejected the run's %s credential (openroutines credentials set %s)", endpoint, keyName, keyName)
+	}
+	return fmt.Sprintf("provider authentication failed -- %s rejected the request and no %s credential is stored (openroutines credentials set %s)", endpoint, keyName, keyName)
+}
 
 // ErrFatal marks a start failure that no retry can fix: the next attempt
 // would fail identically, so a caller spending a retry budget should give up
@@ -463,7 +485,8 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	res.Usage = captureUsage(workspace, ocExec)
 	if res.Outcome == Crashed && authFailurePattern.Match(tail.buf) {
 		provider := strings.SplitN(model, "/", 2)[0]
-		res.Hint = fmt.Sprintf("provider authentication failed -- the %s key looks missing or invalid (openroutines credentials set %s)", provider, creds.ProviderKeyName(provider))
+		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
+		res.Hint = authHint(dir, model, injected)
 	}
 
 	ok = true
