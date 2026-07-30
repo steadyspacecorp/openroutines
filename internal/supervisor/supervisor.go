@@ -53,6 +53,7 @@ type Supervisor struct {
 	Dir        string
 	InstanceID string
 	Log        *log.Logger
+	level      config.LogLevel
 
 	mem           *memory.Memory
 	noOrigin      bool
@@ -107,6 +108,7 @@ func New(dir string) (*Supervisor, error) {
 		Dir:        dir,
 		InstanceID: memory.InstanceID(),
 		Log:        log.New(scrub.NewWriter(os.Stdout, secrets), "", log.LstdFlags|log.LUTC),
+		level:      agent.EffectiveLogLevel(),
 		mem:        mem,
 		leaseTTL:   memory.LeaseTTL,
 		loc:        loc,
@@ -120,6 +122,28 @@ func New(dir string) (*Supervisor, error) {
 
 func (s *Supervisor) stateDir() string { return s.mem.StateDir() }
 
+// infof, warnf, and errorf gate the supervisor's own lines by the agent's
+// log level (design decision "Run output is rendered, bounded, and
+// leveled"): info is lifecycle, warn is degraded-but-running, error is
+// failed runs and held dispatch. Held dispatch resuming reports at error
+// too -- an operator who saw BLOCKED must also see it clear. The zero value
+// is debug, so a bare struct suppresses nothing.
+func (s *Supervisor) infof(format string, v ...any) {
+	if s.level <= config.LogInfo {
+		s.Log.Printf(format, v...)
+	}
+}
+
+func (s *Supervisor) warnf(format string, v ...any) {
+	if s.level <= config.LogWarn {
+		s.Log.Printf(format, v...)
+	}
+}
+
+func (s *Supervisor) errorf(format string, v ...any) {
+	s.Log.Printf(format, v...)
+}
+
 // Run is the supervise loop: startup, then one Tick per minute until ctx is
 // cancelled, then shutdown (final commit and push, lease release).
 func (s *Supervisor) Run(ctx context.Context) error {
@@ -127,26 +151,26 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
 	// same-UID model processes -- set before any child ever exists.
 	if err := sandbox.ProtectProcess(); err != nil {
-		s.Log.Printf("WARNING: could not mark supervisor non-dumpable: %v", err)
+		s.warnf("WARNING: could not mark supervisor non-dumpable: %v", err)
 	}
 	s.warnKeyDelivery()
 	if configured, err := memory.ConfigureDeployKey(); err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	} else if configured {
-		s.Log.Printf("deploy key configured for memory sync")
+		s.infof("deploy key configured for memory sync")
 	}
 	if err := s.mem.Ensure(); err != nil {
 		return err
 	}
 	if s.noOrigin {
-		s.Log.Printf("WARNING: no git origin -- memory is not durable and the single-instance lease is disabled (local mode)")
+		s.warnf("WARNING: no git origin -- memory is not durable and the single-instance lease is disabled (local mode)")
 	} else {
 		if err := s.acquireLease(ctx); err != nil {
 			return err
 		}
 		defer func() { s.mem.ReleaseLease(s.leaseSHA) }()
 	}
-	s.Log.Printf("supervising %s (instance %s, tick %s)", s.Dir, s.InstanceID, TickInterval)
+	s.infof("supervising %s (instance %s, tick %s)", s.Dir, s.InstanceID, TickInterval)
 	if err := s.verifySandbox(); err != nil {
 		return err
 	}
@@ -193,13 +217,13 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	if now.Sub(s.lastTrim) >= 24*time.Hour {
 		s.lastTrim = now
 		if changed, err := s.mem.Trim(s.retention, now); err != nil {
-			s.Log.Printf("retention trim: %v", err)
+			s.warnf("retention trim: %v", err)
 		} else if changed {
 			if _, err := s.mem.CommitTrim(s.retention); err != nil {
-				s.Log.Printf("retention trim commit: %v", err)
+				s.warnf("retention trim commit: %v", err)
 			}
 			s.pushBestEffort()
-			s.Log.Printf("memory: trimmed record streams to the %s retention window", s.retention)
+			s.infof("memory: trimmed record streams to the %s retention window", s.retention)
 		}
 	}
 
@@ -221,29 +245,29 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			var err error
 			spec, err = schedule.Parse(r.FM.Schedule, s.loc)
 			if err != nil {
-				s.Log.Printf("%s: bad schedule %q: %v", r.Name, r.FM.Schedule, err)
+				s.warnf("%s: bad schedule %q: %v", r.Name, r.FM.Schedule, err)
 				continue
 			}
 		}
 		if r.FM.Trigger != nil {
 			if err := r.FM.Trigger.Validate(); err != nil {
-				s.Log.Printf("%s: %v", r.Name, err)
+				s.warnf("%s: %v", r.Name, err)
 				continue
 			}
 		}
 		st, err := schedule.Load(s.stateDir(), r.Name)
 		if err != nil {
-			s.Log.Printf("%s: %v", r.Name, err)
+			s.errorf("%s: %v", r.Name, err)
 			continue
 		}
 		if st == nil {
 			// First sight of this routine: it owes nothing from before it existed.
 			st = &schedule.State{Routine: r.Name, Watermark: now}
 			if err := st.Save(s.stateDir()); err != nil {
-				s.Log.Printf("%s: %v", r.Name, err)
+				s.errorf("%s: %v", r.Name, err)
 				continue
 			}
-			s.Log.Printf("%s: registered (watermark %s)", r.Name, now.Format(time.RFC3339))
+			s.infof("%s: registered (watermark %s)", r.Name, now.Format(time.RFC3339))
 			continue
 		}
 		if st.Pending == nil {
@@ -262,7 +286,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 					}
 					minted = true
 					if n > 1 {
-						s.Log.Printf("%s: %d missed firings collapse into run %s", r.Name, n, st.Pending.RunID)
+						s.infof("%s: %d missed firings collapse into run %s", r.Name, n, st.Pending.RunID)
 					}
 					// The scheduled run will pull whatever the trigger would
 					// have announced; refresh the baseline so the same news
@@ -281,14 +305,14 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 						CreatedAt:      now,
 					}
 					minted = true
-					s.Log.Printf("%s: trigger fired -- run %s", r.Name, st.Pending.RunID)
+					s.infof("%s: trigger fired -- run %s", r.Name, st.Pending.RunID)
 				}
 			}
 			if !minted {
 				continue
 			}
 			if err := st.Save(s.stateDir()); err != nil {
-				s.Log.Printf("%s: %v", r.Name, err)
+				s.errorf("%s: %v", r.Name, err)
 				continue
 			}
 		}
@@ -299,7 +323,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			// container never gets there.
 			s.abandon(r.Name, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), now)
 			if err := st.Save(s.stateDir()); err != nil {
-				s.Log.Printf("%s: %v", r.Name, err)
+				s.errorf("%s: %v", r.Name, err)
 			}
 			continue
 		}
@@ -392,9 +416,9 @@ func (s *Supervisor) abandon(name string, st *schedule.State, detail string, now
 	st.Pending = nil
 	if cooldown := st.RecordAbandonment(now); cooldown > 0 {
 		_ = s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, name, st.ConsecutiveAbandons, cooldown))
-		s.Log.Printf("%s: circuit breaker tripped -- cooling down for %s", name, cooldown)
+		s.errorf("%s: circuit breaker tripped -- cooling down for %s", name, cooldown)
 	}
-	s.Log.Printf("%s: %s abandoned after %d attempts", name, p.RunID, p.Attempts)
+	s.errorf("%s: %s abandoned after %d attempts", name, p.RunID, p.Attempts)
 }
 
 // execute runs one attempt of a pending logical run and settles the outcome.
@@ -406,9 +430,9 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	release, lockErr := runner.LockRoutine(s.Dir, r.Name)
 	if lockErr != nil {
 		if errors.Is(lockErr, runner.ErrRoutineLocked) {
-			s.Log.Printf("%s: attempt already in flight elsewhere (lock held) -- skipping this tick", r.Name)
+			s.warnf("%s: attempt already in flight elsewhere (lock held) -- skipping this tick", r.Name)
 		} else {
-			s.Log.Printf("%s: routine lock: %v", r.Name, lockErr)
+			s.errorf("%s: routine lock: %v", r.Name, lockErr)
 		}
 		return
 	}
@@ -416,7 +440,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 
 	agent, err := config.Load(s.Dir)
 	if err != nil {
-		s.Log.Printf("%s: %v", r.Name, err)
+		s.errorf("%s: %v", r.Name, err)
 		return
 	}
 
@@ -428,13 +452,13 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	p := st.Pending
 	giveBack := reserve(p, now)
 	if err := st.Save(s.stateDir()); err != nil {
-		s.Log.Printf("%s: %v", r.Name, err)
+		s.errorf("%s: %v", r.Name, err)
 		return
 	}
 	if !s.commitIntent(fmt.Sprintf("Reserve %s attempt %d (%s)", r.Name, p.Attempts, p.RunID)) {
 		giveBack()
 		if err := st.Save(s.stateDir()); err != nil {
-			s.Log.Printf("%s: %v", r.Name, err)
+			s.errorf("%s: %v", r.Name, err)
 		}
 		return
 	}
@@ -445,7 +469,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		ScheduledFor:   p.ScheduledFor.Format(time.RFC3339),
 		CoveredThrough: p.CoveredThrough.Format(time.RFC3339),
 	}
-	s.Log.Printf("%s: %s %s starting (scheduled %s)", r.Name, p.RunID, meta.AttemptID, meta.ScheduledFor)
+	s.infof("%s: %s %s starting (scheduled %s)", r.Name, p.RunID, meta.AttemptID, meta.ScheduledFor)
 
 	res, staging, err := runner.Execute(ctx, s.Dir, agent, r, meta)
 	detail := ""
@@ -455,7 +479,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		// nothing can repeat past is abandoned on the spot rather than
 		// retried to the budget's end for the same error five times.
 		fatal = errors.Is(err, runner.ErrFatal)
-		s.Log.Printf("%s: %s failed to start: %v", r.Name, p.RunID, err)
+		s.errorf("%s: %s failed to start: %v", r.Name, p.RunID, err)
 		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
 		detail = err.Error()
 	} else {
@@ -482,25 +506,25 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 			s.abandon(r.Name, st, fin.Detail, now)
 		}
 		if err := st.Save(s.stateDir()); err != nil {
-			s.Log.Printf("%s: %v", r.Name, err)
+			s.errorf("%s: %v", r.Name, err)
 		}
 	})
 	if serr != nil {
-		s.Log.Printf("%s: %s settle: %v", r.Name, p.RunID, serr)
+		s.errorf("%s: %s settle: %v", r.Name, p.RunID, serr)
 	}
 	if settlement.Discarded {
-		s.Log.Printf("%s: discarded staged events.md change (events: false)", r.Name)
+		s.infof("%s: discarded staged events.md change (events: false)", r.Name)
 	}
 	switch {
 	case settlement.Outcome == runner.Canceled:
-		s.Log.Printf("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
+		s.infof("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
 		return // no push: shutdown's final commit and push carry the record
 	case settlement.Outcome == runner.Completed:
-		s.Log.Printf("%s: %s completed in %s", r.Name, p.RunID, res.Duration)
+		s.infof("%s: %s completed in %s", r.Name, p.RunID, res.Duration)
 	case abandoned:
 		// abandon() already said so.
 	default:
-		s.Log.Printf("%s: %s attempt failed (%s) -- will retry", r.Name, p.RunID, settlement.Detail)
+		s.errorf("%s: %s attempt failed (%s) -- will retry", r.Name, p.RunID, settlement.Detail)
 	}
 	s.pushBestEffort()
 }
@@ -528,7 +552,7 @@ func (s *Supervisor) syncOnce() {
 		s.recover("sync", "memory sync with origin recovered", &s.syncWarned)
 		s.recover("origin", "origin reachable again -- memory sync resumed", &s.originWarned)
 		if rep.Adopted {
-			s.Log.Printf("memory: adopted remote commits")
+			s.infof("memory: adopted remote commits")
 		}
 	}
 }
@@ -545,7 +569,7 @@ func (s *Supervisor) syncOnce() {
 func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	failing := map[string]string{}
 	for _, e := range errs {
-		s.Log.Printf("routine load error: %v", e)
+		s.warnf("routine load error: %v", e)
 		var re *routine.Error
 		if !errors.As(e, &re) {
 			continue
@@ -574,13 +598,13 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	date := now.UTC().Format("2006-01-02")
 	for _, line := range news {
 		if err := s.mem.AppendEvent(fmt.Sprintf("%s supervisor: %s", date, line)); err != nil {
-			s.Log.Printf("recording routine load status: %v", err)
+			s.errorf("recording routine load status: %v", err)
 			return
 		}
-		s.Log.Print(line)
+		s.warnf("%s", line)
 	}
 	if _, err := s.mem.Commit("Record routine load status"); err != nil {
-		s.Log.Printf("routine load status commit failed: %v", err)
+		s.errorf("routine load status commit failed: %v", err)
 		return
 	}
 	s.pushBestEffort()
@@ -592,7 +616,10 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 // double-record the same fact. The task id is date-scoped so a supervisor
 // restart doesn't re-record it -- AppendHumanTask skips ids already present.
 func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
-	s.Log.Printf("BLOCKED: %s", msg)
+	// Sync/push failure text quotes raw git errors, which can carry a
+	// tokened origin URL -- and the message below is committed to memory.
+	msg = scrub.Redact(msg, s.secrets)
+	s.errorf("BLOCKED: %s", msg)
 	if !*warned {
 		*warned = true
 		date := time.Now().UTC().Format("2006-01-02")
@@ -615,7 +642,7 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	if err != nil || !changed {
 		return
 	}
-	s.Log.Printf("RECOVERED: %s", msg)
+	s.errorf("RECOVERED: %s", msg)
 	_, _ = s.mem.Commit("Resolve supervisor blocker")
 	s.pushBestEffort()
 }
@@ -635,7 +662,7 @@ func (s *Supervisor) pushBestEffort() {
 		return
 	}
 	if err := s.mem.Push(); err != nil {
-		s.Log.Printf("memory push failed (will retry): %v", err)
+		s.warnf("memory push failed (will retry): %v", err)
 		return
 	}
 	if s.blockedTip != "" {
@@ -696,26 +723,26 @@ func (s *Supervisor) verifySandbox() error {
 		probe.Env = []string{"TMPDIR=" + os.Getenv("TMPDIR")}
 		out, probeErr := probe.Output()
 		if probeErr == nil {
-			s.Log.Printf("filesystem sandbox: %s active for model processes", strings.TrimSpace(string(out)))
+			s.infof("filesystem sandbox: %s active for model processes", strings.TrimSpace(string(out)))
 			return nil
 		}
 		if os.Getenv(sandbox.EnvUnsafeOverride) == "1" {
-			s.Log.Printf("WARNING: filesystem sandbox DISABLED by %s -- model processes run unconfined", sandbox.EnvUnsafeOverride)
+			s.warnf("WARNING: filesystem sandbox DISABLED by %s -- model processes run unconfined", sandbox.EnvUnsafeOverride)
 			return nil
 		}
 		return fmt.Errorf("filesystem sandbox required but unavailable (host kernel without Landlock?) -- refusing to supervise; set %s=1 to run unconfined deliberately", sandbox.EnvUnsafeOverride)
 	case os.Getenv("OPENROUTINES_NATIVE") == "1":
-		s.Log.Printf("WARNING: OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
+		s.warnf("WARNING: OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
 	default:
-		s.Log.Printf("model processes run in the per-run container")
+		s.infof("model processes run in the per-run container")
 	}
 	return nil
 }
 
 func (s *Supervisor) shutdown() {
-	s.Log.Printf("shutting down: final memory sync")
+	s.infof("shutting down: final memory sync")
 	if _, err := s.mem.Commit("Shutdown"); err != nil {
-		s.Log.Printf("shutdown commit: %v", err)
+		s.errorf("shutdown commit: %v", err)
 	}
 	s.pushBestEffort()
 }
@@ -744,10 +771,10 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 				return nil
 			}
 			// CAS lost: someone else moved first. Loop and re-evaluate.
-			s.Log.Printf("lease race lost -- re-evaluating")
+			s.infof("lease race lost -- re-evaluating")
 			continue
 		}
-		s.Log.Printf("another instance holds the lease (%s, heartbeat %s) -- waiting", lease.Holder, lease.At.Format(time.RFC3339))
+		s.warnf("another instance holds the lease (%s, heartbeat %s) -- waiting", lease.Holder, lease.At.Format(time.RFC3339))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -796,7 +823,7 @@ func (s *Supervisor) leaseFresh() bool {
 func (s *Supervisor) holdLease(sha string, at time.Time) {
 	if s.leaseWarned {
 		s.leaseWarned = false
-		s.Log.Printf("lease heartbeat recovered -- dispatch resumed")
+		s.errorf("lease heartbeat recovered -- dispatch resumed")
 	}
 	s.leaseSHA = sha
 	s.leaseRenewed = at
@@ -809,7 +836,7 @@ func (s *Supervisor) holdLease(sha string, at time.Time) {
 func (s *Supervisor) leaseLost(msg string) bool {
 	if !s.leaseWarned {
 		s.leaseWarned = true
-		s.Log.Printf("BLOCKED: %s", msg)
+		s.errorf("BLOCKED: %s", msg)
 	}
 	return false
 }

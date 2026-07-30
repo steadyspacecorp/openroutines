@@ -30,7 +30,7 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 	}
 	prior, err := trigger.Load(s.stateDir(), r.Name)
 	if err != nil {
-		s.Log.Printf("%s: %v", r.Name, err)
+		s.errorf("%s: %v", r.Name, err)
 		return false
 	}
 
@@ -42,17 +42,17 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 		// First observation establishes the baseline and never fires,
 		// mirroring how a new consumer starts at the current commit.
 		if err := res.Next.Save(s.stateDir()); err != nil {
-			s.Log.Printf("%s: %v", r.Name, err)
+			s.errorf("%s: %v", r.Name, err)
 			return false
 		}
-		s.Log.Printf("%s: trigger baseline established", r.Name)
+		s.infof("%s: trigger baseline established", r.Name)
 		return false
 	}
 	if !res.Changed {
 		return false
 	}
 	if err := res.Next.Save(s.stateDir()); err != nil {
-		s.Log.Printf("%s: %v", r.Name, err)
+		s.errorf("%s: %v", r.Name, err)
 		return false
 	}
 	return true
@@ -71,7 +71,7 @@ func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 		return
 	}
 	if err := res.Next.Save(s.stateDir()); err != nil {
-		s.Log.Printf("%s: %v", r.Name, err)
+		s.errorf("%s: %v", r.Name, err)
 	}
 }
 
@@ -85,7 +85,7 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 		if err != nil {
 			if !s.pollFailed[r.Name] {
 				s.pollFailed[r.Name] = true
-				s.Log.Printf("%s: trigger credential %q: %v", r.Name, spec.Credential, err)
+				s.warnf("%s: trigger credential %q: %v", r.Name, spec.Credential, err)
 			}
 			return trigger.Result{}, false
 		}
@@ -95,12 +95,12 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 	if err != nil {
 		if !s.pollFailed[r.Name] {
 			s.pollFailed[r.Name] = true
-			s.Log.Printf("%s: trigger poll: %v", r.Name, err)
+			s.warnf("%s: trigger poll: %v", r.Name, err)
 		}
 		return trigger.Result{}, false
 	}
 	if s.pollFailed[r.Name] {
-		s.Log.Printf("%s: trigger poll recovered", r.Name)
+		s.warnf("%s: trigger poll recovered", r.Name)
 		delete(s.pollFailed, r.Name)
 	}
 	return res, true

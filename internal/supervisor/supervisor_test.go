@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
@@ -1083,5 +1084,26 @@ func TestBootWarnsOnEnvDeliveredMasterKey(t *testing.T) {
 	s.warnKeyDelivery()
 	if out.Len() > 0 {
 		t.Errorf("file delivery with no leftover variable is the recommended path: %q", out.String())
+	}
+}
+
+// The log level gates the supervisor's own lines: lifecycle at info,
+// degraded conditions at warn, failures always.
+func TestLogLevelGatesSupervisorLines(t *testing.T) {
+	var buf strings.Builder
+	s := &Supervisor{Log: log.New(&buf, "", 0), level: config.LogWarn}
+	s.infof("lifecycle")
+	s.warnf("degraded")
+	s.errorf("failed")
+	if strings.Contains(buf.String(), "lifecycle") {
+		t.Fatalf("info line should be gated at warn level: %q", buf.String())
+	}
+	for _, want := range []string{"degraded", "failed"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("%s line missing at warn level: %q", want, buf.String())
+		}
+	}
+	if s := (&Supervisor{Log: log.New(&buf, "", 0)}); s.level != config.LogDebug {
+		t.Fatal("a bare struct must suppress nothing")
 	}
 }

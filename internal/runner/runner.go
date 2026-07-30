@@ -10,6 +10,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	_ "embed"
@@ -193,6 +194,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		return nil, nil, err
 	}
 	timeout := EffectiveTimeout(agent, r)
+	level := agent.EffectiveLogLevel()
 	// The harness config is parsed from the agent repository, not the
 	// workspace copy buildWorkspace makes later: MCP permission rules must
 	// never depend on pipeline ordering to see the server list. A file
@@ -289,6 +291,13 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	if r.FM.Effort != "" {
 		ocArgs = append(ocArgs, "--variant", r.FM.Effort)
 	}
+	if level == config.LogDebug {
+		// The full formatted transcript, plus opencode's own diagnostics.
+		ocArgs = append(ocArgs, "--print-logs", "--log-level", "DEBUG")
+	} else {
+		// Raw JSON events, rendered into the bounded run log below.
+		ocArgs = append(ocArgs, "--format", "json")
+	}
 	ocArgs = append(ocArgs, r.Body)
 
 	// Spawn the model process: in the runtime container by default (the
@@ -368,10 +377,33 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		ocExec = containerOpencodeExec(workspace, image)
 		cmd = containerCmd(containerName, workspace, image, env, ocArgs)
 	}
+	// The run log is leveled (design decision "Run output is rendered,
+	// bounded, and leveled"): debug streams the formatted transcript as-is,
+	// info renders the JSON event stream into bounded lines, warn and error
+	// keep the stream out of the log entirely. The tail always captures what
+	// the level would have logged -- failure classification and the failure
+	// tail below read it.
 	tail := &tailBuffer{max: 4096}
-	scrubber := scrub.NewWriter(io.MultiWriter(os.Stdout, tail), secrets.scrub)
-	cmd.Stdout = scrubber
-	cmd.Stderr = scrubber
+	var flush func()
+	if level == config.LogDebug {
+		scrubber := scrub.NewWriter(io.MultiWriter(os.Stdout, tail), secrets.scrub)
+		cmd.Stdout, cmd.Stderr = scrubber, scrubber
+		flush = scrubber.Flush
+	} else {
+		sink := io.Writer(os.Stdout)
+		if level > config.LogInfo {
+			sink = io.Discard
+		}
+		dst := io.MultiWriter(sink, tail)
+		// Renderers scrub before they truncate -- the ordering that keeps a
+		// truncation boundary from splitting a secret past the exact-value
+		// matcher. stderr is not part of the event stream; its renderer just
+		// passes lines through, bounded.
+		rout := newRenderer(dst, secrets.scrub)
+		rerr := newRenderer(dst, secrets.scrub)
+		cmd.Stdout, cmd.Stderr = rout, rerr
+		flush = func() { rout.Flush(); rerr.Flush() }
+	}
 	cmd.WaitDelay = pipeDrainDeadline
 
 	done := make(chan error, 1)
@@ -419,7 +451,13 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		kill()
 	}
 	res.Duration = time.Since(started).Round(time.Millisecond)
-	scrubber.Flush()
+	flush()
+	if level > config.LogInfo && (res.Outcome == Crashed || res.Outcome == Timeout) && len(tail.buf) > 0 {
+		// A failed attempt's last output is the diagnostic payload, not
+		// chatter: it escapes the level gate, or a warn/error production
+		// agent fails invisibly.
+		_, _ = fmt.Fprintf(os.Stdout, "%s %s %s -- last output:\n%s\n", r.Name, meta.RunID, res.Outcome, bytes.TrimSpace(tail.buf))
+	}
 	res.Model = model
 	res.Effort = r.FM.Effort
 	res.Usage = captureUsage(workspace, ocExec)
