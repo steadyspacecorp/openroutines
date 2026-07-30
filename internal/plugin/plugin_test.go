@@ -203,6 +203,21 @@ func TestMCPDeclarationLoadsAndSummarizes(t *testing.T) {
 	}
 }
 
+// Web access is off by default and a bundle can turn it on, so the summary --
+// the only review gate before install -- has to say so.
+func TestSummaryStatesWebAccess(t *testing.T) {
+	dir := write(t, map[string]string{
+		"routines/demo.md": "---\nschedule: \"0 9 * * *\"\ncredentials: [demo_token]\nwebfetch: true\nwebsearch: true\n---\nDo the demo.\n",
+	})
+	p, err := Load(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := p.Summary(); !strings.Contains(sum, "web access: webfetch, websearch") {
+		t.Fatalf("summary should state web access:\n%s", sum)
+	}
+}
+
 // testSource is valid provenance: Install validates it as strictly as
 // ReadSource does, so the revision has to be a full commit hash.
 var testSource = Source{

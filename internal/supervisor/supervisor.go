@@ -10,7 +10,6 @@ package supervisor
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -39,6 +38,15 @@ const (
 	MaxAttempts  = 5
 )
 
+// Schedulable reports whether a tick will act on a routine at all. Exported
+// because reporting has to agree with dispatch: the tick skips these before
+// it reads their state, so whatever a skipped routine's state still owes,
+// nothing is coming to advance it -- and a surface that says otherwise is
+// promising a retry that cannot happen.
+func Schedulable(r *routine.Routine) bool {
+	return r.FM.IsActive() && (r.FM.Schedule != "" || r.FM.Trigger != nil)
+}
+
 // Supervisor is the tick loop: it re-reads routines, mints and dispatches
 // runs, and syncs memory with origin.
 type Supervisor struct {
@@ -58,9 +66,16 @@ type Supervisor struct {
 	syncBlocked   bool          // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool          // blocker already raised for the current sync problem
 	unreachWarned bool
-	commitWarned  bool              // intent commit failing: dispatch is halted, someone must look
-	loadFailed    map[string]string // routine name -> the load failure already recorded
-	secrets       map[string]string // the supervisor's own secrets, for redacting its output
+	originWarned  bool // origin unreachable: blocker already raised for this outage
+	// blockedTip is the memory tip this instance stranded on the blocked ref
+	// while sync was refused: what tells a later successful push that the
+	// stranded copy is redundant, and what keeps a repeat push idle. Only what
+	// this instance stranded: a ref left by a previous container is the only
+	// copy of its blocker and must outlive it.
+	blockedTip   string
+	commitWarned bool              // intent commit failing: dispatch is halted, someone must look
+	loadFailed   map[string]string // routine name -> the load failure already recorded
+	secrets      map[string]string // the supervisor's own secrets, for redacting its output
 
 	// Trigger bookkeeping that is deliberately not durable: last-poll times
 	// (persisting them would dirty the memory worktree every tick) and
@@ -86,7 +101,7 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	secrets := supervisorSecrets(dir)
+	secrets := memory.SupervisorSecrets(dir)
 	mem := memory.At(dir)
 	return &Supervisor{
 		Dir:        dir,
@@ -101,33 +116,6 @@ func New(dir string) (*Supervisor, error) {
 		lastPolled: map[string]time.Time{},
 		pollFailed: map[string]bool{},
 	}, nil
-}
-
-// supervisorSecrets collects the secret values the supervisor itself holds
-// -- the master key and the deploy key -- so its own log lines and memory
-// events can be redacted. (The model's output stream has its own scrubber,
-// seeded with the run's credentials.) A git error quoting an origin URL or
-// key material would otherwise be logged verbatim and committed to memory.
-// The deploy key is multi-line, and logs are scrubbed line by line, so each
-// substantial line registers as its own value.
-func supervisorSecrets(dir string) map[string]string {
-	out := map[string]string{}
-	if key, err := creds.LoadKey(dir); err == nil {
-		out["master_key"] = hex.EncodeToString(key)
-	}
-	deployKey := os.Getenv(memory.EnvDeployKey)
-	if path := os.Getenv(memory.EnvDeployKeyFile); deployKey == "" && path != "" {
-		if raw, err := os.ReadFile(path); err == nil {
-			deployKey = string(raw)
-		}
-	}
-	for i, line := range strings.Split(deployKey, "\n") {
-		line = strings.TrimSpace(line)
-		if len(line) >= 16 && !strings.HasPrefix(line, "-----") {
-			out[fmt.Sprintf("deploy_key_%d", i)] = line
-		}
-	}
-	return out
 }
 
 // registerScrub adds a trigger poll's bearer material to the supervisor's
@@ -152,6 +140,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	if err := sandbox.ProtectProcess(); err != nil {
 		s.Log.Printf("WARNING: could not mark supervisor non-dumpable: %v", err)
 	}
+	s.warnKeyDelivery()
 	if configured, err := memory.ConfigureDeployKey(); err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	} else if configured {
@@ -217,7 +206,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		if changed, err := s.mem.Trim(s.retention, now); err != nil {
 			s.Log.Printf("retention trim: %v", err)
 		} else if changed {
-			if _, err := s.mem.Commit(fmt.Sprintf("Trim memory to retention window (%s)", s.retention)); err != nil {
+			if _, err := s.mem.CommitTrim(s.retention); err != nil {
 				s.Log.Printf("retention trim commit: %v", err)
 			}
 			s.pushBestEffort()
@@ -235,7 +224,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	}
 	var due []dispatch
 	for _, r := range routines {
-		if !r.FM.IsActive() || (r.FM.Schedule == "" && r.FM.Trigger == nil) {
+		if !Schedulable(r) {
 			continue
 		}
 		var spec *schedule.Spec
@@ -471,12 +460,15 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 
 	res, staging, err := runner.Execute(ctx, s.Dir, agent, r, meta)
 	detail := ""
+	fatal := false
 	if err != nil {
+		// The runner classifies; the supervisor only asks. A start failure
+		// nothing can repeat past is abandoned on the spot rather than
+		// retried to the budget's end for the same error five times.
+		fatal = errors.Is(err, runner.ErrFatal)
 		s.Log.Printf("%s: %s failed to start: %v", r.Name, p.RunID, err)
 		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
-		// Start-failure text quotes raw errors (git, provider); memory events
-		// are committed and pushed, so redact before recording.
-		detail = scrub.Redact(err.Error(), s.secrets)
+		detail = err.Error()
 	} else {
 		defer staging.Cleanup()
 	}
@@ -496,7 +488,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 			st.Watermark = p.CoveredThrough
 			st.Pending = nil
 			st.RecordSuccess()
-		case p.Attempts >= MaxAttempts:
+		case fatal, p.Attempts >= MaxAttempts:
 			abandoned = true
 			s.abandon(r.Name, st, fin.Detail, now)
 		}
@@ -530,14 +522,22 @@ func (s *Supervisor) syncOnce() {
 	case rep.Rewritten:
 		s.syncBlocked = true
 		s.blockOnce("sync", "memory branch history rewritten on origin -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
+		s.strandBlocked()
 	case rep.Conflict:
 		s.syncBlocked = true
 		s.blockOnce("sync", "memory sync conflict -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
+		s.strandBlocked()
 	case rep.Unreachable:
-		s.Log.Printf("origin unreachable: %s", rep.Detail)
+		// Recorded locally, published when origin returns. The tick gives up
+		// a few lines below this one -- the lease heartbeat needs the same
+		// origin -- so nothing downstream will record it, and an outage whose
+		// only trace is a log line in a container that gets replaced is no
+		// trace at all.
+		s.blockOnce("origin", "origin unreachable -- memory is not durable and no new runs start until it returns: "+rep.Detail, &s.originWarned)
 	default:
 		s.syncBlocked = false
 		s.recover("sync", "memory sync with origin recovered", &s.syncWarned)
+		s.recover("origin", "origin reachable again -- memory sync resumed", &s.originWarned)
 		if rep.Adopted {
 			s.Log.Printf("memory: adopted remote commits")
 		}
@@ -562,10 +562,8 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 			continue
 		}
 		// The path is absolute in the container; the event is read in the
-		// repository, where the file is routines/<name>.md. And load errors
-		// quote file contents, which memory events push.
-		text := strings.TrimPrefix(e.Error(), s.Dir+string(filepath.Separator))
-		failing[re.Name] = scrub.Redact(text, s.secrets)
+		// repository, where the file is routines/<name>.md.
+		failing[re.Name] = strings.TrimPrefix(e.Error(), s.Dir+string(filepath.Separator))
 	}
 
 	var news []string
@@ -605,9 +603,6 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 // double-record the same fact. The task id is date-scoped so a supervisor
 // restart doesn't re-record it -- AppendHumanTask skips ids already present.
 func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
-	// Sync/push failure text quotes raw git errors, which can carry a
-	// tokened origin URL -- and the message below is committed to memory.
-	msg = scrub.Redact(msg, s.secrets)
 	s.Log.Printf("BLOCKED: %s", msg)
 	if !*warned {
 		*warned = true
@@ -636,13 +631,62 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	s.pushBestEffort()
 }
 
+// pushBestEffort publishes what the memory worktree carries. While sync is
+// blocked the memory branch is the thing being refused, so the record goes to
+// the supervisor-owned blocked ref instead -- otherwise the blocker that
+// reports a broken datastore would live only on a container that is about to
+// be replaced. Once the branch carries the same state, the stranded copy is
+// dropped.
 func (s *Supervisor) pushBestEffort() {
-	if s.noOrigin || s.syncBlocked {
+	if s.noOrigin {
+		return
+	}
+	if s.syncBlocked {
+		s.strandBlocked()
 		return
 	}
 	if err := s.mem.Push(); err != nil {
 		s.Log.Printf("memory push failed (will retry): %v", err)
+		return
 	}
+	if s.blockedTip != "" {
+		s.blockedTip = ""
+		s.mem.ClearBlocked()
+	}
+}
+
+// strandBlocked publishes memory to the blocked ref, and is called on every
+// blocked tick rather than only when the blocker is first raised: the record
+// is the whole point of stranding it, so an attempt that fails has to be
+// retried by the next tick instead of dying with the log line that announced
+// it. Keyed on the memory tip, so a tick that changed nothing pushes nothing.
+func (s *Supervisor) strandBlocked() {
+	tip, err := s.mem.Head()
+	if err != nil || tip == s.blockedTip {
+		return
+	}
+	if err := s.mem.PublishBlocked(); err != nil {
+		s.Log.Printf("publishing blocked memory to origin failed (will retry): %v", err)
+		return
+	}
+	s.blockedTip = tip
+	s.Log.Printf("memory: stranded on %s until sync is repaired", memory.BlockedRef)
+}
+
+// warnKeyDelivery says out loud, once at boot, that the master key value is
+// sitting in this process's environment -- the weaker of the two production
+// deliveries. Both work; only the file keeps the value out of the
+// environment, and a deployment that picked the env var years ago has no
+// other moment where anyone is told. It fires on a leftover variable too: a
+// deployment that moved to file delivery without unsetting the old one still
+// publishes the value. Log-only: the platform that forced env delivery cannot
+// be argued with at boot.
+func (s *Supervisor) warnKeyDelivery() {
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") != "1" || !creds.KeyValueInEnv() {
+		return
+	}
+	s.Log.Printf("WARNING: the master key value is in this process's environment (%s) -- readable wherever that environment is; mount the key as a file, point %s at the path, and unset %s",
+		creds.EnvMasterKey, creds.EnvMasterKeyFile, creds.EnvMasterKey)
 }
 
 // verifySandbox enforces the fail-closed policy at boot, not mid-run. Only

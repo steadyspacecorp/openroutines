@@ -1,11 +1,13 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // The model-directed process runs in a container; the pipeline runs on the
@@ -84,6 +86,15 @@ func containerCmd(containerName, workspace, image string, env []string, ocArgs [
 
 // stopContainer terminates a run's container with the same semantics as a
 // process-group kill: SIGTERM (forwarded by --init), 10s grace, then SIGKILL.
+// The CLI call itself is bounded too -- `docker stop` talks to a daemon that
+// can be as unresponsive as the container it is being asked to stop, and the
+// caller escalates when this returns without the run's client exiting.
 func stopContainer(name string) {
-	_ = exec.Command("docker", "stop", "-t", "10", name).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), containerStopDeadline)
+	defer cancel()
+	_ = exec.CommandContext(ctx, "docker", "stop", "-t", "10", name).Run()
 }
+
+// containerStopDeadline covers the 10s stop grace plus the daemon's own
+// round trips; past that the daemon is not answering.
+const containerStopDeadline = 20 * time.Second

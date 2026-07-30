@@ -15,7 +15,9 @@ import (
 // This is the test the security audit asked for first: the run workspace
 // must not be writable (it lives inside /tmp, and Landlock rules are
 // additive -- a blanket /tmp grant would open it), the supervisor's environ
-// must not be readable, and the shared-home leak paths must be closed.
+// must not be readable, and the shared-home leak paths must be closed. It
+// also answers whether the /dev grant reaches across the nested /dev/shm
+// mount (it does).
 //
 // The rules are applied in a helper child process (Landlock binds to the
 // caller and everything it spawns -- applying them here would confine the
@@ -70,6 +72,21 @@ func TestLandlockConfinement(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The audit's second open question: /dev is granted read-write to every
+	// attempt, and /dev/shm is a tmpfs mounted inside it that outlives any one
+	// attempt. This file stands in for what an earlier attempt left behind --
+	// if the confined helper can read or overwrite it, /dev/shm is a
+	// cross-attempt channel and the /dev grant reaches across the nested mount.
+	// A host that mounts /dev/shm read-only has nothing to probe, and is not a
+	// reason to fail the rest of the confinement assertions.
+	planted := fmt.Sprintf("/dev/shm/openroutines-lt-%d", os.Getpid())
+	if err := os.WriteFile(planted, []byte("left by a prior attempt"), 0o600); err != nil {
+		t.Logf("skipping the /dev/shm probe: %v", err)
+		planted = ""
+	} else {
+		t.Cleanup(func() { os.Remove(planted) })
+	}
+
 	ro, rw := Paths(workspace, memoryDir, runTmp, home, attemptHome)
 	self, err := os.Executable()
 	if err != nil {
@@ -87,6 +104,7 @@ func TestLandlockConfinement(t *testing.T) {
 		"LT_SEEDED="+seeded,
 		"LT_DEPLOY_KEY="+deployKey,
 		"LT_AUTH_STORE="+authStore,
+		"LT_SHM_PLANTED="+planted,
 		fmt.Sprintf("LT_PARENT_PID=%d", os.Getpid()),
 	)
 	out, err := cmd.CombinedOutput()
@@ -114,6 +132,15 @@ func TestLandlockConfinement(t *testing.T) {
 		"write-attempt-home": "allowed", // disposable per-attempt HOME
 		"read-workspace":     "allowed",
 		"read-os":            "allowed",
+	}
+	if planted != "" {
+		// The answer, on a real kernel: yes, the rule reaches across. Landlock
+		// walks a path up through mount points, so the /dev grant covers the
+		// tmpfs mounted at /dev/shm, and what one attempt writes there the next
+		// one reads and rewrites. Recorded as the current behavior, not as
+		// desired behavior -- closing the channel flips both to "denied".
+		want["read-dev-shm"] = "allowed"
+		want["write-dev-shm"] = "allowed"
 	}
 	for name, exp := range want {
 		if got[name] != exp {
@@ -150,6 +177,11 @@ func landlockHelper() {
 	tryRead := func(path string) error {
 		_, err := os.ReadFile(path)
 		return err
+	}
+
+	if planted := os.Getenv("LT_SHM_PLANTED"); planted != "" {
+		report("read-dev-shm", tryRead(planted))
+		report("write-dev-shm", tryWrite(fmt.Sprintf("/dev/shm/openroutines-lt-w-%d", os.Getpid())))
 	}
 
 	ws := os.Getenv("LT_WORKSPACE")

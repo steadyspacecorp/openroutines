@@ -62,6 +62,115 @@ func TestValidateRejectsHardLinks(t *testing.T) {
 	}
 }
 
+// Staging is not quiescent between validation and import: a descendant of
+// the model process can outlive it and swap a staged file for a symlink
+// after Validate has walked the tree. The copy path is therefore tested
+// directly, with no Validate in front of it: what it copies has to be
+// decided by the descriptor it reads from, not by an earlier walk.
+func TestStagedCopyNeverFollowsSymlinks(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	os.WriteFile(secret, []byte("SECRET"), 0o644)
+	staging, wt := t.TempDir(), t.TempDir()
+	if err := os.Symlink(secret, filepath.Join(staging, "events.md")); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	if err := copyStaged(staging, wt); err == nil {
+		t.Error("expected the copy to refuse a symlinked staged file")
+	}
+	if raw, _ := os.ReadFile(filepath.Join(wt, "events.md")); strings.Contains(string(raw), "SECRET") {
+		t.Fatalf("the symlink target was copied into the worktree: %q", raw)
+	}
+}
+
+// Same window, the alias a path check cannot see: a hard link the copy path
+// must recognize on the open file, not trust Validate to have caught.
+func TestStagedCopyRefusesHardLinks(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	os.WriteFile(outside, []byte("SECRET"), 0o644)
+	staging, wt := t.TempDir(), t.TempDir()
+	if err := os.Link(outside, filepath.Join(staging, "events.md")); err != nil {
+		t.Skip("hard links unavailable")
+	}
+	if err := copyStaged(staging, wt); err == nil || !strings.Contains(err.Error(), "hard link") {
+		t.Errorf("expected hard-link rejection, got %v", err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(wt, "events.md")); strings.Contains(string(raw), "SECRET") {
+		t.Fatalf("the hard link's content was copied into the worktree: %q", raw)
+	}
+}
+
+// The whole policy is re-applied at copy time, not just the file-type half:
+// a path Validate walked past and a descendant created afterwards is still a
+// path that must never enter the branch.
+func TestStagedCopyRefusesPathsValidateWouldReject(t *testing.T) {
+	for _, rel := range []string{".gitattributes", ".gitignore", filepath.Join(stateDirName, "sched.md"), "runs.jsonl"} {
+		staging, wt := t.TempDir(), t.TempDir()
+		os.MkdirAll(filepath.Dir(filepath.Join(staging, rel)), 0o755)
+		os.WriteFile(filepath.Join(staging, rel), []byte("x\n"), 0o644)
+		if err := copyStaged(staging, wt); err == nil {
+			t.Errorf("%s: expected the copy to refuse it", rel)
+		}
+		if _, err := os.Stat(filepath.Join(wt, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s: copied into the worktree anyway", rel)
+		}
+	}
+}
+
+// The size cap too: a file Validate measured can be grown before the copy
+// reads it, so the cap is enforced on the bytes actually copied.
+func TestStagedCopyRefusesOversizedFile(t *testing.T) {
+	staging, wt := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(staging, "events.md"), make([]byte, maxFile+1), 0o644)
+	if err := copyStaged(staging, wt); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected an oversize rejection, got %v", err)
+	}
+}
+
+// Rejecting halfway through must leave the worktree as it was found. Settle
+// commits the failure record, so a half-copied tree would be committed as the
+// failed run's memory -- exactly the atomicity staging exists to provide.
+func TestStagedCopyRejectionLeavesTheWorktreeUntouched(t *testing.T) {
+	staging, wt := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(wt, "events.md"), []byte("committed\n"), 0o644)
+	os.WriteFile(filepath.Join(staging, "events.md"), []byte("committed\n- new\n"), 0o644)
+	os.WriteFile(filepath.Join(staging, "tasks.md"), []byte("- [ ] new\n"), 0o644)
+	// Sorts last: the good files are copied before the rejection lands.
+	if err := os.Symlink(filepath.Join(t.TempDir(), "secret.txt"), filepath.Join(staging, "zz.md")); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	if err := copyStaged(staging, wt); err == nil {
+		t.Fatal("expected the copy to refuse the symlink")
+	}
+	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "committed\n" {
+		t.Errorf("worktree events.md = %q, want the pre-import content", got)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "tasks.md")); !os.IsNotExist(err) {
+		t.Error("a file from the rejected tree landed in the worktree")
+	}
+}
+
+// RestoreFile writes into staging after the run, so it needs the import
+// copy's confinement: a staged path swapped for a symlink must not redirect
+// the write out of the staging tree.
+func TestRestoreFileNeverWritesOutsideStaging(t *testing.T) {
+	repo := t.TempDir()
+	wt := At(repo).Worktree()
+	os.MkdirAll(wt, 0o755)
+	os.WriteFile(filepath.Join(wt, "events.md"), []byte("worktree events\n"), 0o644)
+	staging := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	os.WriteFile(outside, []byte("do not touch\n"), 0o644)
+	if err := os.Symlink(outside, filepath.Join(staging, "events.md")); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	if _, err := At(repo).RestoreFile(staging, "events.md"); err == nil {
+		t.Error("expected RestoreFile to refuse a symlinked staged path")
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "do not touch\n" {
+		t.Fatalf("wrote through the symlink: %q", got)
+	}
+}
+
 // Import must refuse to overwrite uncommitted human curation -- there is no
 // reflog for edits that were never committed. Supervisor-owned paths are the
 // attempt's own in-flight bookkeeping and do not gate.
@@ -261,6 +370,39 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	}
 }
 
+// Supervisor-written entries are committed and pushed, so a secret quoted in
+// a git or provider error is a durable, published record -- redaction belongs
+// at the append seam, not at whichever call site remembered it.
+func TestSupervisorEntriesRedactSecrets(t *testing.T) {
+	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+	const deployKeyLine = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAt"
+	t.Setenv("OPENROUTINES_MASTER_KEY", masterKey)
+	t.Setenv("OPENROUTINES_DEPLOY_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\n"+deployKeyLine+"\n-----END OPENSSH PRIVATE KEY-----")
+	dir := deliveryFixture(t)
+
+	if err := At(dir).AppendEvent("2026-07-29 supervisor: push failed with key " + deployKeyLine + " and master key " + masterKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := At(dir).AppendHumanTask("task-20260729-1", "investigate: run failed with master key "+masterKey+" (source: supervisor; added 2026-07-29)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"events.md", "tasks.md"} {
+		raw, err := os.ReadFile(filepath.Join(At(dir).Worktree(), file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(raw)
+		for _, secret := range []string{masterKey, deployKeyLine} {
+			if strings.Contains(text, secret) {
+				t.Errorf("%s carries an unredacted secret: %s", file, text)
+			}
+		}
+		if !strings.Contains(text, "[REDACTED:MASTER_KEY]") {
+			t.Errorf("%s missing redaction marker: %s", file, text)
+		}
+	}
+}
+
 func TestGitChildEnvExcludesSupervisorSecrets(t *testing.T) {
 	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
 	t.Setenv("OPENROUTINES_MASTER_KEY", masterKey)
@@ -268,7 +410,9 @@ func TestGitChildEnvExcludesSupervisorSecrets(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("GIT_SSL_CAINFO", "/etc/ssl/certs/corporate-proxy.pem")
 
-	env := newGitCmd(t.TempDir(), []string{"status"}).Env
+	cmd := newGitCmd(t.TempDir(), []string{"status"})
+	defer cmd.cancel()
+	env := cmd.Env
 
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "OPENROUTINES_") {
@@ -296,7 +440,9 @@ func TestGitChildEnvCarriesDeployKeySSHCommand(t *testing.T) {
 	t.Cleanup(func() { sshCommand = prev })
 	sshCommand = "ssh -i /root/.ssh/openroutines_deploy"
 
-	if !slices.Contains(newGitCmd(t.TempDir(), []string{"push"}).Env, "GIT_SSH_COMMAND="+sshCommand) {
+	cmd := newGitCmd(t.TempDir(), []string{"push"})
+	defer cmd.cancel()
+	if !slices.Contains(cmd.Env, "GIT_SSH_COMMAND="+sshCommand) {
 		t.Error("GIT_SSH_COMMAND missing from git child env")
 	}
 }

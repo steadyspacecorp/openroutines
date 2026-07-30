@@ -5,6 +5,9 @@ package memory
 
 import (
 	"bytes"
+	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +16,10 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // Memory is a dedicated directory backed by its own branch.
@@ -33,6 +40,7 @@ const stateDirName = "state"
 // worktree, and the supervisor-owned state inside it goes through here.
 type Memory struct {
 	repoDir string
+	secrets map[string]string // lazily loaded; redacted from supervisor-written entries
 }
 
 // At binds the agent repository at repoDir. No I/O: the worktree may not be
@@ -91,14 +99,22 @@ var gitPassthrough = []string{
 	"GIT_SSL_CAINFO", "GIT_PROXY_SSL_CAINFO",
 }
 
+// gitCmd is a git invocation together with the deadline that bounds it.
+type gitCmd struct {
+	*exec.Cmd
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
 // newGitCmd builds a git invocation with a hermetic environment: no system or
 // global config leaks in, and the environment is constructed rather than
 // inherited. Inheriting it put OPENROUTINES_MASTER_KEY in the child's
 // /proc/<pid>/environ under env-var key delivery -- readable by any same-UID
 // process, model processes included, because the supervisor's non-dumpable
 // flag does not survive execve.
-func newGitCmd(dir string, args []string) *exec.Cmd {
-	cmd := exec.Command("git", args...)
+func newGitCmd(dir string, args []string) *gitCmd {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
 	for _, name := range gitPassthrough {
@@ -109,8 +125,83 @@ func newGitCmd(dir string, args []string) *exec.Cmd {
 	if sshCommand != "" {
 		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND="+sshCommand)
 	}
-	return cmd
+	// git does the network through children (ssh, git-remote-https), so the
+	// deadline has to reach the whole group: killing git alone would leave the
+	// stalled transport holding the output pipe this call is reading.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return killGitGroup(cmd.Process.Pid) }
+	// The group is signalled and killed, but a descendant that left it may
+	// still hold the output pipe; stop reading it rather than waiting on EOF
+	// forever.
+	cmd.WaitDelay = gitDrainDeadline
+	return &gitCmd{Cmd: cmd, ctx: ctx, cancel: cancel}
 }
+
+// killGitGroup ends a timed-out invocation's whole process group: SIGTERM,
+// grace, SIGKILL -- the same escalation a run's group gets, and for a reason
+// specific to git. git removes the lock files it is holding (refs, the index,
+// packed-refs) when it takes SIGTERM and cannot when it takes SIGKILL, and a
+// lock left behind by a hard kill fails every later invocation until a human
+// or a fresh container clears it. Trading two seconds on a path that has
+// already spent the deadline is worth not wedging the repo.
+func killGitGroup(pid int) error {
+	pgid := -pid
+	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	time.Sleep(gitKillGrace)
+	if err := syscall.Kill(pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
+
+// fail wraps a failed invocation, naming the deadline when it was the cause.
+// Wait reports only the kill signal, and "signal: killed" on a fetch reads as
+// a bug in the supervisor rather than as an origin that went dark -- this
+// text reaches operators through sync reports, events, and tasks.
+//
+// An abandoned drain stays a failure even though git itself exited cleanly:
+// the output is truncated at an arbitrary byte, and callers parse it (a
+// half-written SHA out of rev-parse would be worse than an error). It is
+// named rather than reported as a generic failure so the operator looks for
+// the process holding the pipe instead of at the origin.
+//
+// Only the last case keeps the underlying error in the chain, and that is the
+// distinction gitExitCode reads: git exited with a status of its own, so the
+// status means something about the repository. Neither bound above did -- both
+// describe what this process gave up on -- and callers that treat an exit
+// status as an answer (see reachable, in delivery.go) must not read one out of
+// a deadline we imposed.
+func (c *gitCmd) fail(args []string, err error, out []byte) error {
+	switch {
+	case c.ctx.Err() != nil:
+		return fmt.Errorf("git %s: timed out after %s: %s", strings.Join(args, " "), gitTimeout, strings.TrimSpace(string(out)))
+	case errors.Is(err, exec.ErrWaitDelay):
+		return fmt.Errorf("git %s: exited cleanly but something it spawned still held the output pipe after %s, so the output is incomplete: %s", strings.Join(args, " "), gitDrainDeadline, strings.TrimSpace(string(out)))
+	}
+	return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+}
+
+// The bounds on a git invocation: the deadline itself, the grace the group
+// gets to exit cleanly once the deadline expires, and how long the output
+// pipes are drained after that. The drain has to outlast the grace, or the
+// pipes are abandoned while the group is still being asked to leave.
+//
+// gitTimeout sits above the transport's own bounds (a stalled transfer is
+// abandoned after ~60s of no progress) because those only fire once bytes are
+// moving: a blackholed origin -- packets dropped rather than refused -- never
+// gets that far, and the connect parks until the TCP stack gives up, which is
+// many minutes at best. A tick makes several network calls; none of them may
+// be unbounded. Variables, not constants, so tests can drive them.
+var (
+	gitTimeout       = 2 * time.Minute
+	gitKillGrace     = 2 * time.Second
+	gitDrainDeadline = 5 * time.Second
+)
 
 // hermeticConfig is the -c configuration every git invocation carries: no
 // hooks, no file-protocol tricks, a fixed commit identity. No background
@@ -124,6 +215,10 @@ func newGitCmd(dir string, args []string) *exec.Cmd {
 var hermeticConfig = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "protocol.file.allow=user",
+	// The delivery feed excludes retention trims with an anchored --grep;
+	// grep.patternType=fixed in the repo's own config would make the pattern
+	// match nothing and quietly put every trim back in the feed.
+	"-c", "grep.patternType=basic",
 	"-c", "user.name=openroutines",
 	"-c", "user.email=agent@openroutines.dev",
 	"-c", "gc.auto=0",
@@ -136,11 +231,24 @@ var hermeticConfig = []string{
 // no system/global config leaks in.
 func git(dir string, args ...string) (string, error) {
 	cmd := newGitCmd(dir, append(hermeticConfig, args...))
+	defer cmd.cancel()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", cmd.fail(args, err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitExitCode reports the status git exited with, or -1 when it never got to
+// exit at all (no git on PATH, a signal). The distinction is what separates
+// "git answered no" from "git could not answer": the first is a fact about
+// the repository, the second is an attempt worth repeating.
+func gitExitCode(err error) int {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	return -1
 }
 
 // Worktree returns the memory worktree location inside the agent repo.
@@ -264,6 +372,25 @@ func topSegment(rel string) string {
 	return strings.Split(rel, string(filepath.Separator))[0]
 }
 
+// stagedPathPolicy rejects a staged path that may not enter the worktree
+// whatever it holds: git control files, supervisor-owned bookkeeping, absurd
+// depth. Validate applies it for an early, whole-tree failure; the import
+// copy applies it again because the tree can change under the walk that
+// validated it (see copyStaged).
+func stagedPathPolicy(rel string, isDir bool) error {
+	switch filepath.Base(rel) {
+	case ".git", ".gitattributes", ".gitmodules", ".gitignore":
+		return fmt.Errorf("staged memory contains git control file %q -- rejected", rel)
+	}
+	if supervisorOwned[topSegment(rel)] {
+		return fmt.Errorf("staged memory touches supervisor-owned path %q -- rejected", rel)
+	}
+	if isDir && strings.Count(rel, string(filepath.Separator)) > 8 {
+		return fmt.Errorf("staged memory path %q too deep -- rejected", rel)
+	}
+	return nil
+}
+
 // Validate rejects a staged memory tree that contains anything but regular
 // files under sane limits. A rejected tree fails the whole run.
 func Validate(stagingDir string) error {
@@ -276,17 +403,10 @@ func Validate(stagingDir string) error {
 		if err != nil || rel == "." {
 			return err
 		}
-		name := d.Name()
-		if name == ".git" || name == ".gitattributes" || name == ".gitmodules" || name == ".gitignore" {
-			return fmt.Errorf("staged memory contains git control file %q -- rejected", rel)
-		}
-		if supervisorOwned[topSegment(rel)] {
-			return fmt.Errorf("staged memory touches supervisor-owned path %q -- rejected", rel)
+		if err := stagedPathPolicy(rel, d.IsDir()); err != nil {
+			return err
 		}
 		if d.IsDir() {
-			if strings.Count(rel, string(filepath.Separator)) > 8 {
-				return fmt.Errorf("staged memory path %q too deep -- rejected", rel)
-			}
 			return nil
 		}
 		if !d.Type().IsRegular() {
@@ -338,25 +458,7 @@ func (m *Memory) Import(stagingDir string) error {
 			}
 		}
 	}
-	// Copy staged files over the worktree.
-	err := filepath.WalkDir(stagingDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(stagingDir, path)
-		if rel == "." {
-			return nil
-		}
-		if rel == ConsumeMarker {
-			return nil // consume receipt for the runtime, never memory content
-		}
-		dest := filepath.Join(wt, rel)
-		if d.IsDir() {
-			return os.MkdirAll(dest, 0o755)
-		}
-		return copyFile(path, dest)
-	})
-	if err != nil {
+	if err := copyStaged(stagingDir, wt); err != nil {
 		return err
 	}
 	// Remove worktree files the routine deleted in staging.
@@ -390,27 +492,41 @@ func (m *Memory) Import(stagingDir string) error {
 // context"): the instruction tells the routine not to write the file, this
 // makes sure. Reports whether a staged change was discarded.
 func (m *Memory) RestoreFile(stagingDir, name string) (bool, error) {
-	src := filepath.Join(m.Worktree(), name)
-	dest := filepath.Join(stagingDir, name)
-	want, err := os.ReadFile(src)
-	if os.IsNotExist(err) {
-		// The worktree has no such file: the run must not create it either.
-		if _, serr := os.Stat(dest); os.IsNotExist(serr) {
-			return false, nil
-		}
-		return true, os.Remove(dest)
+	want, werr := os.ReadFile(filepath.Join(m.Worktree(), name))
+	if werr != nil && !os.IsNotExist(werr) {
+		return false, werr
 	}
+	// This reads and writes staging after the run, so it is confined exactly
+	// as the import copy is: a path swapped for a symlink must not redirect
+	// the write out of the staging tree (see copyStaged).
+	root, err := os.OpenRoot(stagingDir)
 	if err != nil {
 		return false, err
 	}
-	got, err := os.ReadFile(dest)
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
+	defer func() { _ = root.Close() }()
+	staged, serr := openStaged(root, name)
+	if serr == nil {
+		defer func() { _ = staged.Close() }()
+	} else if !errors.Is(serr, fs.ErrNotExist) {
+		return false, serr
 	}
-	if err == nil && bytes.Equal(got, want) {
-		return false, nil
+	if os.IsNotExist(werr) {
+		// The worktree has no such file: the run must not create it either.
+		if serr != nil {
+			return false, nil
+		}
+		return true, root.Remove(name)
 	}
-	return true, os.WriteFile(dest, want, 0o644)
+	if serr == nil {
+		got, err := io.ReadAll(staged)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Equal(got, want) {
+			return false, nil
+		}
+	}
+	return true, root.WriteFile(name, want, 0o644)
 }
 
 // Commit records the current worktree state on the memory branch.
@@ -428,11 +544,85 @@ func (m *Memory) Commit(message string) (string, error) {
 	return git(wt, "rev-parse", "--short", "HEAD")
 }
 
+// commitPaths commits only the named paths, leaving everything else in the
+// worktree as it found it. Commit sweeps the whole tree, which is right for a
+// run's settlement -- whatever the worktree carries is the intent -- and wrong
+// for maintenance: a commit written for one purpose must not carry work that
+// merely happened to be dirty when it fired. Missing paths are skipped.
+func (m *Memory) commitPaths(message string, paths ...string) (string, error) {
+	wt := m.Worktree()
+	var present []string
+	for _, p := range paths {
+		if _, err := os.Stat(filepath.Join(wt, p)); err == nil {
+			present = append(present, p)
+		}
+	}
+	if len(present) == 0 {
+		return "", nil
+	}
+	// A pathspec commit takes the working-tree content of those paths, but
+	// only for paths git already tracks -- add first so a file written for
+	// the first time isn't a pathspec that matches nothing.
+	if _, err := git(wt, append([]string{"add", "--"}, present...)...); err != nil {
+		return "", err
+	}
+	if changed, _ := git(wt, append([]string{"status", "--porcelain", "--"}, present...)...); changed == "" {
+		return "", nil // nothing to commit
+	}
+	if _, err := git(wt, append([]string{"commit", "--quiet", "-m", message, "--"}, present...)...); err != nil {
+		return "", err
+	}
+	return git(wt, "rev-parse", "--short", "HEAD")
+}
+
 // flatten collapses any whitespace runs -- including the newlines raw git
 // and tool errors carry -- into single spaces, so supervisor-written entries
 // always honor the one-line-per-entry format of events.md and tasks.md.
 func flatten(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// scrubbed prepares supervisor-written text for a memory file: every secret value
+// this process holds redacted, then flattened to one line. Redaction lives at
+// this seam rather than at the call sites that remember to ask for it, because
+// what lands here is committed and pushed -- a git error quoting key material
+// would be a durable, published record, not a log line.
+//
+// An empty set is retried rather than cached: SupervisorSecrets reports no
+// error, so caching a failed load would silently disarm redaction for the
+// life of the process -- and the append most likely to carry key material is
+// one recording that something involving the key just went wrong.
+func (m *Memory) scrubbed(line string) string {
+	if len(m.secrets) == 0 {
+		m.secrets = SupervisorSecrets(m.repoDir)
+	}
+	return flatten(scrub.Redact(line, m.secrets))
+}
+
+// SupervisorSecrets collects the secret values the supervisor process itself
+// holds -- the master key and the deploy key -- so its own log lines and the
+// entries it writes to memory can be redacted. (The model's output stream has
+// its own scrubber, seeded with the run's credentials.) The deploy key is
+// multi-line, and redaction is line by line, so each substantial line
+// registers as its own value.
+func SupervisorSecrets(dir string) map[string]string {
+	out := map[string]string{}
+	if key, err := creds.LoadKey(dir); err == nil {
+		out["master_key"] = hex.EncodeToString(key)
+	}
+	deployKey := os.Getenv(EnvDeployKey)
+	if path := os.Getenv(EnvDeployKeyFile); deployKey == "" && path != "" {
+		if raw, err := os.ReadFile(path); err == nil {
+			deployKey = string(raw)
+		}
+	}
+	for i, line := range strings.Split(deployKey, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) >= 16 && !strings.HasPrefix(line, "-----") {
+			out[fmt.Sprintf("deploy_key_%d", i)] = line
+		}
+	}
+	return out
 }
 
 // AppendEvent records a supervisor-written event: the mechanism for outcomes
@@ -444,7 +634,7 @@ func (m *Memory) AppendEvent(line string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = fmt.Fprintf(f, "- %s\n", flatten(line))
+	_, err = fmt.Fprintf(f, "- %s\n", m.scrubbed(line))
 	return err
 }
 
@@ -466,7 +656,7 @@ func (m *Memory) AppendHumanTask(taskID, description string) error {
 	if strings.Contains(text, "`"+taskID+"`") {
 		return nil // one canonical record per task
 	}
-	entry := fmt.Sprintf("- [ ] `%s` %s", taskID, flatten(description))
+	entry := fmt.Sprintf("- [ ] `%s` %s", taskID, m.scrubbed(description))
 	lines := strings.Split(text, "\n")
 
 	section := -1
@@ -637,6 +827,128 @@ func (m *Memory) Status() WorktreeStatus {
 		_, _ = fmt.Sscanf(out, "%d", &st.Behind)
 	}
 	return st
+}
+
+// copyStaged brings every staged file into the worktree. Validate has walked
+// the tree by now, but staging is not quiescent: a descendant of the model
+// process can outlive the run and rewrite what the walk approved. So the copy
+// decides for itself -- an os.Root confines every path component to the
+// staging tree, and every check (path policy, file type, count, size) is
+// re-applied here, on the descriptor being read rather than on a path that
+// can mean something else a moment later.
+//
+// Because those checks reject mid-walk, the copy lands in a scratch tree
+// beside the worktree and is promoted only once the whole staged tree has
+// passed. A rejection still fails the run, and Settle commits the failure
+// record -- so a half-copied worktree would commit part of a rejected run's
+// memory, which is the atomicity staging exists to provide.
+func copyStaged(stagingDir, wt string) error {
+	root, err := os.OpenRoot(stagingDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	scratch, err := os.MkdirTemp(filepath.Dir(wt), ".openroutines-import-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+
+	var dirs, files []string
+	if err := fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		rel = filepath.FromSlash(rel)
+		if rel == ConsumeMarker {
+			return nil // consume receipt for the runtime, never memory content
+		}
+		if err := stagedPathPolicy(rel, d.IsDir()); err != nil {
+			return err
+		}
+		if d.IsDir() {
+			dirs = append(dirs, rel)
+			return os.MkdirAll(filepath.Join(scratch, rel), 0o755)
+		}
+		if len(files) >= maxEntries {
+			return fmt.Errorf("staged memory exceeds %d files -- rejected", maxEntries)
+		}
+		files = append(files, rel)
+		return copyStagedFile(root, rel, filepath.Join(scratch, rel))
+	}); err != nil {
+		return err
+	}
+	for _, rel := range dirs {
+		if err := os.MkdirAll(filepath.Join(wt, rel), 0o755); err != nil {
+			return err
+		}
+	}
+	for _, rel := range files {
+		dest := filepath.Join(wt, rel)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if err := os.Rename(filepath.Join(scratch, rel), dest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyStagedFile copies one staged file into the scratch tree, bounded by the
+// same size cap Validate measured against: the file can have grown since.
+func copyStagedFile(root *os.Root, rel, dest string) error {
+	in, err := openStaged(root, rel)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	n, err := io.Copy(out, io.LimitReader(in, maxFile+1))
+	if err != nil {
+		return err
+	}
+	if n > maxFile {
+		return fmt.Errorf("staged memory file %q exceeds %d bytes -- rejected", rel, maxFile)
+	}
+	return nil
+}
+
+// openStaged opens a path inside the staging tree and proves on the
+// descriptor itself that it is an ordinary unaliased file. Nothing an earlier
+// stat decided is trusted: a descendant of the model process can outlive the
+// run and swap the path for a symlink, a hard link, or a fifo. O_NONBLOCK so
+// a fifo cannot park the caller until someone opens its write end.
+func openStaged(root *os.Root, rel string) (*os.File, error) {
+	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("staged memory file %q is not readable inside staging -- rejected: %w", rel, err)
+	}
+	info, err := f.Stat()
+	switch {
+	case err != nil:
+	case !info.Mode().IsRegular():
+		err = fmt.Errorf("staged memory file %q is not a regular file -- rejected", rel)
+	default:
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+			err = fmt.Errorf("staged memory file %q is a hard link -- rejected", rel)
+		}
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 func copyFile(src, dest string) error {

@@ -17,13 +17,15 @@ Records hold facts, never polished prose -- compression and voice are a reader's
 
 ## Memory lives on a git branch
 
-The memory an agent builds as it works travels through git, on its own branch -- backed up with every push, kept separate from your routines. Memory survives redeploys and rollbacks like a database, but versioned and inspectable: reviewing what your agent has learned is `git log memory`, and pruning bad learnings is part of maintaining an agent -- humans can curate the branch, and the agent pulls before each run.
+The memory an agent builds as it works travels through git, on its own branch -- backed up with every push, kept separate from your routines. Memory survives redeploys and rollbacks like a database, but versioned and inspectable: reviewing what your agent has learned is `git log memory`, and pruning bad learnings is part of maintaining an agent -- humans can curate the branch, and the agent pulls it before each run. Memory is the only branch a running agent syncs with origin: routines and code travel the other way, baked into the image at build time (see [Operating in production](operating.md)).
 
-The working files stay lean, too: entries older than the retention window (`memory.retention` in `openroutines.yml`, default 30 days) are trimmed daily, and git history keeps everything forever -- including changes a consumer hasn't seen yet.
+The working files stay lean, too: entries older than the retention window (`memory.retention` in `openroutines.yml`, default 30 days) are trimmed daily, and git history keeps everything forever -- including changes a consumer hasn't seen yet. Trimming is housekeeping and is never reported: a consumer already past those entries hears nothing about them being pruned.
 
 ## Reporting: the memory branch is the change feed
 
 Because memory is a git branch, its commits are a change feed: a reporting routine declares `consumes: memory`, receives an inbox of everything since it last reported, and marks the batch consumed when its report covers it. Each consumer keeps its own cursor, so pointing a second destination at the same agent -- Steady and Slack, say -- takes no changes to the routines doing the work. Nothing is delivered twice or lost: an unconsumed change remains available and returns next time.
+
+Cursors live on the memory branch under `state/cursors/`, and rewriting that branch's history can leave one pointing at a commit that is no longer on it. That consumer stops: there is no change set to assemble, so its runs are abandoned as they come due rather than retried, and both `openroutines status` and a human-owned task in `tasks.md` name the file to fix. Delete the cursor file and commit, and the consumer restarts from the current state -- history before that point is not replayed, so anything it had not yet reported is skipped. Repair the SHA by hand instead when you need those changes reported and know they were not already sent.
 
 ## The check-in routine
 

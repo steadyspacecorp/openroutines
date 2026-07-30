@@ -23,6 +23,26 @@ const DefaultRetention = 30 * 24 * time.Hour
 // delivery feed reads (see delivery.go).
 var trimmedStreams = []string{"events.md", "context.md"}
 
+// runRecordsFile is the run log, trimmed by its own timestamps rather than the
+// record streams' blame times, and never part of the delivery feed.
+const runRecordsFile = "runs.jsonl"
+
+// trimTrailer marks a commit as a retention trim, and is the whole mechanism
+// keeping trims out of the delivery feed (see Changes). Nothing else on the
+// memory branch writes it: commit messages are the supervisor's own.
+const trimTrailer = "Openroutines-Retention-Trim: true"
+
+// CommitTrim commits what Trim rewrote, carrying the trailer that keeps it out
+// of the delivery feed. Scoped to the files Trim touches, precisely because
+// the feed skips this commit whole: anything else dirty at the daily trim --
+// hand curation `status` tells an operator to commit when they are done, a
+// worktree a failed intent commit left behind -- would ride along into the one
+// commit no consumer ever reads.
+func (m *Memory) CommitTrim(keep time.Duration) (string, error) {
+	message := fmt.Sprintf("Trim memory to retention window (%s)\n\n%s\n", keep, trimTrailer)
+	return m.commitPaths(message, append([]string{runRecordsFile}, trimmedStreams...)...)
+}
+
 // ParseRetention accepts "30d" style (days) or any Go duration ("720h").
 // Empty means the default.
 func ParseRetention(s string) (time.Duration, error) {
@@ -98,7 +118,7 @@ func (m *Memory) Trim(keep time.Duration, now time.Time) (bool, error) {
 	}
 
 	// Run records carry their own timestamps: no blame needed.
-	if trimmed, err := trimRunRecords(filepath.Join(wt, "runs.jsonl"), cutoff); err != nil {
+	if trimmed, err := trimRunRecords(filepath.Join(wt, runRecordsFile), cutoff); err != nil {
 		return changed, err
 	} else if trimmed {
 		changed = true

@@ -53,33 +53,10 @@ func TestTimeoutIsCappedAtTheLeaseCeiling(t *testing.T) {
 	}
 }
 
-// A dry run's permission block is deny-all-first: "*" matches every tool
-// name -- built-ins, custom tools, MCP tools -- so nothing outside the
-// explicit read/write-memory set can start, not just the three acting tools
-// we can name. The wildcard must precede the allows (last match wins).
-func TestDryRunDefinitionDeniesAllToolsFirst(t *testing.T) {
-	def := genDef(t, Meta{RunID: "run_t", DryRun: true})
-	for _, want := range []string{`"*": deny`, "read: allow", "write: allow", "DRY RUN", `"s1": allow`} {
-		if !strings.Contains(def, want) {
-			t.Fatalf("dry-run definition missing %q:\n%s", want, def)
-		}
-	}
-	if strings.Index(def, `"*": deny`) > strings.Index(def, "read: allow") {
-		t.Fatalf("wildcard deny must precede the allows (last match wins):\n%s", def)
-	}
-	for _, banned := range []string{"bash: allow", "webfetch: allow", "task: allow"} {
-		if strings.Contains(def, banned) {
-			t.Fatalf("dry-run definition wrongly allows %q:\n%s", banned, def)
-		}
-	}
-}
-
-func TestRealRunDefinitionAllowsActing(t *testing.T) {
+func TestRunDefinitionAllowsActing(t *testing.T) {
 	def := genDef(t, Meta{RunID: "run_t"})
-	for _, banned := range []string{"bash: deny", "DRY RUN"} {
-		if strings.Contains(def, banned) {
-			t.Fatalf("real-run definition wrongly contains %q:\n%s", banned, def)
-		}
+	if strings.Contains(def, "bash: deny") {
+		t.Fatalf("run definition wrongly denies acting:\n%s", def)
 	}
 	if !strings.Contains(def, `"*": deny`) || !strings.Contains(def, `"s1": allow`) {
 		t.Fatalf("skill scoping missing:\n%s", def)
@@ -91,30 +68,21 @@ func TestRealRunDefinitionAllowsActing(t *testing.T) {
 // a prompt-injection vector. The rule must be explicit either way, so a
 // harness default change can never silently widen a routine's reach.
 func TestWebAccessDeniedByDefault(t *testing.T) {
-	for _, dry := range []bool{false, true} {
-		def := genDef(t, Meta{RunID: "run_t", DryRun: dry})
-		for _, want := range []string{"webfetch: deny", "websearch: deny"} {
-			if !strings.Contains(def, want) {
-				t.Fatalf("definition (dry=%v) missing %q:\n%s", dry, want, def)
-			}
+	def := genDef(t, Meta{RunID: "run_t"})
+	for _, want := range []string{"webfetch: deny", "websearch: deny"} {
+		if !strings.Contains(def, want) {
+			t.Fatalf("definition missing %q:\n%s", want, def)
 		}
 	}
 }
 
-// Frontmatter opt-in flips the explicit rule to allow -- in dry runs too
-// (reads are within a rehearsal's scope), where the allow must land after
-// the wildcard deny because the last matching rule wins.
+// Frontmatter opt-in flips the explicit rule to allow.
 func TestWebAccessOptIn(t *testing.T) {
 	fm := routine.Frontmatter{Webfetch: true, Websearch: true}
-	for _, dry := range []bool{false, true} {
-		def := genDef(t, Meta{RunID: "run_t", DryRun: dry}, fm)
-		for _, want := range []string{"webfetch: allow", "websearch: allow"} {
-			if !strings.Contains(def, want) {
-				t.Fatalf("opted-in definition (dry=%v) missing %q:\n%s", dry, want, def)
-			}
-			if dry && strings.Index(def, `"*": deny`) > strings.Index(def, want) {
-				t.Fatalf("wildcard deny must precede %q (last match wins):\n%s", want, def)
-			}
+	def := genDef(t, Meta{RunID: "run_t"}, fm)
+	for _, want := range []string{"webfetch: allow", "websearch: allow"} {
+		if !strings.Contains(def, want) {
+			t.Fatalf("opted-in definition missing %q:\n%s", want, def)
 		}
 	}
 }
@@ -247,7 +215,7 @@ func TestResolveCredentialsScope(t *testing.T) {
 
 	agent := &config.Agent{}
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"slack_webhook"}}}
-	got, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5", false)
+	got, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,16 +229,8 @@ func TestResolveCredentialsScope(t *testing.T) {
 		}
 	}
 
-	dry, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(dry.env) != 1 || dry.env["ANTHROPIC_API_KEY"] == "" {
-		t.Fatalf("dry run resolved %v, want only the provider key", dry.env)
-	}
-
 	r.FM.Credentials = []string{"missing_cred"}
-	if _, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5", false); err == nil {
+	if _, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5"); err == nil {
 		t.Fatal("declaring an absent credential must fail the run, not proceed without it")
 	}
 }
@@ -280,11 +240,11 @@ func TestResolveCredentialsScope(t *testing.T) {
 // template syntax may leak into the prompt.
 func TestInstructionRendering(t *testing.T) {
 	agent := &config.Agent{Name: "test-agent", Description: "Tests things"}
-	render := func(fm routine.Frontmatter, dry bool) string {
+	render := func(fm routine.Frontmatter) string {
 		t.Helper()
 		ws := t.TempDir()
 		r := &routine.Routine{Name: "sample", FM: fm}
-		if err := writeAgentDefinition(ws, agent, r, nil, Meta{RunID: "run_x", DryRun: dry}); err != nil {
+		if err := writeAgentDefinition(ws, agent, r, nil, Meta{RunID: "run_x"}); err != nil {
 			t.Fatal(err)
 		}
 		raw, err := os.ReadFile(filepath.Join(ws, ".opencode", "agents", "routine.md"))
@@ -296,11 +256,10 @@ func TestInstructionRendering(t *testing.T) {
 
 	agent.Variables = map[string]string{"product_repo": "acme/widgets", "docs_url": "https://docs.example.com"}
 	off := false
-	full := render(routine.Frontmatter{Consumes: "memory"}, true)
+	full := render(routine.Frontmatter{Consumes: "memory"})
 	for _, want := range []string{
 		"You are test-agent",
 		"routine \"sample\" (run run_x)",
-		"DRY RUN",
 		"memory/ledgers/sample.md",
 		"Every run appends at least one event",
 		"Full facts with real links",
@@ -323,8 +282,8 @@ func TestInstructionRendering(t *testing.T) {
 	if strings.Contains(full, "does not record events") {
 		t.Fatalf("no-events rule rendered for an events-recording routine:\n%s", full)
 	}
-	plain := render(routine.Frontmatter{Events: &off}, false)
-	for _, banned := range []string{"DRY RUN", "Every run appends", "Delivery inbox", "append an event to memory/events.md"} {
+	plain := render(routine.Frontmatter{Events: &off})
+	for _, banned := range []string{"Every run appends", "Delivery inbox", "append an event to memory/events.md"} {
 		if strings.Contains(plain, banned) {
 			t.Fatalf("conditional block %q rendered when its flag was off:\n%s", banned, plain)
 		}
@@ -335,7 +294,7 @@ func TestInstructionRendering(t *testing.T) {
 		}
 	}
 	agent.Variables = nil
-	if got := render(routine.Frontmatter{}, false); strings.Contains(got, "configuration variables") {
+	if got := render(routine.Frontmatter{}); strings.Contains(got, "configuration variables") {
 		t.Fatalf("variables block rendered with no variables configured:\n%s", got)
 	}
 }
@@ -518,10 +477,8 @@ func TestConsumeMarkerLivesInStagedMemory(t *testing.T) {
 	}
 }
 
-// Raw credentials inject verbatim under their uppercase names; a typed
-// credential derives nothing in a dry run -- dry runs receive no secrets of
-// any kind, so no token is ever minted for one.
-func TestResolveCredentialsRawAndDryRun(t *testing.T) {
+// Raw credentials inject verbatim under their uppercase names.
+func TestResolveCredentialsRaw(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600); err != nil {
 		t.Fatal(err)
@@ -540,7 +497,7 @@ func TestResolveCredentialsRawAndDryRun(t *testing.T) {
 	agent := &config.Agent{Credentials: map[string]creds.Spec{"gh_key": {Type: "github_app", AppID: "1"}}}
 
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"steady_token"}}}
-	s, err := resolveCredentials(dir, agent, r, "openai/gpt", false)
+	s, err := resolveCredentials(dir, agent, r, "openai/gpt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,23 +508,35 @@ func TestResolveCredentialsRawAndDryRun(t *testing.T) {
 		t.Fatal("raw credential missing from scrub set")
 	}
 
-	// Dry run with a typed credential declared: no store lookup, no
-	// derivation (a real derivation of "not a real pem" would error).
 	typed := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"gh_key"}}}
-	s, err = resolveCredentials(dir, agent, typed, "openai/gpt", true)
-	if err != nil {
+	// A run with the typed credential fails at derivation (bad key)
+	// rather than injecting the stored root secret.
+	if _, err = resolveCredentials(dir, agent, typed, "openai/gpt"); err == nil {
+		t.Fatal("expected derivation failure for an invalid stored key")
+	}
+}
+
+// `docker stop` can return without the run's client following the container
+// out -- an unresponsive daemon has nothing to stop. The wait on the client
+// must end anyway, or a local run parks the caller the way an orphan holding
+// the output pipe used to park the supervisor.
+func TestKillClientBoundsTheWaitOnAStuckDockerClient(t *testing.T) {
+	cmd := exec.Command("sleep", "120")
+	cmd.WaitDelay = pipeDrainDeadline
+	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if _, present := s.env["GITHUB_TOKEN"]; present {
-		t.Fatal("dry run derived a token")
-	}
-	if s.env["OPENAI_API_KEY"] != "provider-key" {
-		t.Fatal("provider key should still reach dry runs")
-	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
 
-	// A live run with the typed credential fails at derivation (bad key)
-	// rather than injecting the stored root secret.
-	if _, err = resolveCredentials(dir, agent, typed, "openai/gpt", false); err == nil {
-		t.Fatal("expected derivation failure for an invalid stored key")
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		killClient(cmd, 100*time.Millisecond, done)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("killClient never returned: the wait on the docker client is unbounded")
 	}
 }

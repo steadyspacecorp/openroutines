@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,6 +49,71 @@ func gitT(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// blackhole is an origin that accepts connections and then says nothing --
+// a partitioned network drops packets rather than refusing them, so the
+// client waits on a reply that never comes. The URL is https so the stall
+// happens in a child helper (git-remote-https), where it happens in
+// production: a deadline that reached git alone would leave the helper
+// holding the output pipe.
+func blackhole(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		var held []net.Conn
+		defer func() {
+			for _, c := range held {
+				c.Close()
+			}
+		}()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			held = append(held, conn)
+		}
+	}()
+	return fmt.Sprintf("https://%s/memory.git", ln.Addr().String())
+}
+
+// Every tick makes several network calls. A blackholed origin must cost the
+// tick a bounded wait, not park it until the TCP stack gives up -- and the
+// wait must end with the transport, not with the pipe drain giving up on a
+// helper the kill failed to reach.
+func TestGitAbandonsABlackholedRemote(t *testing.T) {
+	restore, restoreGrace := gitTimeout, gitKillGrace
+	gitTimeout, gitKillGrace = 500*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { gitTimeout, gitKillGrace = restore, restoreGrace })
+
+	dir := t.TempDir()
+	gitT(t, dir, "init", "-q", "-b", "main", ".")
+
+	remote := blackhole(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := git(dir, "ls-remote", remote, "refs/heads/memory")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected the blackholed ls-remote to fail")
+		}
+		if !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("expected a timeout error, got %v", err)
+		}
+	// Comfortably past the deadline and its grace, and comfortably short of
+	// the drain deadline: returning only once the drain expires would mean
+	// the group kill never reached the helper holding the pipe.
+	case <-time.After(gitDrainDeadline - time.Second):
+		t.Fatal("git outlasted its deadline: the kill did not reach the stalled transport")
+	}
 }
 
 func writeMemory(t *testing.T, clone, name, content string) {

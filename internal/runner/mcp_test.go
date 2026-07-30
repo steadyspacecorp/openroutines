@@ -43,16 +43,6 @@ func TestMCPGrantOpensOnlyNamedServer(t *testing.T) {
 	}
 }
 
-// MCP tools act on external systems, which a rehearsal must not do: the
-// grant does not apply to dry runs, structurally rather than by relying on
-// withheld credentials to fail the connection.
-func TestMCPDeniedInDryRunDespiteGrant(t *testing.T) {
-	def := genDefWithMCP(t, Meta{RunID: "run_t", DryRun: true}, routine.Frontmatter{MCP: []string{"steady"}})
-	if !strings.Contains(def, `"steady_*": deny`) || strings.Contains(def, `"steady_*": allow`) {
-		t.Fatalf("dry run must deny granted MCP server:\n%s", def)
-	}
-}
-
 // An agent with no opencode.json (or no mcp block) renders no MCP rules
 // -- the feature is invisible to agents that don't use it.
 func TestNoMCPConfigNoRules(t *testing.T) {
@@ -68,7 +58,7 @@ func TestNoMCPConfigNoRules(t *testing.T) {
 func TestRenderDefinitionCoversMCPRules(t *testing.T) {
 	agent := &config.Agent{Name: "a", Description: "d"}
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{MCP: []string{"steady"}}}
-	def, err := RenderDefinition(agent, r, []string{"slack", "steady"}, false)
+	def, err := RenderDefinition(agent, r, []string{"slack", "steady"})
 	if err != nil {
 		t.Fatal(err)
 	}

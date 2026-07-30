@@ -8,8 +8,10 @@ package memory
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -25,8 +27,15 @@ type Cursor struct {
 	At              time.Time `json:"at"`
 }
 
+// CursorFile is the cursor's branch-relative path: what every diagnostic about
+// a broken cursor names, because repairing one means editing this file on the
+// memory branch.
+func CursorFile(consumer string) string {
+	return path.Join(stateDirName, "cursors", consumer+".json")
+}
+
 func (m *Memory) cursorPath(consumer string) string {
-	return filepath.Join(m.StateDir(), "cursors", consumer+".json")
+	return filepath.Join(m.Worktree(), CursorFile(consumer))
 }
 
 // LoadCursor returns nil when the consumer has no cursor yet (first run).
@@ -116,6 +125,42 @@ type FileDelta struct {
 // (scheduling state, cursors, run records) and routine-private ledgers.
 var deliveryExcludes = []string{":(exclude)state", ":(exclude)runs.jsonl", ":(exclude)ledgers"}
 
+// ErrCursorUnreachable reports a cursor that no longer names a commit on the
+// memory branch -- a repaired history, a hand-edited cursor file. The range
+// cannot be walked until a person fixes the cursor, so callers should treat
+// it as a failure to diagnose rather than one to retry.
+var ErrCursorUnreachable = errors.New("consumer cursor is not on the memory branch")
+
+// reachable checks the precondition for from..through naming a change set:
+// the cursor commit exists and the boundary descends from it. Both halves
+// matter -- a commit left behind by a repaired history is still in the object
+// store, and walking from it would deliver a change set nobody made.
+//
+// Only git's own "no" counts, which is exit 1 from either question: anything
+// else is git failing to answer (a broken repository, a lock, a full disk),
+// and calling that unreachable would abandon a run on its first attempt over
+// a condition the next attempt might not even see.
+func (m *Memory) reachable(from, through string) error {
+	wt := m.Worktree()
+	full, err := git(wt, "rev-parse", "--verify", "--quiet", from+"^{commit}")
+	if err != nil {
+		if gitExitCode(err) != 1 {
+			return fmt.Errorf("delivery changes: reading cursor commit: %w", err)
+		}
+		return fmt.Errorf("%w: commit %.12s is not in this repository", ErrCursorUnreachable, from)
+	}
+	// Exit 1 here means no common ancestor at all -- as off-branch as a
+	// cursor gets, and reported as such by the empty base.
+	base, err := git(wt, "merge-base", full, through)
+	if err != nil && gitExitCode(err) != 1 {
+		return fmt.Errorf("delivery changes: relating cursor to boundary: %w", err)
+	}
+	if base != full {
+		return fmt.Errorf("%w: commit %.12s is not an ancestor of %.12s", ErrCursorUnreachable, from, through)
+	}
+	return nil
+}
+
 // Changes walks every commit in (from, through], returning per-commit line
 // additions and removals. Commit-by-commit, never a net endpoint diff: an
 // event added and later pruned by retention must still reach a consumer that
@@ -124,11 +169,19 @@ func (m *Memory) Changes(from, through string) ([]CommitChange, error) {
 	if from == "" || through == "" {
 		return nil, fmt.Errorf("delivery changes: empty commit range")
 	}
+	if err := m.reachable(from, through); err != nil {
+		return nil, err
+	}
 	// The commit sentinel and field separators are emitted by git itself
-	// (%x00/%x1f) -- argv cannot carry a literal NUL.
+	// (%x00/%x1f) -- argv cannot carry a literal NUL. Retention trims are
+	// dropped from the walk: pruning is bookkeeping, not a memory change, and
+	// delivering its removals would re-present already-consumed history to
+	// every consumer once a day. The pattern is anchored because --grep sees
+	// the whole message, subject included, and a routine name is a filename.
 	args := append([]string{
 		"log", "--reverse", "--date=format:%Y-%m-%d",
 		"--format=%x00%H%x1f%ad%x1f%s", "-p", "-U0", "--no-color",
+		"--invert-grep", "--grep=^" + trimTrailer + "$",
 		from + ".." + through, "--", ".",
 	}, deliveryExcludes...)
 	out, err := git(m.Worktree(), args...)

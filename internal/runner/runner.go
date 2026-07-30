@@ -1,5 +1,5 @@
 // Package runner executes one routine attempt: the per-run pipeline shared by
-// `openroutines routines run|test` and the supervisor.
+// `openroutines routines run` and the supervisor.
 //
 // The pipeline (design decision "Appendix: one run, end to end"): assemble a
 // disposable run workspace (repo files plus a staged copy of memory, no git
@@ -56,7 +56,6 @@ type Meta struct {
 	AttemptID      string
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
-	DryRun         bool   // routines test: acting tools denied, credentials withheld
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -93,6 +92,13 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 // human learns the cause was configuration.
 var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key`)
 
+// ErrFatal marks a start failure that no retry can fix: the next attempt
+// would fail identically, so a caller spending a retry budget should give up
+// now and let a person read the error. Classification lives here because the
+// runner is what assembles the run and knows why it could not; the supervisor
+// only asks whether the failure it was handed is one of these.
+var ErrFatal = errors.New("not retryable")
+
 // Staging is the attempt's staged memory, awaiting import or discard.
 type Staging struct {
 	MemoryDir string
@@ -119,7 +125,7 @@ func (s *Staging) Consumed() bool {
 	return err == nil
 }
 
-// Result is a completed manual run (routines run|test).
+// Result is a completed manual run (routines run).
 type Result struct {
 	RunID    string
 	Outcome  Outcome
@@ -196,7 +202,7 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		return nil, nil, err
 	}
 
-	secrets, err := resolveCredentials(dir, agent, r, model, meta.DryRun)
+	secrets, err := resolveCredentials(dir, agent, r, model)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -253,11 +259,6 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 		"OPENROUTINES_RUN_ID=" + meta.RunID,
 		"OPENROUTINES_ATTEMPT_ID=" + meta.AttemptID,
 	}
-	if meta.DryRun {
-		// Skills and prompts can gate on this (e.g. a reporting helper that
-		// would otherwise write to an external system).
-		env = append(env, "OPENROUTINES_DRY_RUN=1")
-	}
 	if meta.ScheduledFor != "" {
 		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor)
 	}
@@ -274,8 +275,8 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	for _, k := range slices.Sorted(maps.Keys(secrets.env)) {
 		env = append(env, k+"="+secrets.env[k])
 	}
-	// Non-secret variables from openroutines.yml, injected into every run (dry runs
-	// included). On a name collision the credential wins; check flags it.
+	// Non-secret variables from openroutines.yml are injected into every run.
+	// On a name collision the credential wins; check flags it.
 	for _, k := range slices.Sorted(maps.Keys(agent.Variables)) {
 		if _, taken := secrets.env[strings.ToUpper(k)]; taken {
 			continue
@@ -371,12 +372,13 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	scrubber := scrub.NewWriter(io.MultiWriter(os.Stdout, tail), secrets.scrub)
 	cmd.Stdout = scrubber
 	cmd.Stderr = scrubber
+	cmd.WaitDelay = pipeDrainDeadline
 
 	done := make(chan error, 1)
 	kill := func() {
 		if containerName != "" {
 			stopContainer(containerName)
-			<-done
+			killClient(cmd, containerExitGrace, done)
 		} else {
 			killGroup(cmd, 10*time.Second, done)
 		}
@@ -389,13 +391,25 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	go func() { done <- cmd.Wait() }()
 	select {
 	case werr := <-done:
-		if werr != nil {
+		// ErrWaitDelay means the process exited fine but something it left
+		// behind still held the output pipe: the run's outcome is the
+		// process's, not the orphan's -- only the tail of the log is lost.
+		if werr != nil && !errors.Is(werr, exec.ErrWaitDelay) {
 			res.Outcome = Crashed
 			if ee, isExit := werr.(*exec.ExitError); isExit {
 				res.ExitCode = ee.ExitCode()
 			} else {
 				res.ExitCode = -1
 			}
+		}
+		// The model process is gone, but a descendant it detached from its
+		// stdio is not: it outlives the attempt in the supervisor's own
+		// container and keeps writing to staged memory while the pipeline
+		// validates and imports it. The attempt ends with its whole process
+		// group whichever way it ended. (In container mode the run's pid
+		// namespace dies with `docker run --rm`, which does this already.)
+		if containerName == "" {
+			reapGroup(cmd)
 		}
 	case <-time.After(timeout):
 		res.Outcome = Timeout
@@ -418,9 +432,9 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	return res, staging, nil
 }
 
-// Run executes routine `name` manually. keep=true imports memory writes and
-// records the run (routines run); keep=false discards everything (test).
-func Run(dir, name string, keep bool) (*Result, error) {
+// Run executes routine `name` manually. noMemory discards staged memory
+// writes and the run record after the otherwise ordinary run completes.
+func Run(dir, name string, noMemory bool) (*Result, error) {
 	agent, err := config.Load(dir)
 	if err != nil {
 		return nil, fmt.Errorf("not an agent repository: %w", err)
@@ -438,15 +452,15 @@ func Run(dir, name string, keep bool) (*Result, error) {
 	}
 	defer release()
 	runID := newRunID()
-	exec, staging, err := Execute(context.Background(), dir, agent, r, Meta{RunID: runID, AttemptID: "attempt_01", DryRun: !keep})
+	exec, staging, err := Execute(context.Background(), dir, agent, r, Meta{RunID: runID, AttemptID: "attempt_01"})
 	if err != nil {
 		return nil, err
 	}
 	defer staging.Cleanup()
 
 	res := &Result{RunID: runID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
-	if !keep {
-		return res, nil // test: discard staging, record nothing
+	if noMemory {
+		return res, nil
 	}
 
 	settlement, err := Settle(dir, r, staging, exec, Meta{RunID: runID, AttemptID: "attempt_01"}, "", nil)
@@ -471,7 +485,8 @@ type Settlement struct {
 // one memory commit. stage, when set, runs before that commit so caller
 // bookkeeping (scheduling state, abandonment tasks) rides the same commit.
 // detail overrides the derived failure description -- for attempts that
-// failed before producing a result; pass it pre-redacted. A Canceled attempt
+// failed before producing a result; raw error text is fine, the append seam
+// redacts what it records. A Canceled attempt
 // gets only its run record: nothing settled -- the same logical run retries
 // -- and no commit of its own (the shutdown commit carries the record).
 func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, meta Meta, detail string, stage func(*Settlement)) (*Settlement, error) {
@@ -556,6 +571,9 @@ func prepareInbox(dir, workspace, consumer string) (string, error) {
 	if cursor != nil {
 		from = cursor.ConsumedThrough
 		if changes, err = mem.Changes(from, through); err != nil {
+			if errors.Is(err, memory.ErrCursorUnreachable) {
+				return "", fmt.Errorf("%w: %w -- repair or delete %s on the memory branch", ErrFatal, err, memory.CursorFile(consumer))
+			}
 			return "", err
 		}
 	}
@@ -638,14 +656,14 @@ func (s *runSecrets) release() {
 // injects verbatim under its uppercase name; a typed credential (see
 // design decision "Credentials have types") is derived by the trusted runner and
 // injects its type's surface -- the stored root secret never enters the run.
-func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string, dryRun bool) (*runSecrets, error) {
+func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (*runSecrets, error) {
 	provider := strings.SplitN(model, "/", 2)[0]
 	providerKey := creds.ProviderKeyName(provider)
 	out := &runSecrets{env: map[string]string{}, scrub: map[string]string{}}
 
 	key, keyErr := creds.LoadKey(dir)
 	if keyErr != nil {
-		if len(r.FM.Credentials) > 0 && !dryRun {
+		if len(r.FM.Credentials) > 0 {
 			return nil, fmt.Errorf("routine declares credentials but %v", keyErr)
 		}
 		// No store: opencode may still have its own auth for the provider.
@@ -655,37 +673,32 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 	if err != nil {
 		return nil, err
 	}
-	if !dryRun {
-		// Dry runs never receive the routine's secrets: nothing real can be
-		// authenticated against, whatever the model decides to try. Derived
-		// credentials follow the same rule -- nothing is minted.
-		for _, name := range r.FM.Credentials {
-			v, present := store[name]
-			if !present {
-				return nil, fmt.Errorf("routine declares credential %q, not present in %s", name, creds.FileName)
+	for _, name := range r.FM.Credentials {
+		v, present := store[name]
+		if !present {
+			return nil, fmt.Errorf("routine declares credential %q, not present in %s", name, creds.FileName)
+		}
+		spec, typed := agent.Credentials[name]
+		if !typed {
+			if err := out.setEnv(strings.ToUpper(name), v); err != nil {
+				return nil, err
 			}
-			spec, typed := agent.Credentials[name]
-			if !typed {
-				if err := out.setEnv(strings.ToUpper(name), v); err != nil {
-					return nil, err
-				}
-				out.scrub[name] = v
-				continue
-			}
-			derived, err := creds.Derive(name, spec, v)
-			if err != nil {
+			out.scrub[name] = v
+			continue
+		}
+		derived, err := creds.Derive(name, spec, v)
+		if err != nil {
+			out.release()
+			return nil, err
+		}
+		out.cleanup = append(out.cleanup, derived.Cleanup)
+		for _, k := range slices.Sorted(maps.Keys(derived.Env)) {
+			if err := out.setEnv(k, derived.Env[k]); err != nil {
 				out.release()
 				return nil, err
 			}
-			out.cleanup = append(out.cleanup, derived.Cleanup)
-			for _, k := range slices.Sorted(maps.Keys(derived.Env)) {
-				if err := out.setEnv(k, derived.Env[k]); err != nil {
-					out.release()
-					return nil, err
-				}
-			}
-			maps.Copy(out.scrub, derived.Scrub)
 		}
+		maps.Copy(out.scrub, derived.Scrub)
 	}
 	if v, present := store[providerKey]; present {
 		if err := out.setEnv(strings.ToUpper(providerKey), v); err != nil {
@@ -795,7 +808,7 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 
 // The standing instruction lives in instruction.md -- editable prose,
 // compiled into the binary. Dynamic values and the conditional blocks
-// (dry-run, event recording, delivery inbox) render through text/template;
+// (event recording, delivery inbox) render through text/template;
 // the permission frontmatter stays code-generated because rule order is
 // load-bearing.
 //
@@ -809,7 +822,6 @@ type instructionData struct {
 	Description   string
 	RoutineName   string
 	RunID         string
-	DryRun        bool
 	RecordsEvents bool
 	IsConsumer    bool
 	Inbox         string
@@ -842,24 +854,10 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	fmt.Fprintf(&b, "description: Generated for routine %s -- derived from frontmatter, do not edit\n", r.Name)
 	b.WriteString("mode: primary\n")
 	b.WriteString("permission:\n")
-	if meta.DryRun {
-		// Dry run: deny-all first, then allow only what reading memory and
-		// writing the (discarded) staged copy requires. Permission keys are
-		// wildcard patterns over the underlying tool name -- built-ins,
-		// custom tools, and MCP tools alike -- so "*" closes the whole
-		// space, not just the three acting tools we can name. Order
-		// matters: last matching rule wins.
-		b.WriteString("  \"*\": deny\n")
-		for _, tool := range []string{"read", "grep", "glob", "list", "edit", "write", "patch", "todowrite", "todoread"} {
-			fmt.Fprintf(&b, "  %s: allow\n", tool)
-		}
-	}
 	// Web access is a grant, not a default: opencode allows webfetch out of
 	// the box, and fetched content is model context -- a prompt-injection
 	// vector. Both web tools get an explicit rule every run, deny unless the
-	// routine's frontmatter opts in. Emitted after the dry-run wildcard so
-	// an opted-in routine can rehearse its reads (last matching rule wins);
-	// everything a dry run must not do stays closed by deny-all.
+	// routine's frontmatter opts in.
 	for _, w := range []struct {
 		tool    string
 		granted bool
@@ -873,13 +871,10 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	// MCP servers are grants too: a configured server's tools reach a run
 	// only when the routine's frontmatter names the server. opencode
 	// registers MCP tools as <server>_<tool>, so one glob per configured
-	// server closes or opens its whole surface. Dry runs never get MCP
-	// regardless of grant -- the tools act on external systems, which a
-	// rehearsal must not do (credentials are withheld anyway; this makes
-	// the denial structural rather than an auth failure).
+	// server closes or opens its whole surface.
 	for _, server := range servers {
 		action := "deny"
-		if !meta.DryRun && slices.Contains(r.FM.MCP, server) {
+		if slices.Contains(r.FM.MCP, server) {
 			action = "allow"
 		}
 		fmt.Fprintf(&b, "  %q: %s\n", server+"_*", action)
@@ -896,7 +891,6 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 		Description:   strings.TrimSpace(agent.Description),
 		RoutineName:   r.Name,
 		RunID:         meta.RunID,
-		DryRun:        meta.DryRun,
 		RecordsEvents: r.FM.RecordsEvents(),
 		IsConsumer:    r.FM.IsConsumer(),
 		Inbox:         memory.InboxFileName,
@@ -912,8 +906,8 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 // as a run would, without running anything. check uses it to validate
 // routine wiring -- frontmatter through generated definition, MCP rules
 // included -- offline, with no provider key and no Docker.
-func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string, dryRun bool) (string, error) {
-	return renderDefinition(agent, r, servers, Meta{RunID: "run_check", AttemptID: "attempt_00", DryRun: dryRun})
+func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string) (string, error) {
+	return renderDefinition(agent, r, servers, Meta{RunID: "run_check", AttemptID: "attempt_00"})
 }
 
 // variablesLine renders the agent's variable names for the standing
@@ -927,16 +921,73 @@ func variablesLine(agent *config.Agent) string {
 	return strings.Join(names, ", ")
 }
 
-// killGroup terminates the run's whole process group: SIGTERM, grace, SIGKILL.
-func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error) {
-	pgid := -cmd.Process.Pid
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
+// pipeDrainDeadline bounds how long waiting on the run's output pipes may
+// outlast the process itself. A grandchild that left the process group --
+// a tool that daemonized into its own session -- keeps the inherited pipe
+// open after the run is signalled and killed, and the wait for EOF would
+// otherwise never end: the supervisor would hang on a run it had already
+// terminated. On expiry the pipes are closed and what can be reaped is
+// reaped; the orphan lives on, but it no longer holds the tick loop.
+const pipeDrainDeadline = 5 * time.Second
+
+// containerExitGrace is how long `docker run` gets to notice that its
+// container is gone before the client itself is killed.
+const containerExitGrace = 5 * time.Second
+
+// killClient ends a container run: `docker stop` has already been asked to
+// take the container down, so the client should follow it out. When it does
+// not -- an unresponsive daemon, a stop that timed out -- the client is
+// killed, because the alternative is the tick waiting on a docker CLI that
+// may never return. The container can outlive the run; a stuck daemon is the
+// operator's problem, but it must not become the supervisor's.
+//
+// Waiting for Wait to return is not optional: the caller reads the tail
+// buffer the output goroutines write to, so returning before Wait would race
+// them. The bound comes from making the process exit, not from walking away.
+func killClient(cmd *exec.Cmd, grace time.Duration, done chan error) {
 	select {
 	case <-done:
 	case <-time.After(grace):
-		_ = syscall.Kill(pgid, syscall.SIGKILL)
+		_ = cmd.Process.Kill()
+		<-done // bounded by WaitDelay now that the process is going away
+	}
+}
+
+// signalTarget is the run's own process group, or the process alone when the
+// spawn path did not make it a group leader. Every spawn path that gets
+// signalled sets Setpgid today; the guard is there because signalling -pid
+// without it reaches the supervisor's own group and kills the supervisor.
+func signalTarget(cmd *exec.Cmd) int {
+	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
+		return -cmd.Process.Pid
+	}
+	return cmd.Process.Pid
+}
+
+// killGroup terminates the run's whole process group: SIGTERM, grace, SIGKILL.
+// The waits are bounded by the command's WaitDelay, not by the group's
+// willingness to exit.
+func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error) {
+	target := signalTarget(cmd)
+	_ = syscall.Kill(target, syscall.SIGTERM)
+	select {
+	case <-done:
+	case <-time.After(grace):
+		_ = syscall.Kill(target, syscall.SIGKILL)
 		<-done
 	}
+}
+
+// reapGroup kills what the model process left running after exiting on its
+// own. No grace period: the run is over, nothing left in the group has an
+// output anyone reads, and the pipeline is about to treat staging as final.
+// Unlike killGroup this runs after the leader has been waited on, so an
+// already-empty group's id could in principle have been recycled by then --
+// an accepted race: the alternative is leaving the descendant writing to
+// memory the supervisor is about to commit. The import re-checks staging at
+// open time and does not depend on this having worked (see memory.copyStaged).
+func reapGroup(cmd *exec.Cmd) {
+	_ = syscall.Kill(signalTarget(cmd), syscall.SIGKILL)
 }
 
 func timestamp() string { return time.Now().UTC().Format(time.RFC3339) }

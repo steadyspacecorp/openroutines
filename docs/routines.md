@@ -25,7 +25,7 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 |-----|------------------|
 | `schedule` | Cron expression, evaluated in the agent's timezone. A routine needs a `schedule`, a `trigger`, or both. |
 | `trigger` | An outbound change-detection poll that wakes the routine when something changed -- see [Triggers](#triggers). |
-| `timeout` | Per-run timeout (default from `openroutines.yml`'s `defaults:`). On expiry the whole process group is killed and the outcome recorded. 15m is a hard ceiling -- the single-instance lease covers one run at a time, so a larger value is capped at 15m and `check` warns; longer work belongs in several runs with memory between them. |
+| `timeout` | Per-run timeout (default from `openroutines.yml`'s `defaults:`). On expiry the whole process group is killed and the outcome recorded. Every run ends with its process group either way, expiry or not: a tool the run backgrounded is killed with it, unless it detached into a session of its own. 15m is a hard ceiling -- the single-instance lease covers one run at a time, so a larger value is capped at 15m and `check` warns; longer work belongs in several runs with memory between them. |
 | `active` | `false` parks the routine; the supervisor skips it. `routines activate` / `deactivate` flip it. |
 | `skills` | The skills this routine may load -- and only these. See [Extending your agent](extending.md). |
 | `credentials` | The credentials injected into this run's environment -- and only these. `steady_token` arrives as `$STEADY_TOKEN`. |
@@ -39,9 +39,11 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 
 ## Scheduling
 
-The supervisor wakes every minute, re-reads routine frontmatter, and dispatches whatever is due -- the files are the schedule; there is no registration step. Missed firings collapse into one catch-up run: an agent down for a week owes one run per routine, not seven. Runs are serial, one at a time; a routine still running is never dispatched again in parallel, and repeated failures trip a per-routine circuit breaker instead of retrying forever. [docs/design.md](design.md) has the full semantics ("Scheduling", "Overlap").
+The supervisor wakes every minute, re-reads routine frontmatter, and dispatches whatever is due -- the files are the schedule; there is no registration step. The files it reads are the ones on its own filesystem: locally that is your working tree, so an edit lands on the next tick, while a deployed agent reads the copy baked into its image, so routine changes reach production by redeploy (see [Operating in production](operating.md)). Missed firings collapse into one catch-up run: an agent down for a week owes one run per routine, not seven. Runs are serial, one at a time; a routine still running is never dispatched again in parallel, and repeated failures trip a per-routine circuit breaker instead of retrying forever. [docs/design.md](design.md) has the full semantics ("Scheduling", "Overlap").
 
-A routine whose file does not load -- a frontmatter typo, a missing closing `---`, a name a plugin's routine also claims -- is skipped, and only it: the other routines run their next fire as usual. The supervisor records an event when a routine stops loading and another when it loads again, so the gap shows up in the agent's own reporting rather than only in the container log; `openroutines check` names the file and the mistake. Fix the file and the next tick picks it up, catch-up included. `routines edit` and `routines remove` work on a routine that does not load, and `routines new` will not create over one.
+Parking a routine parks whatever it still owes with it. `active: false` (and a routine that declares neither a `schedule` nor a `trigger`) is skipped before the tick reads its scheduling state, so a run already pending when you deactivate it is neither retried nor abandoned -- it waits, under the same `run_id`, and the supervisor takes it up again when you activate the routine (retrying it, or abandoning it if its attempts were already spent). `openroutines status` reports such a run as `held` rather than naming an attempt that is not coming.
+
+When a routine's file does not load -- a frontmatter typo, a missing closing `---`, a name a plugin's routine also claims -- only that routine is skipped: the others run their next fire as usual. The supervisor records an event when a routine stops loading and another when it loads again, so the gap shows up in the agent's own reporting rather than only in the container log; `openroutines check` names the file and the mistake. Fix the file and the next tick picks it up, catch-up included (on a deployed agent, "fix the file" means ship the fix: the next tick after the redeploy picks it up). `routines edit` and `routines remove` work on a routine that does not load, and `routines new` will not create over one.
 
 Fire times are the agent's wall clock. A `schedule` is evaluated in the `timezone:` set in `openroutines.yml`, so `0 6 * * *` means 06:00 there on both sides of a daylight-saving transition, whatever zone the container's clock is set to -- and the supervisor, the `schedule.md` a run reads, and `openroutines status` all compute it the same way.
 
@@ -84,7 +86,7 @@ mcp: [steady]
 credentials: [steady_token]
 ```
 
-The grant opens the server's tools to this routine's runs; every other routine keeps them denied, and dry runs deny them regardless -- MCP tools act on external systems, which a rehearsal must not do. Auth headers reference the run environment, so the server is only reachable when the routine also grants the credential that fills them: the `mcp` grant scopes the tool surface, the credential grant scopes the connection. `check` fails a grant naming a server `opencode.json` doesn't define.
+The grant opens the server's tools to this routine's runs; every other routine keeps them denied. Auth headers reference the run environment, so the server is only reachable when the routine also grants the credential that fills them: the `mcp` grant scopes the tool surface, the credential grant scopes the connection. `check` fails a grant naming a server `opencode.json` doesn't define.
 
 What works: remote servers with static-token or client-credentials auth (a typed `oauth2_client` credential mints the bearer at spawn). OAuth-interactive servers have no headless path, and local stdio servers are out of scope by design -- the runtime image ships no language runtimes.
 
@@ -97,16 +99,16 @@ The runtime handles the memory rules automatically, so write the prompt as the j
 - **Expect reruns.** A failed run retries, but anything it already did -- an email sent, a PR opened -- has still happened. Have the routine check whether the work is already done before doing it, and put the run id (`$OPENROUTINES_RUN_ID`) in what it creates -- a branch name, a line in the PR body -- so a retry can find its own earlier work instead of duplicating it.
 - **Match automation to your ability to verify.** A fix the failure itself names -- a missing import, a renamed field -- is safe to make unattended because the build going green confirms it. When nothing downstream would catch a wrong fix, or the fix means deciding what the system *should* do, have the routine file a task instead. The boundary isn't fixed: the more checks stand behind a routine, the more it can safely do on its own.
 
-## Running and testing
+## Running locally
 
-Both `routines run` and `routines test` start opencode in a disposable Docker container, with the same runtime image, opencode version, constructed environment, and assembled workspace as production.
+`routines run` starts opencode in a disposable Docker container, with the same runtime image, opencode version, constructed environment, and assembled workspace as production.
 
 ```bash
-openroutines routines run doc-drift    # the real thing; memory writes are kept
-openroutines routines test doc-drift   # dry run
+openroutines routines run doc-drift                 # memory writes are kept
+openroutines routines run doc-drift --no-memory     # memory writes are discarded
 ```
 
-`test` is a behavioral rehearsal: the routine's credentials are withheld (only the model provider key is injected), acting tools are denied, the standing instruction says to narrate intended external actions instead of taking them, and memory writes are discarded. You rehearse against the real model without the routine authenticating to anything or leaving a trace -- and what you rehearse is what production runs.
+Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; `--no-memory` changes only what happens afterward, discarding staged memory writes and the run record. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target and use `--no-memory` when you do not want the result retained in agent memory.
 
 ## Recording work
 

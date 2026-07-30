@@ -135,6 +135,72 @@ func (m *Memory) Push() error {
 	return nil
 }
 
+// BlockedRef is where the supervisor strands memory it cannot put on the
+// branch. A blocked sync (rewritten history, conflict) refuses to write the
+// memory branch -- which is also where the supervisor records the blocker
+// that says so, and a commit that never leaves the container dies with it.
+// The ref is supervisor-owned and uncontended, so publishing there resolves
+// nothing and hides nothing: origin's branch stays exactly as the human left
+// it, and the record is still on origin when someone looks.
+const BlockedRef = "refs/openroutines/blocked"
+
+// BlockedSnapshot is what a blocked supervisor left on origin. Tip is "" when
+// nothing is stranded.
+type BlockedSnapshot struct {
+	Tip  string
+	When string // when the supervisor stranded it, RFC3339
+}
+
+// PublishBlocked strands the committed memory state on the blocked ref as a
+// parentless snapshot: the tree, and no history. Pushing the local tip would
+// drag its whole lineage to origin instead -- and when a rewrite is what
+// blocked sync, that lineage is the history a human just rewrote away, so a
+// rewrite meant to purge something would be undone under a ref nobody thinks
+// to look at. The snapshot carries the record (tasks.md says what broke)
+// without republishing anything.
+//
+// Force is safe and necessary: the ref is the supervisor's own, and each
+// snapshot supersedes the last.
+func (m *Memory) PublishBlocked() error {
+	if !m.HasOrigin() {
+		return nil
+	}
+	tree, err := git(m.repoDir, "rev-parse", "refs/heads/"+Branch+"^{tree}")
+	if err != nil {
+		return err
+	}
+	snap, err := git(m.repoDir, "commit-tree", tree, "-m",
+		"Memory the agent could not publish: sync to origin/"+Branch+" is blocked")
+	if err != nil {
+		return err
+	}
+	_, err = git(m.repoDir, "push", "--quiet", "origin", "+"+snap+":"+BlockedRef)
+	return err
+}
+
+// ClearBlocked drops the stranded ref, for the caller that has just published
+// the same state on the branch itself. Best effort: a ref left behind costs
+// nothing but a second copy of what the branch already carries.
+func (m *Memory) ClearBlocked() {
+	_, _ = git(m.repoDir, "push", "--quiet", "origin", ":"+BlockedRef)
+}
+
+// Blocked reports what a blocked supervisor stranded on origin -- what a
+// person repairing a blocked branch needs to know it is there. Fetching it is
+// part of the answer: the ref is outside the namespaces git replicates on its
+// own, so nothing else in a checkout would ever show it.
+func (m *Memory) Blocked() BlockedSnapshot {
+	if _, err := git(m.repoDir, "fetch", "--quiet", "origin", "+"+BlockedRef+":"+BlockedRef); err != nil {
+		return BlockedSnapshot{}
+	}
+	tip, err := git(m.repoDir, "rev-parse", "--verify", "--quiet", BlockedRef)
+	if err != nil || tip == "" {
+		return BlockedSnapshot{}
+	}
+	when, _ := git(m.repoDir, "log", "-1", "--format=%cI", tip)
+	return BlockedSnapshot{Tip: tip, When: when}
+}
+
 func isAncestor(repoDir, a, b string) bool {
 	cmdOut, err := git(repoDir, "merge-base", "--is-ancestor", a, b)
 	_ = cmdOut
@@ -234,10 +300,11 @@ func (m *Memory) ReleaseLease(ownedSHA string) {
 
 func gitStdin(dir, stdin string, args ...string) (string, error) {
 	cmd := newGitCmd(dir, append(hermeticConfig, args...))
+	defer cmd.cancel()
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", cmd.fail(args, err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
