@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
@@ -133,7 +134,11 @@ func credentialsSet(args []string) int {
 	if replacing {
 		verb = "Replaced"
 	}
-	fmt.Printf("%s %s -- routines that declare it receive it as %s\n", verb, name, strings.ToUpper(name))
+	var spec creds.Spec
+	if agent, err := config.Load("."); err == nil {
+		spec = agent.Credentials[name]
+	}
+	fmt.Printf("%s %s %s\n", verb, name, creds.InjectionDescription(name, spec))
 	return 0
 }
 

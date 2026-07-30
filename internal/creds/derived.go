@@ -90,6 +90,23 @@ func SpecProblems(name string, s Spec) []string {
 	return out
 }
 
+// InjectionDescription explains what a run actually receives when it
+// declares this credential -- the credential's own uppercase name for a raw
+// credential, or the derived surface for a typed one. Credential CLI output
+// must describe the actual injection, not assume every credential is raw
+// (issue #66): a github_app or oauth2_client entry never puts its stored
+// value in the run environment.
+func InjectionDescription(name string, s Spec) string {
+	switch s.Type {
+	case "github_app":
+		return "(type: github_app) -- routines that declare it receive GITHUB_TOKEN, GH_TOKEN, GITHUB_APP_SLUG, and the App's git identity. The stored key is never injected."
+	case "oauth2_client":
+		return fmt.Sprintf("(type: oauth2_client) -- routines that declare it receive the minted bearer as %s. The stored client secret is never injected.", strings.ToUpper(s.InjectAs))
+	default:
+		return fmt.Sprintf("-- routines that declare it receive it as %s", strings.ToUpper(name))
+	}
+}
+
 // Derive materializes one typed credential. Providers are built into the
 // framework -- agent repositories cannot supply derivation code, which would
 // otherwise be a privileged plugin boundary on the trusted side.
