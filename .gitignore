@@ -1,2 +1,2 @@
-# Release artifacts (bin/release) -- they live on GitHub Releases
+# Release artifacts (goreleaser) -- they live on GitHub Releases
 dist/

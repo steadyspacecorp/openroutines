@@ -1,55 +1,79 @@
 #!/usr/bin/env bash
-# Cut a release: cross-compile with the version stamped in, checksum, tag,
-# and create the GitHub release with the binaries attached.
 #
-# Usage: bin/release vX.Y.Z[-suffix] [notes-file]
+# Interactively cut a release: pick the next version, tag it, and push.
+# The release workflow takes it from there -- goreleaser builds and
+# publishes the GitHub release, then the pages workflow republishes the
+# install site at get.openroutines.dev.
 set -euo pipefail
 
-version="${1:?usage: bin/release vX.Y.Z[-suffix] [notes-file]}"
-notes="${2:-}"
-[[ "$version" == v* ]] || { echo "version must start with v" >&2; exit 1; }
+REPO="steadyspacecorp/openroutines"
 
-repo="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$repo"
-[[ -z "$(git status --porcelain)" ]] || { echo "working tree not clean -- commit first" >&2; exit 1; }
+command -v gum >/dev/null 2>&1 || { echo "gum is required but not installed." >&2; exit 1; }
+command -v gh >/dev/null 2>&1 || { echo "gh is required but not installed." >&2; exit 1; }
+gh auth status >/dev/null 2>&1 || { echo "gh is not authenticated; run gh auth login." >&2; exit 1; }
 
-dist="$repo/dist"
-rm -rf "$dist" && mkdir -p "$dist"
-ldflags="-s -w -X github.com/steadyspacecorp/openroutines/internal/version.Version=$version"
+warn() { gum log --level warn "$@"; }
+fail() { gum log --level error "$@"; exit 1; }
 
-for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
-  os="${target%/*}" arch="${target#*/}"
-  echo "building $os/$arch"
-  GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
-    go build -trimpath -ldflags "$ldflags" -o "$dist/openroutines_${version}_${os}_${arch}" ./cmd/openroutines
-done
-# Sign the darwin binaries (ad-hoc, deterministic identifier). Developer ID
-# + notarization is the eventual public tier; tracked on the launch checklist.
-if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null; then
-  for f in "$dist"/openroutines_*_darwin_*; do
-    codesign --force -s - -i com.steadyspace.openroutines "$f"
-  done
-fi
+cd "$(git rev-parse --show-toplevel)"
 
-(cd "$dist" && shasum -a 256 openroutines_* > checksums.txt)
+# Require a clean main in sync with origin; release.yml only tags commits on main.
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+[ "$BRANCH" = "main" ] || fail "Must be on main (currently on $BRANCH)."
+[ -z "$(git status --porcelain)" ] || fail "Working tree is not clean."
 
-# Publish the agent base image (multi-arch) to GHCR. Requires a gh token
-# with write:packages: `gh auth refresh -s write:packages`.
-echo "publishing ghcr.io/steadyspacecorp/openroutines:$version"
-gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
-docker buildx create --name openroutines-builder --use >/dev/null 2>&1 || docker buildx use openroutines-builder
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION="$version" \
-  -f Dockerfile.release \
-  -t "ghcr.io/steadyspacecorp/openroutines:$version" \
-  --push .
+# Newest release, not releases/latest: while every tag is a prerelease,
+# GitHub has no "latest" to point at.
+CURRENT_VERSION=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+gum spin --title "Checking origin…" -- \
+  git fetch --no-tags origin main "refs/tags/$CURRENT_VERSION:refs/tags/$CURRENT_VERSION" ||
+  fail "Could not fetch from origin."
 
-git tag -a "$version" -m "$version"
-git push origin "$version"
-if [[ -n "$notes" ]]; then
-  gh release create "$version" "$dist"/* --title "$version" --notes-file "$notes"
+LOCAL_SHA=$(git rev-parse HEAD)
+REMOTE_SHA=$(git rev-parse origin/main)
+[ "$LOCAL_SHA" = "$REMOTE_SHA" ] ||
+  fail "Local main (${LOCAL_SHA:0:7}) is out of sync with origin (${REMOTE_SHA:0:7})."
+
+# Pick the next version; on a prerelease train, bump it or promote.
+BASE="${CURRENT_VERSION#v}"
+if [[ "$BASE" == *-alpha.* ]]; then
+  STABLE="${BASE%%-*}"
+  N="${BASE##*-alpha.}"
+  CHOICE=$(gum choose --header "Bump version to" \
+    "v$STABLE-alpha.$((N + 1))   (next prerelease)" \
+    "v$STABLE   (promote to stable)") || fail "Aborted."
 else
-  gh release create "$version" "$dist"/* --title "$version" --generate-notes
+  IFS=. read -r MAJOR MINOR PATCH <<<"$BASE"
+  CHOICE=$(gum choose --header "Bump version to" \
+    "v$MAJOR.$MINOR.$((PATCH + 1))   (patch)" \
+    "v$MAJOR.$((MINOR + 1)).0   (minor)" \
+    "v$((MAJOR + 1)).0.0   (major)") || fail "Aborted."
 fi
-echo "released $version"
+NEW_VERSION="${CHOICE%% *}"
+git rev-parse -q --verify "refs/tags/$NEW_VERSION" >/dev/null && fail "Tag $NEW_VERSION already exists."
+
+CHANGES=$(git log --pretty='- %s (%h)' "$CURRENT_VERSION..HEAD")
+echo -e "**Changes since $CURRENT_VERSION**\n$CHANGES" | gum format
+gum confirm "Release $NEW_VERSION?" --padding "1" || fail "Aborted."
+
+# Tag HEAD and push; the push triggers release.yml.
+git tag -a "$NEW_VERSION" -m "$NEW_VERSION"
+gum spin --title "Releasing ${NEW_VERSION}…" -- git push origin "$NEW_VERSION" ||
+  fail "Could not push $NEW_VERSION (remove local tag with: git tag -d $NEW_VERSION)."
+
+# The run takes a moment to register after the push; poll briefly for it, then watch it build.
+RUN_ID=""
+for _ in {1..10}; do
+  RUN_ID=$(gh run list --workflow release.yml --branch "$NEW_VERSION" --limit 1 --json databaseId --jq ".[0].databaseId")
+  [ -n "$RUN_ID" ] && break
+  sleep 1
+done
+
+if [ -z "$RUN_ID" ]; then
+  warn "Release started, but its run hasn't appeared yet; check: gh run list --workflow release.yml"
+elif ! gum spin --title "Building ${NEW_VERSION}…" -- gh run watch "$RUN_ID" --exit-status; then
+  fail "Release failed -- view it with: gh run view $RUN_ID"
+fi
+
+RELEASE_URL="https://github.com/$REPO/releases/tag/$NEW_VERSION"
+echo -e "# Released $NEW_VERSION\n ↪ $RELEASE_URL" | gum format

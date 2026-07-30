@@ -21,14 +21,7 @@ ssh-keygen -t ed25519 -f ~/.keys/my-agent_deploy_key -N "" -C "my-agent deploy k
 gh repo deploy-key add ~/.keys/my-agent_deploy_key.pub --allow-write --title "my-agent"
 ```
 
-The agent image builds `FROM` the OpenRoutines base image on GHCR, which carries the supervisor and opencode. While that registry is private, you need a GitHub token carrying the `read:packages` scope -- `docker login` succeeds with any valid token, so a missing scope doesn't surface until the pull, as a bare `denied`:
-
-```bash
-gh auth refresh -h github.com -s read:packages
-gh auth token | docker login ghcr.io -u <your-github-username> --password-stdin
-```
-
-Then build and run:
+The agent image is self-contained: the Dockerfile installs the pinned `openroutines` release, checksum-verified, from the public download site. No registry login or token is needed, so your platform's build-from-Dockerfile deploy (`fly deploy`, Render, Kamal) works unmodified. Build and run:
 
 ```bash
 docker build -t my-agent .

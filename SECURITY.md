@@ -68,7 +68,7 @@ Environment-variable key delivery is supported for compatibility, but has a weak
 - **`/dev/shm` is shared across runs.** `/dev` is writable in the production sandbox and the tmpfs mounted at `/dev/shm` is reachable through that grant, so runs and retry attempts can pass data through it even though each attempt otherwise gets a disposable workspace and home. Nothing auto-loads from it, so it is a data channel rather than a code-execution one.
 - **The supervisor and model process share a Linux user.** In the production container, opencode runs as a child of the supervisor under the same user ID. Unix user permissions therefore do not separate them; isolation relies on the layered controls described above.
 - **Trusted code remains powerful.** A malicious routine, skill, `opencode.json`, container image, or host configuration is outside the model sandbox's threat boundary.
-- **Release and dependency integrity is incomplete.** Release artifacts are checksummed and macOS binaries are ad-hoc signed; Developer ID signing and notarization are pending. The agent base image and its opencode installation are pinned by tag and version rather than by digest.
+- **Release and dependency integrity is incomplete.** Release artifacts are checksummed (and the installer verifies the checksum), and darwin arm64 binaries carry the Go linker's ad-hoc signature; Developer ID signing and notarization are pending. The agent image's Debian base and its opencode installation are pinned by tag and version rather than by digest.
 
 ## Out of scope
 

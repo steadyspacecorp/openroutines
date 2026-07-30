@@ -212,19 +212,19 @@ step "all configuration names load; check nudges the rename"
 # opencode.json is user config: update must never rewrite it.
 cp opencode.json "$work/opencode.json.seeded"
 echo "v0.0.0-old" > .openroutines-version
-sed -i.bak 's/openroutines:v[^ ]* AS agent/openroutines:v0.0.0-old AS agent/' Dockerfile && rm -f Dockerfile.bak
+sed -i.bak 's/^ARG OPENROUTINES_VERSION=.*/ARG OPENROUTINES_VERSION=v0.0.0-old/' Dockerfile && rm -f Dockerfile.bak
 "$bin" update </dev/null >"$work/out" 2>&1 || die "update"
 grep -q "$("$bin" version)" .openroutines-version || die "update did not bump the pin"
-grep -q "openroutines:$("$bin" version) AS agent" Dockerfile || die "update did not rewrite the FROM tag"
+grep -q "^ARG OPENROUTINES_VERSION=$("$bin" version)$" Dockerfile || die "update did not rewrite the Dockerfile pin"
 cmp -s opencode.json "$work/opencode.json.seeded" || die "update rewrote opencode.json"
-step "update bumps the pin, rewrites the base-image tag, leaves opencode.json alone"
+step "update bumps the pin, rewrites the Dockerfile pin, leaves opencode.json alone"
 
 # The pin and deploy image are one version invariant. Check rejects drift.
-sed -i.bak 's/openroutines:v[^ ]* AS agent/openroutines:v0.0.0-old AS agent/' Dockerfile && rm -f Dockerfile.bak
+sed -i.bak 's/^ARG OPENROUTINES_VERSION=.*/ARG OPENROUTINES_VERSION=v0.0.0-old/' Dockerfile && rm -f Dockerfile.bak
 if run check; then
-  die "check accepted a Dockerfile base-image tag that disagrees with the pin"
+  die "check accepted a Dockerfile version pin that disagrees with the pin file"
 fi
-grep -q 'Dockerfile base image does not match' "$work/out" || die "check did not explain the Dockerfile/pin mismatch"
+grep -q 'Dockerfile version pin does not match' "$work/out" || die "check did not explain the Dockerfile/pin mismatch"
 step "check rejects framework-version drift"
 
 echo "smoke: OK"

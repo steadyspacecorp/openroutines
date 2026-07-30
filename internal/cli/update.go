@@ -76,7 +76,7 @@ func cmdUpdate(_ []string) int {
 		fmt.Printf("--- %s differs from the %s template ---\n", name, target)
 		printDiff(string(gotRaw), want)
 		apply := true
-		// The Dockerfile's base image and .openroutines-version are one pin.
+		// The Dockerfile's version ARG and .openroutines-version are one pin.
 		// Letting a user skip one while advancing the other produces an agent
 		// whose local/CI framework version differs from production.
 		if interactive && name != "Dockerfile" {
@@ -103,7 +103,7 @@ func cmdUpdate(_ []string) int {
 		return fail(fmt.Errorf("cannot verify Dockerfile framework version: %w", err))
 	}
 	if !dockerfileUsesVersion(dockerfile, target) {
-		return fail(fmt.Errorf("the Dockerfile still uses a different openroutines base image -- .openroutines-version was left at %s; update the FROM tag to %s and rerun", current, target))
+		return fail(fmt.Errorf("the Dockerfile still pins a different openroutines version -- .openroutines-version was left at %s; set ARG OPENROUTINES_VERSION=%s and rerun", current, target))
 	}
 	if err := os.WriteFile(pinPath, []byte(target+"\n"), 0o644); err != nil {
 		return fail(err)
@@ -115,10 +115,9 @@ func cmdUpdate(_ []string) int {
 }
 
 func dockerfileUsesVersion(raw []byte, version string) bool {
-	want := "ghcr.io/steadyspacecorp/openroutines:" + version
+	want := "ARG OPENROUTINES_VERSION=" + version
 	for _, line := range strings.Split(string(raw), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && strings.EqualFold(fields[0], "FROM") && fields[1] == want {
+		if strings.TrimSpace(line) == want {
 			return true
 		}
 	}

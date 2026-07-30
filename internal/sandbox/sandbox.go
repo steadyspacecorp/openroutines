@@ -50,7 +50,7 @@ func Paths(workspace, memoryDir, runTmp, home, attemptHome string) (ro, rw []str
 	ro = []string{
 		workspace,
 		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/etc", "/proc",
-		filepath.Join(home, ".opencode"), // the opencode binary itself
+		filepath.Join(home, ".opencode"), // opencode's per-user install (native mode; absent in the container)
 	}
 	rw = []string{
 		memoryDir,

@@ -41,7 +41,7 @@ func nativeMode() bool {
 // silent multi-minute wait reads as a hang and gets Ctrl-C'd.
 func ensureRuntimeImage(agentDir, tag string) error {
 	if err := exec.Command("docker", "image", "inspect", tag).Run(); err != nil {
-		fmt.Printf("building the local runtime image (first build downloads the base image and opencode -- this can take a few minutes)...\n")
+		fmt.Printf("building the local runtime image (first build downloads a Debian base and opencode -- this can take a few minutes)...\n")
 	}
 	cmd := exec.Command("docker", "build", "--quiet", "--target", "runtime", "-t", tag, agentDir)
 	out, err := cmd.CombinedOutput()

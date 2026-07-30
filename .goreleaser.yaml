@@ -1,0 +1,38 @@
+version: 2
+
+project_name: openroutines
+
+builds:
+  - main: ./cmd/openroutines
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/steadyspacecorp/openroutines/internal/version.Version={{ .Tag }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# www/install.sh, pages.yml, and agent Dockerfiles depend on this naming
+# scheme -- bare binaries, tag with its leading v -- and on checksums.txt.
+archives:
+  - formats: [binary]
+    name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  prerelease: auto
+  # No release is marked latest while every tag is a prerelease; pages.yml
+  # derives version.txt from the newest release, not releases/latest.
+  make_latest: "{{ if .Prerelease }}false{{ else }}true{{ end }}"
+  # Let a re-run recover a release that failed mid-upload; without this,
+  # already-uploaded assets make the retry fail as unrecoverable.
+  replace_existing_artifacts: true
+
+# The same generated notes `gh release create --generate-notes` produced.
+changelog:
+  use: github-native

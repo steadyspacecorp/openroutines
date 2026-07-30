@@ -16,8 +16,8 @@ Design-first is the workflow here: behavior gets decided in docs/design.md befor
 ## Repo layout
 
 - `template/` -- the agent skeleton that `openroutines scaffold` stamps out. Compiled into the CLI binary via Go's `embed`; this directory is the source of truth for what every new agent looks like. Keep it consistent with docs/design.md (frontmatter defaults, check-in routine, `openroutines.yml` shape).
-- `bin/` -- development scripts: `smoke` (CI's end-to-end test) and `release` (cross-compiles, publishes the GHCR base image, tags, creates the GitHub release).
-- `Dockerfile.release` -- the agent base image published to `ghcr.io/steadyspacecorp/openroutines`; keep its runtime contents in sync with `template/Dockerfile`'s runtime stage.
+- `bin/` -- development scripts: `smoke` (CI's end-to-end test) and `release` (guides you through picking the next version, then tags and pushes; the release workflow runs goreleaser to build and publish the GitHub release, and the pages workflow republishes the install site).
+- `www/` -- the public install site (`install.sh`), served at `get.openroutines.dev`: `.github/workflows/pages.yml` deploys it to GitHub Pages together with mirrored release binaries and a `version.txt`, so agent Dockerfiles install the pinned release without registry credentials even while this repository is private.
 - `testdata/plugins/` -- three synthetic plugin fixtures (`reporter`, `watcher`, `toolkit`) that `bin/smoke` installs; together they cover the plugin feature matrix (consumer + skill + raw credential + MCP declaration, typed credential + variable + ledger stub, skills-only). Real reference plugins live in the separate openroutines-plugins repository.
 - Go code: a single binary, `openroutines`, whose subcommands include the supervisor (`supervise`, the container entrypoint) plus `scaffold`, `configure`, `check`, `status`, `usage`, `sync`, `routines`, `skills`, `plugin`, `credentials`, and `update`.
 

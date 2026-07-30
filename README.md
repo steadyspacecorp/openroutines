@@ -26,9 +26,10 @@ Everything your agent is -- routines, skills, memory, encrypted credentials -- l
 
 ## Quick start
 
-You need git, Docker, and an API key for at least one model provider. Install the CLI (from [Releases](../../releases) while the repo is private; `brew install openroutines` once public), then:
+You need git, Docker, and an API key for at least one model provider. Then:
 
 ```bash
+curl -fsSL https://get.openroutines.dev/install.sh | bash
 openroutines scaffold my-agent
 cd my-agent
 openroutines configure
