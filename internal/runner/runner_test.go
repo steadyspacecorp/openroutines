@@ -318,7 +318,9 @@ func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 		}
 		os.WriteFile(filepath.Join(wt, "events.md"), []byte("base\n"), 0o644)
 		os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("none\n"), 0o644)
-		staging := &Staging{MemoryDir: t.TempDir()}
+		staging := &Staging{MemoryDir: t.TempDir(), BaseDir: t.TempDir()}
+		os.WriteFile(filepath.Join(staging.BaseDir, "events.md"), []byte("base\n"), 0o644)
+		os.WriteFile(filepath.Join(staging.BaseDir, "tasks.md"), []byte("none\n"), 0o644)
 		os.WriteFile(filepath.Join(staging.MemoryDir, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
 		os.WriteFile(filepath.Join(staging.MemoryDir, "tasks.md"), []byte("- [ ] real work\n"), 0o644)
 		return dir, staging

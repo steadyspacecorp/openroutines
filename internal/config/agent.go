@@ -63,6 +63,12 @@ type Defaults struct {
 // tokens for a day before anyone notices.
 const DefaultMaxTimeout = 6 * time.Hour
 
+// DefaultConcurrency is how many routines may run at once when concurrency
+// is not set. Every concurrent run is a container plus live model spend, so
+// the default buys "a long run doesn't block the agent" without inviting a
+// misconfigured schedule to light money on fire.
+const DefaultConcurrency = 2
+
 // Memory holds memory-behavior settings; see design decision "Memory has three
 // shared primitives" for the retention window semantics.
 type Memory struct {
@@ -82,6 +88,7 @@ type Agent struct {
 	Timezone    string                `yaml:"timezone"`
 	Defaults    Defaults              `yaml:"defaults"`
 	MaxTimeout  string                `yaml:"max_timeout,omitempty"`
+	Concurrency int                   `yaml:"concurrency,omitempty"`
 	LogLevel    string                `yaml:"log_level,omitempty"`
 	Memory      *Memory               `yaml:"memory,omitempty"`
 	Variables   map[string]string     `yaml:"variables,omitempty"`
@@ -97,6 +104,17 @@ func (a *Agent) MaxRunTimeout() time.Duration {
 		return d
 	}
 	return DefaultMaxTimeout
+}
+
+// RunSlots is how many routines may execute at once: concurrency in the
+// configuration file, DefaultConcurrency when unset. A nonsense value falls
+// back to the default -- Problems reports it; 1 is a valid choice and means
+// strictly serial runs.
+func (a *Agent) RunSlots() int {
+	if a.Concurrency >= 1 {
+		return a.Concurrency
+	}
+	return DefaultConcurrency
 }
 
 // Retention returns the configured memory retention string ("" = default).
@@ -180,6 +198,9 @@ func (a *Agent) Problems() []string {
 		if d, err := time.ParseDuration(a.MaxTimeout); err != nil || d <= 0 {
 			out = append(out, fmt.Sprintf("max_timeout %q is not a valid duration", a.MaxTimeout))
 		}
+	}
+	if a.Concurrency < 0 {
+		out = append(out, fmt.Sprintf("concurrency %d must be at least 1", a.Concurrency))
 	}
 	if _, err := memory.ParseRetention(a.Retention()); err != nil {
 		out = append(out, fmt.Sprintf("memory.retention: %v", err))

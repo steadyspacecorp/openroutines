@@ -81,25 +81,25 @@ func TestTriggerBaselineThenFiresOnChange(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register only
-	s.Tick(ctx, t0.Add(1*time.Minute))
+	s.tickWait(ctx, t0) // register only
+	s.tickWait(ctx, t0.Add(1*time.Minute))
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("baseline observation must not fire, got %d runs", got)
 	}
 
 	// Unchanged value: quiet.
-	s.Tick(ctx, t0.Add(2*time.Minute))
+	s.tickWait(ctx, t0.Add(2*time.Minute))
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("unchanged value must not fire, got %d runs", got)
 	}
 
 	// Changed value: exactly one run, and the observed value is now stored.
 	srv.set("v2")
-	s.Tick(ctx, t0.Add(3*time.Minute))
+	s.tickWait(ctx, t0.Add(3*time.Minute))
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("change should fire exactly one run, got %d", got)
 	}
-	s.Tick(ctx, t0.Add(4*time.Minute))
+	s.tickWait(ctx, t0.Add(4*time.Minute))
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("already-handled change must not re-fire, got %d runs", got)
 	}
@@ -117,30 +117,30 @@ func TestTriggerIntervalPacesFires(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)                    // register
-	s.Tick(ctx, t0.Add(1*time.Minute)) // baseline (poll 1)
+	s.tickWait(ctx, t0)                    // register
+	s.tickWait(ctx, t0.Add(1*time.Minute)) // baseline (poll 1)
 	srv.set("v2")
 
 	// Inside the interval: no polls, no fires.
-	s.Tick(ctx, t0.Add(2*time.Minute))
-	s.Tick(ctx, t0.Add(3*time.Minute))
+	s.tickWait(ctx, t0.Add(2*time.Minute))
+	s.tickWait(ctx, t0.Add(3*time.Minute))
 	if srv.pollCount() != 1 || runCount(t, dir) != 0 {
 		t.Fatalf("interval violated: %d polls, %d runs", srv.pollCount(), runCount(t, dir))
 	}
 
 	// Interval elapsed: the change is caught and fires.
-	s.Tick(ctx, t0.Add(4*time.Minute).Add(time.Second))
+	s.tickWait(ctx, t0.Add(4*time.Minute).Add(time.Second))
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("expected the delayed change to fire, got %d runs", got)
 	}
 
 	// A further change waits out the next interval, then fires again.
 	srv.set("v3")
-	s.Tick(ctx, t0.Add(5*time.Minute))
+	s.tickWait(ctx, t0.Add(5*time.Minute))
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("fire pacing violated: %d runs", got)
 	}
-	s.Tick(ctx, t0.Add(7*time.Minute).Add(2*time.Second))
+	s.tickWait(ctx, t0.Add(7*time.Minute).Add(2*time.Second))
 	if got := runCount(t, dir); got != 2 {
 		t.Fatalf("second change should fire after the interval, got %d runs", got)
 	}
@@ -155,13 +155,13 @@ func TestTriggerIntervalThrottlesPolls(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)                    // register
-	s.Tick(ctx, t0.Add(1*time.Minute)) // poll 1 (baseline)
-	s.Tick(ctx, t0.Add(2*time.Minute)) // within interval: no poll
+	s.tickWait(ctx, t0)                    // register
+	s.tickWait(ctx, t0.Add(1*time.Minute)) // poll 1 (baseline)
+	s.tickWait(ctx, t0.Add(2*time.Minute)) // within interval: no poll
 	if srv.pollCount() != 1 {
 		t.Fatalf("interval violated: %d polls", srv.pollCount())
 	}
-	s.Tick(ctx, t0.Add(3*time.Minute).Add(time.Second)) // interval elapsed: poll 2
+	s.tickWait(ctx, t0.Add(3*time.Minute).Add(time.Second)) // interval elapsed: poll 2
 	if srv.pollCount() != 2 {
 		t.Fatalf("expected second poll after interval: %d", srv.pollCount())
 	}
@@ -178,9 +178,9 @@ func TestTriggerPollErrorsDoNotFire(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)
-	s.Tick(ctx, t0.Add(1*time.Minute))
-	s.Tick(ctx, t0.Add(2*time.Minute))
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(1*time.Minute))
+	s.tickWait(ctx, t0.Add(2*time.Minute))
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("erroring endpoint must never fire, got %d runs", got)
 	}
@@ -199,14 +199,14 @@ func TestScheduledRunRefreshesTriggerBaseline(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(10 * time.Minute) // align to a */5 boundary
 
-	s.Tick(ctx, t0.Add(30*time.Second)) // register between firings
-	s.Tick(ctx, t0.Add(1*time.Minute))  // trigger baseline (no cron due)
-	srv.set("v2")                       // news arrives...
-	s.Tick(ctx, t0.Add(5*time.Minute))  // ...cron firing runs, baseline refreshes to v2
+	s.tickWait(ctx, t0.Add(30*time.Second)) // register between firings
+	s.tickWait(ctx, t0.Add(1*time.Minute))  // trigger baseline (no cron due)
+	srv.set("v2")                           // news arrives...
+	s.tickWait(ctx, t0.Add(5*time.Minute))  // ...cron firing runs, baseline refreshes to v2
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("expected the scheduled run, got %d", got)
 	}
-	s.Tick(ctx, t0.Add(6*time.Minute)) // trigger sees v2 == stored v2: quiet
+	s.tickWait(ctx, t0.Add(6*time.Minute)) // trigger sees v2 == stored v2: quiet
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("refreshed baseline should prevent a redundant trigger run, got %d", got)
 	}
@@ -285,9 +285,9 @@ func TestTriggerDerivesTypedCredential(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)                    // register
-	s.Tick(ctx, t0.Add(1*time.Minute)) // baseline
-	s.Tick(ctx, t0.Add(2*time.Minute)) // unchanged observation
+	s.tickWait(ctx, t0)                    // register
+	s.tickWait(ctx, t0.Add(1*time.Minute)) // baseline
+	s.tickWait(ctx, t0.Add(2*time.Minute)) // unchanged observation
 	if polls != 2 || mints != 2 || revocations != 2 {
 		t.Fatalf("poll lifecycle = %d polls, %d mints, %d revocations; want 2 each", polls, mints, revocations)
 	}
@@ -321,9 +321,9 @@ func TestTriggerRefusesUnlistedCredential(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)
-	s.Tick(ctx, t0.Add(1*time.Minute))
-	s.Tick(ctx, t0.Add(2*time.Minute))
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(1*time.Minute))
+	s.tickWait(ctx, t0.Add(2*time.Minute))
 	if srv.pollCount() != 0 {
 		t.Fatalf("an unlisted trigger credential must never reach the wire, got %d polls", srv.pollCount())
 	}

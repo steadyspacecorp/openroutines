@@ -1,11 +1,14 @@
 // Package supervisor is the long-running scheduler: the container entrypoint.
 //
 // Every tick it re-reads routine frontmatter, reconciles memory with origin,
-// and dispatches due routines serially through the shared run pipeline --
+// and dispatches due routines into a bounded pool of concurrent runs --
 // implementing the durable two-phase run model: a logical run
 // exists durably (committed, pushed) before it is allowed to act; failed
 // attempts retry under the same run id with backoff; abandonment after a
-// bounded number of attempts records a human-owned task and advances the watermark.
+// bounded number of attempts records a human-owned task and advances the
+// watermark. Runs execute in parallel; every memory-worktree operation --
+// the tick's bookkeeping, each attempt's reservation and staging, each
+// settlement -- takes its turn behind one lock.
 package supervisor
 
 import (
@@ -20,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
@@ -55,17 +59,41 @@ type Supervisor struct {
 	Log        *log.Logger
 	level      config.LogLevel
 
-	mem           *memory.Memory
-	noOrigin      bool
-	loc           *time.Location
-	retention     time.Duration
-	lastTrim      time.Time
-	leaseSHA      string        // CAS token: the lease blob we last wrote
-	leaseTTL      time.Duration // how long a lease survives without a heartbeat
-	leaseRenewed  time.Time     // wall clock of the last accepted heartbeat
-	leaseWarned   bool          // dispatch pause already announced for the current lease problem
-	syncBlocked   bool          // rewritten-history or conflict: stop adopting/pushing
-	syncWarned    bool          // blocker already raised for the current sync problem
+	mem       *memory.Memory
+	noOrigin  bool
+	loc       *time.Location
+	retention time.Duration
+	lastTrim  time.Time
+
+	// memMu serializes every memory-worktree critical section: the tick's
+	// bookkeeping (sync, trim, scheduling state, intent commit), each
+	// attempt's reserve-and-stage, and each attempt's settlement. Runs
+	// execute in parallel; the ledger they check out from and settle into
+	// takes one writer at a time. Everything below through pollFailed is
+	// touched only under memMu or only by the tick goroutine.
+	memMu sync.Mutex
+
+	// leaseMu guards the lease heartbeat state: in-flight runs heartbeat
+	// concurrently with each other and with the tick. Lease git operations
+	// deliberately do not take memMu -- they touch only the lease ref and
+	// the object store, never the worktree.
+	leaseMu      sync.Mutex
+	leaseSHA     string        // CAS token: the lease blob we last wrote
+	leaseTTL     time.Duration // how long a lease survives without a heartbeat
+	leaseRenewed time.Time     // wall clock of the last accepted heartbeat
+	leaseWarned  bool          // dispatch pause already announced for the current lease problem
+
+	// Bounded parallelism: slots caps concurrent attempts, inFlight keeps a
+	// routine's next dispatch off state its executing attempt still owns,
+	// runs lets shutdown wait for every settlement.
+	slots      chan struct{}
+	runs       sync.WaitGroup
+	inFlightMu sync.Mutex
+	inFlight   map[string]bool
+	waitLogged map[string]bool // pool-full wait already announced (tick only)
+
+	syncBlocked   bool // rewritten-history or conflict: stop adopting/pushing
+	syncWarned    bool // blocker already raised for the current sync problem
 	unreachWarned bool
 	originWarned  bool // origin unreachable: blocker already raised for this outage
 	// blockedTip is the memory tip this instance stranded on the blocked ref
@@ -115,6 +143,9 @@ func New(dir string) (*Supervisor, error) {
 		retention:  retention,
 		noOrigin:   !mem.HasOrigin(),
 		secrets:    secrets,
+		slots:      make(chan struct{}, agent.RunSlots()),
+		inFlight:   map[string]bool{},
+		waitLogged: map[string]bool{},
 		lastPolled: map[string]time.Time{},
 		pollFailed: map[string]bool{},
 	}, nil
@@ -195,6 +226,11 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		s.Tick(ctx, time.Now())
 		select {
 		case <-ctx.Done():
+			// Cancellation has reached every in-flight run; wait for their
+			// settlements (Canceled, attempts handed back) before the final
+			// commit, or the shutdown push races the very records it exists
+			// to carry.
+			s.runs.Wait()
 			s.shutdown()
 			return nil
 		case <-ticker.C:
@@ -203,9 +239,64 @@ func (s *Supervisor) Run(ctx context.Context) error {
 }
 
 // Tick performs one scheduling pass at the given time. Exported so tests can
-// drive the supervisor with synthetic clocks.
+// drive the supervisor with synthetic clocks. The pass has two halves: plan
+// holds the memory lock and reconciles state; dispatch launches the due
+// attempts into the bounded pool and returns without waiting for them.
 func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	now = now.In(s.loc)
+	due, ok := s.plan(now)
+	if !ok {
+		return
+	}
+
+	// Dispatch in due order. Each worker reserves its own attempt just
+	// before it starts (see execute), so a lost container costs a retry only
+	// for the runs that were actually running. A full pool skips, never
+	// queues: the pending record is the queue, and the next tick offers the
+	// run again -- the same shape as every other deferred dispatch.
+	sort.Slice(due, func(i, j int) bool {
+		return due[i].st.Pending.ScheduledFor.Before(due[j].st.Pending.ScheduledFor)
+	})
+	for _, d := range due {
+		if ctx.Err() != nil {
+			return // shutting down: stop launching, nothing is reserved yet
+		}
+		select {
+		case s.slots <- struct{}{}:
+		default:
+			if !s.waitLogged[d.r.Name] {
+				s.waitLogged[d.r.Name] = true
+				s.infof("%s: all %d run slots busy -- %s waits for a free one", d.r.Name, cap(s.slots), d.st.Pending.RunID)
+			}
+			continue
+		}
+		delete(s.waitLogged, d.r.Name)
+		s.setRunning(d.r.Name, true)
+		s.runs.Add(1)
+		go func(d dispatch) {
+			defer s.runs.Done()
+			defer func() { <-s.slots }()
+			defer s.setRunning(d.r.Name, false)
+			s.execute(ctx, d.r, d.st, now)
+		}(d)
+	}
+}
+
+// dispatch is one due routine and the scheduling state its attempt owns
+// until it settles.
+type dispatch struct {
+	r  *routine.Routine
+	st *schedule.State
+}
+
+// plan is the tick's bookkeeping critical section: reconcile memory with
+// origin, trim, reconcile every routine's scheduling state, and commit the
+// intent -- all under the memory lock, serialized against in-flight
+// reservations and settlements. Returns the runnable dispatches, or ok=false
+// when nothing may launch (lost lease, blocked sync, failed intent commit).
+func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
+	s.memMu.Lock()
+	defer s.memMu.Unlock()
 
 	// Reconcile memory with origin, defensively; renew the single-instance
 	// lease and pause dispatch entirely if we no longer hold it.
@@ -215,14 +306,14 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		// blocked is still alive, and a lease that lapses while its holder
 		// runs would invite a replacement to start writing beside it.
 		if !s.renewLease() {
-			return
+			return nil, false
 		}
 		if s.syncBlocked {
 			// Rewritten history or a conflict needs a human. Dispatching
 			// anyway would take external actions under identities that exist
 			// only in this container -- lost on replacement, then re-run as
 			// duplicates. Same rule as an unreachable origin: hold.
-			return
+			return nil, false
 		}
 	}
 
@@ -244,14 +335,17 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	routines, parseErrs := routine.LoadAgent(s.Dir)
 	s.reportLoadFailures(parseErrs, now)
 
-	// Phase 1: reconcile scheduling state; collect runnable pending runs.
-	type dispatch struct {
-		r  *routine.Routine
-		st *schedule.State
-	}
+	// Reconcile scheduling state; collect runnable pending runs.
 	var due []dispatch
 	for _, r := range routines {
 		if !Schedulable(r) {
+			continue
+		}
+		if s.isRunning(r.Name) {
+			// An attempt from an earlier tick is still executing. Its
+			// settlement owns this routine's state -- reading it here could
+			// only mis-mint, and abandoning it mid-flight would fight the
+			// settlement over the same record.
 			continue
 		}
 		var spec *schedule.Spec
@@ -350,30 +444,25 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	// This tick's own bookkeeping -- minted pending records, refreshed trigger
 	// baselines, abandonments -- has to be durable before anything acts on it.
 	if !s.commitIntent("Record scheduling state") {
-		return
+		return nil, false
 	}
+	return due, true
+}
 
-	// Phase 2: execute serially, in due order. Each attempt reserves itself
-	// just before it starts (see execute), so a lost container costs a retry
-	// only for the run that was actually running.
-	sort.Slice(due, func(i, j int) bool {
-		return due[i].st.Pending.ScheduledFor.Before(due[j].st.Pending.ScheduledFor)
-	})
-	for _, d := range due {
-		if ctx.Err() != nil {
-			return // shutting down: stop launching, nothing is reserved yet
-		}
-		// Heartbeat before every run, not once per tick: a tick runs every due
-		// routine to completion, so its wall time is unbounded and a per-tick
-		// heartbeat would leave the lease stale for as long as the work takes.
-		// Renewing here bounds staleness by one run -- which is why the TTL
-		// only has to outlast the longest supported timeout. Losing the lease
-		// means another instance is live: stop dispatching, like a blocked
-		// sync, rather than act as a second writer.
-		if !s.noOrigin && !s.leaseFresh() && !s.renewLease() {
-			return
-		}
-		s.execute(ctx, d.r, d.st, now)
+// isRunning reports whether a routine has an attempt executing right now.
+func (s *Supervisor) isRunning(name string) bool {
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	return s.inFlight[name]
+}
+
+func (s *Supervisor) setRunning(name string, v bool) {
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	if v {
+		s.inFlight[name] = true
+	} else {
+		delete(s.inFlight, name)
 	}
 }
 
@@ -462,10 +551,14 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	// durable in its own right: no model process starts unless the attempt
 	// that spawned it is committed and pushed. A container lost mid-attempt is
 	// replaced by one that reads this record, so the budget drains as it
-	// should instead of retrying forever at attempts: 0.
+	// should instead of retrying forever at attempts: 0. Staging shares the
+	// critical section: the memory snapshot and inbox cursor an attempt reads
+	// must never be a settlement-in-progress halfway through writing.
 	p := st.Pending
+	s.memMu.Lock()
 	giveBack := reserve(p, now)
 	if err := st.Save(s.stateDir()); err != nil {
+		s.memMu.Unlock()
 		s.errorf("%s: %v", r.Name, err)
 		return
 	}
@@ -474,29 +567,36 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		if err := st.Save(s.stateDir()); err != nil {
 			s.errorf("%s: %v", r.Name, err)
 		}
+		s.memMu.Unlock()
 		return
 	}
-
 	meta := runner.Meta{
 		RunID:          p.RunID,
 		AttemptID:      fmt.Sprintf("attempt_%02d", p.Attempts),
 		ScheduledFor:   p.ScheduledFor.Format(time.RFC3339),
 		CoveredThrough: p.CoveredThrough.Format(time.RFC3339),
 	}
+	staged, err := runner.Stage(s.Dir, agent, r, meta)
+	s.memMu.Unlock()
+
 	s.infof("%s: %s %s starting (scheduled %s)", r.Name, p.RunID, meta.AttemptID, meta.ScheduledFor)
 
 	// The lease is heartbeated while the attempt runs, not only before it:
 	// run length and lease TTL are decoupled, so a run may last hours without
 	// inviting a second instance to judge this one dead. The heartbeat stops
-	// -- joined, not just signalled -- before settlement touches the worktree.
+	// -- joined, not just signalled -- before this attempt settles.
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
-	stopHeartbeat := func() {}
-	if !s.noOrigin {
-		stopHeartbeat = s.keepLeaseAlive(runCtx, cancelRun)
+	var res *runner.ExecResult
+	var staging *runner.Staging
+	if err == nil {
+		stopHeartbeat := func() {}
+		if !s.noOrigin {
+			stopHeartbeat = s.keepLeaseAlive(runCtx, cancelRun)
+		}
+		res, staging, err = staged.Run(runCtx)
+		stopHeartbeat()
 	}
-	res, staging, err := runner.Execute(runCtx, s.Dir, agent, r, meta)
-	stopHeartbeat()
 	detail := ""
 	fatal := false
 	if err != nil {
@@ -510,6 +610,12 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	} else {
 		defer staging.Cleanup()
 	}
+
+	// Settlement is the other memory critical section: import, run record,
+	// scheduling consequences, push -- serialized against other attempts'
+	// reservations and settlements and the tick's own bookkeeping.
+	s.memMu.Lock()
+	defer s.memMu.Unlock()
 
 	// The settlement commit carries this attempt's scheduling consequences:
 	// success clears pending and advances the watermark; the final failed
@@ -769,6 +875,8 @@ func (s *Supervisor) verifySandbox() error {
 }
 
 func (s *Supervisor) shutdown() {
+	s.memMu.Lock()
+	defer s.memMu.Unlock()
 	s.infof("shutting down: final memory sync")
 	if _, err := s.mem.Commit("Shutdown"); err != nil {
 		s.errorf("shutdown commit: %v", err)
@@ -796,7 +904,9 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 			now := time.Now()
 			sha, werr := s.mem.WriteLease(s.InstanceID, now, expected)
 			if werr == nil {
+				s.leaseMu.Lock()
 				s.holdLease(sha, now)
+				s.leaseMu.Unlock()
 				return nil
 			}
 			// CAS lost: someone else moved first. Loop and re-evaluate.
@@ -817,6 +927,34 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 // heartbeat carries wall-clock time, not the tick's time: liveness is about
 // this process still breathing, and staleness is judged against a real clock.
 func (s *Supervisor) renewLease() bool {
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
+	return s.renewLeaseLocked()
+}
+
+// tryRenewLease renews unless the last heartbeat is younger than a quarter
+// TTL. Every in-flight run heartbeats independently; the freshness gate
+// collapses them into one push per cadence, and it is what keeps worst-case
+// staleness at half a TTL: a quarter of age tolerated here plus a quarter
+// until the next heartbeat lands.
+func (s *Supervisor) tryRenewLease() bool {
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
+	if time.Since(s.leaseRenewed) < s.leaseTTL/4 {
+		return true
+	}
+	return s.renewLeaseLocked()
+}
+
+// leaseExpired reports whether the last accepted heartbeat is older than the
+// TTL -- past it, this instance can no longer prove it is the only writer.
+func (s *Supervisor) leaseExpired() bool {
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
+	return time.Since(s.leaseRenewed) > s.leaseTTL
+}
+
+func (s *Supervisor) renewLeaseLocked() bool {
 	now := time.Now()
 	if sha, err := s.mem.WriteLease(s.InstanceID, now, s.leaseSHA); err == nil {
 		s.holdLease(sha, now)
@@ -838,27 +976,19 @@ func (s *Supervisor) renewLease() bool {
 	return s.leaseLost("lease renewal failed -- pausing dispatch until origin accepts a heartbeat")
 }
 
-// leaseFresh reports whether the last heartbeat is recent enough that another
-// one before the next run would be redundant. What this permits stays inside
-// the TTL by construction: a run may begin with a lease up to a quarter of the
-// TTL old, and keepLeaseAlive renews on the same quarter-TTL cadence once the
-// run is executing, so staleness never exceeds half the TTL.
-func (s *Supervisor) leaseFresh() bool {
-	return time.Since(s.leaseRenewed) < s.leaseTTL/4
-}
-
 // keepLeaseAlive heartbeats the lease every quarter TTL while an attempt
-// executes, from a goroutine that lives only while the supervisor is blocked
-// on the run: the returned stop joins it, so no lease operation ever overlaps
-// the worktree work that follows settlement. (The run's own git activity is
-// the snapshot taken in its first seconds; the first heartbeat lands a
-// quarter TTL later, and lease reads and writes touch only the lease ref and
-// the object store besides.) A renewal that fails inside the TTL of the last
-// accepted heartbeat is tolerated -- origin blips pass, and until the TTL
-// expires this instance is still provably the only writer. Past the TTL, or
-// the moment a live foreign lease appears, the run is cancelled: an instance
-// that cannot prove it is the only writer must not let a model process keep
-// acting under identities that a replacement is about to re-run.
+// executes, from a goroutine that runs only for as long as the attempt does:
+// the returned stop joins it before the attempt settles. Lease reads and
+// writes touch only the lease ref and the object store, never the worktree,
+// so heartbeats run without the memory lock and concurrent attempts'
+// heartbeats coexist -- the freshness gate in tryRenewLease means whoever
+// ticks first renews for everyone. A renewal that fails inside the TTL of
+// the last accepted heartbeat is tolerated -- origin blips pass, and until
+// the TTL expires this instance is still provably the only writer. Past the
+// TTL, or the moment a live foreign lease appears, the run is cancelled: an
+// instance that cannot prove it is the only writer must not let a model
+// process keep acting under identities that a replacement is about to
+// re-run.
 func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.CancelFunc) (stop func()) {
 	quit := make(chan struct{})
 	done := make(chan struct{})
@@ -873,10 +1003,10 @@ func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.Cance
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if s.renewLease() {
+				if s.tryRenewLease() {
 					continue
 				}
-				if s.foreignLeaseLive() || time.Since(s.leaseRenewed) > s.leaseTTL {
+				if s.foreignLeaseLive() || s.leaseExpired() {
 					s.errorf("lease lost mid-run -- cancelling the attempt")
 					cancelRun()
 					return

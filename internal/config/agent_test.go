@@ -70,6 +70,35 @@ func TestMaxTimeoutCeiling(t *testing.T) {
 	}
 }
 
+// concurrency is the run-slot count: parsed when set, the default when
+// absent, a reported problem when negative.
+func TestConcurrencyConfig(t *testing.T) {
+	a := Agent{
+		Name:        "a",
+		Description: "d",
+		Owner:       Owner{Email: "o@example.com"},
+		Timezone:    "UTC",
+		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
+	}
+	if got := a.RunSlots(); got != DefaultConcurrency {
+		t.Fatalf("unset concurrency = %d, want the %d default", got, DefaultConcurrency)
+	}
+	a.Concurrency = 4
+	if p := a.Problems(); len(p) != 0 {
+		t.Fatalf("valid concurrency flagged: %v", p)
+	}
+	if got := a.RunSlots(); got != 4 {
+		t.Fatalf("concurrency 4 read as %d", got)
+	}
+	a.Concurrency = -1
+	if p := a.Problems(); len(p) != 1 || !strings.Contains(p[0], "concurrency") {
+		t.Fatalf("negative concurrency: want one problem, got %v", p)
+	}
+	if got := a.RunSlots(); got != DefaultConcurrency {
+		t.Fatalf("negative concurrency must fall back to the default, got %d", got)
+	}
+}
+
 // The configuration file resolves newest spelling first: .yml, then the
 // legacy .yaml, then the original agent.yaml -- all read, so a pinned
 // agent renames on its own schedule (#50).

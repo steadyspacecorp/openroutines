@@ -8,5 +8,6 @@ defaults:
   model: "{{DEFAULT_MODEL}}"
   timeout: 5m
 max_timeout: 6h
+concurrency: 2
 memory:
   retention: 30d
