@@ -91,6 +91,8 @@ Custom model endpoints -- an AI gateway, a proxy, a self-hosted server -- are ha
 
 A routine then selects `model: my_gateway/some-model` in its frontmatter, and the credential `my_gateway_api_key` is injected automatically as the provider key. The boundary is simple: each config file belongs to the system that interprets it. Endpoint definitions and permissions are opencode's (`opencode.json`, which `openroutines update` never rewrites); model choice, grants, and schedules are the framework's (`openroutines.yml` and frontmatter). `openroutines check` flags a defined provider that no model string references.
 
+When a run fails on provider auth, the failure hint names the provider, the endpoint when `opencode.json` declares one, and the credential the run injected. To rule the framework out entirely, curl that `baseURL` directly with the same key: the config boundary means the block you read is exactly the block opencode uses, so a request that fails outside the framework fails for the same reason inside it.
+
 ## Your first routine
 
 ```bash

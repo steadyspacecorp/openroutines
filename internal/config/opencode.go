@@ -46,6 +46,18 @@ func LoadOpenCode(dir string) (*OpenCode, error) {
 	return &OpenCode{cfg: cfg}, nil
 }
 
+// ProviderBaseURL returns the baseURL a provider block declares, or "" when
+// none does. Quoted in run diagnostics when that endpoint rejects a run's
+// credentials; quoting is not interpreting -- the endpoint definition stays
+// opencode's alone, and the framework never requests against it.
+func (o *OpenCode) ProviderBaseURL(id string) string {
+	providers, _ := o.cfg["provider"].(map[string]any)
+	entry, _ := providers[id].(map[string]any)
+	options, _ := entry["options"].(map[string]any)
+	u, _ := options["baseURL"].(string)
+	return u
+}
+
 // MCPServers returns the names defined in the `mcp` block, sorted. The
 // entries themselves stay opaque -- the names are what grants reference and
 // what permission rules close over.

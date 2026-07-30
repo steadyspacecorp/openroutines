@@ -546,3 +546,49 @@ func TestKillClientBoundsTheWaitOnAStuckDockerClient(t *testing.T) {
 		t.Fatal("killClient never returned: the wait on the docker client is unbounded")
 	}
 }
+
+// An auth failure's hint names what the framework knows and the provider's
+// message does not: the resolved provider, the endpoint opencode.json
+// declares, and the credential the run injected -- or that none was (#60).
+func TestAuthHintNamesProviderEndpointAndCredential(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"provider":{"my_gateway":{"options":{"baseURL":"https://gateway.example.com/v1/compat"}}}}`
+	if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hint := authHint(dir, "my_gateway/some-model", true)
+	for _, want := range []string{"my_gateway at https://gateway.example.com/v1/compat", "rejected the run's my_gateway_api_key credential", "credentials set my_gateway_api_key"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("hint missing %q:\n%s", want, hint)
+		}
+	}
+
+	// No provider block: the provider name stands alone. No injected key:
+	// the hint says so instead of claiming a credential was rejected.
+	hint = authHint(dir, "anthropic/claude-x", false)
+	for _, want := range []string{"anthropic rejected the request", "no anthropic_api_key credential is stored"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("hint missing %q:\n%s", want, hint)
+		}
+	}
+}
+
+// opencode passes some providers' status text through verbatim -- "Error:
+// Unauthorized: Unauthorized" carries no key-shaped phrase, and unmatched it
+// reports as a bare crash (#60).
+func TestAuthFailurePatternMatchesPassthroughStatusText(t *testing.T) {
+	for _, line := range []string{
+		"Error: Unauthorized: Unauthorized",
+		"error: unauthorized",
+		"Error: invalid bearer token",
+		"API key is invalid.",
+	} {
+		if !authFailurePattern.MatchString(line) {
+			t.Fatalf("auth pattern should match %q", line)
+		}
+	}
+	if authFailurePattern.MatchString("the reviewer felt unauthorized to approve") {
+		t.Fatal("bare 'unauthorized' outside an error line should not classify as auth failure")
+	}
+}
