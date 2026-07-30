@@ -104,7 +104,10 @@ type Supervisor struct {
 	blockedTip   string
 	commitWarned bool              // intent commit failing: dispatch is halted, someone must look
 	loadFailed   map[string]string // routine name -> the load failure already recorded
-	secrets      map[string]string // the supervisor's own secrets, for redacting its output
+	// secrets is the supervisor's own scrub set. A concurrency-safe Set, not
+	// a map: trigger polls register bearer material from the tick goroutine
+	// while run goroutines log through writers that read it.
+	secrets *scrub.Set
 
 	// Trigger bookkeeping that is deliberately not durable: last-poll times
 	// (persisting them would dirty the memory worktree every tick) and
@@ -130,12 +133,12 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	secrets := memory.SupervisorSecrets(dir)
+	secrets := scrub.NewSet(memory.SupervisorSecrets(dir))
 	mem := memory.At(dir)
 	return &Supervisor{
 		Dir:        dir,
 		InstanceID: memory.InstanceID(),
-		Log:        log.New(scrub.NewWriter(os.Stdout, secrets), "", log.LstdFlags|log.LUTC),
+		Log:        log.New(scrub.NewSetWriter(os.Stdout, secrets), "", log.LstdFlags|log.LUTC),
 		level:      agent.EffectiveLogLevel(),
 		mem:        mem,
 		leaseTTL:   memory.LeaseTTL,
@@ -157,9 +160,11 @@ func New(dir string) (*Supervisor, error) {
 // the next poll rather than removed: a bearer that outlives its poll (an
 // oauth2_client token expires on the provider's clock) stays redactable.
 func (s *Supervisor) registerScrub(values map[string]string) {
+	prefixed := make(map[string]string, len(values))
 	for name, v := range values {
-		s.secrets["trigger "+name] = v
+		prefixed["trigger "+name] = v
 	}
+	s.secrets.Add(prefixed)
 }
 
 func (s *Supervisor) stateDir() string { return s.mem.StateDir() }
@@ -264,9 +269,12 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		select {
 		case s.slots <- struct{}{}:
 		default:
+			// warn, not info: an agent whose due work is parked behind a
+			// full pool looks idle from outside, and an operator running at
+			// warn level deserves to know why nothing is happening.
 			if !s.waitLogged[d.r.Name] {
 				s.waitLogged[d.r.Name] = true
-				s.infof("%s: all %d run slots busy -- %s waits for a free one", d.r.Name, cap(s.slots), d.st.Pending.RunID)
+				s.warnf("%s: all %d run slots busy -- %s waits for a free one", d.r.Name, cap(s.slots), d.st.Pending.RunID)
 			}
 			continue
 		}
@@ -551,9 +559,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	// durable in its own right: no model process starts unless the attempt
 	// that spawned it is committed and pushed. A container lost mid-attempt is
 	// replaced by one that reads this record, so the budget drains as it
-	// should instead of retrying forever at attempts: 0. Staging shares the
-	// critical section: the memory snapshot and inbox cursor an attempt reads
-	// must never be a settlement-in-progress halfway through writing.
+	// should instead of retrying forever at attempts: 0.
 	p := st.Pending
 	s.memMu.Lock()
 	giveBack := reserve(p, now)
@@ -570,14 +576,19 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		s.memMu.Unlock()
 		return
 	}
+	s.memMu.Unlock()
+
+	// Stage takes the memory lock itself, only around its worktree reads:
+	// credential resolution can spend seconds on the network, and holding
+	// memMu through it would park every other attempt's settlement behind
+	// this one's HTTPS round trips.
 	meta := runner.Meta{
 		RunID:          p.RunID,
 		AttemptID:      fmt.Sprintf("attempt_%02d", p.Attempts),
 		ScheduledFor:   p.ScheduledFor.Format(time.RFC3339),
 		CoveredThrough: p.CoveredThrough.Format(time.RFC3339),
 	}
-	staged, err := runner.Stage(s.Dir, agent, r, meta)
-	s.memMu.Unlock()
+	staged, err := runner.Stage(s.Dir, agent, r, meta, &s.memMu)
 
 	s.infof("%s: %s %s starting (scheduled %s)", r.Name, p.RunID, meta.AttemptID, meta.ScheduledFor)
 
@@ -645,6 +656,9 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 	if settlement.Discarded {
 		s.infof("%s: discarded staged events.md change (events: false)", r.Name)
+	}
+	for _, f := range settlement.Conflicted {
+		s.warnf("%s: %s and a concurrent run edited the same lines in %s -- both versions kept; curate the file if they disagree", r.Name, p.RunID, f)
 	}
 	switch {
 	case settlement.Outcome == runner.Canceled:
@@ -753,7 +767,7 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
 	// Sync/push failure text quotes raw git errors, which can carry a
 	// tokened origin URL -- and the message below is committed to memory.
-	msg = scrub.Redact(msg, s.secrets)
+	msg = scrub.Redact(msg, s.secrets.Snapshot())
 	s.errorf("BLOCKED: %s", msg)
 	if !*warned {
 		*warned = true

@@ -101,6 +101,9 @@ func routinesRun(args []string) int {
 	if res.Hint != "" {
 		fmt.Println(res.Hint)
 	}
+	for _, f := range res.Conflicted {
+		fmt.Printf("note: a concurrent run edited the same lines in %s -- both versions kept; curate the file if they disagree\n", f)
+	}
 	if noMemory {
 		fmt.Println("memory discarded: external actions were still performed and credentials were available (first runs may still have initialized the memory worktree)")
 	} else if res.Commit != "" {

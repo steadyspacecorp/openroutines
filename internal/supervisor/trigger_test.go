@@ -294,7 +294,7 @@ func TestTriggerDerivesTypedCredential(t *testing.T) {
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("unchanged polls must not fire, got %d runs", got)
 	}
-	if got := scrub.Redact("derived-installation-token", s.secrets); strings.Contains(got, "derived-installation-token") {
+	if got := scrub.Redact("derived-installation-token", s.secrets.Snapshot()); strings.Contains(got, "derived-installation-token") {
 		t.Fatalf("derived bearer must be redactable in supervisor logs, got %q", got)
 	}
 }

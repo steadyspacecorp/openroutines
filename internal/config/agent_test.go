@@ -70,8 +70,9 @@ func TestMaxTimeoutCeiling(t *testing.T) {
 	}
 }
 
-// concurrency is the run-slot count: parsed when set, the default when
-// absent, a reported problem when negative.
+// concurrency is the run-slot count: unset and 0 both mean serial (an
+// existing agent must not gain parallelism on upgrade -- the scaffold
+// template is what opts new agents in), and a negative value is a problem.
 func TestConcurrencyConfig(t *testing.T) {
 	a := Agent{
 		Name:        "a",
@@ -80,8 +81,15 @@ func TestConcurrencyConfig(t *testing.T) {
 		Timezone:    "UTC",
 		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
 	}
-	if got := a.RunSlots(); got != DefaultConcurrency {
-		t.Fatalf("unset concurrency = %d, want the %d default", got, DefaultConcurrency)
+	if got := a.RunSlots(); got != 1 {
+		t.Fatalf("unset concurrency = %d, want serial", got)
+	}
+	a.Concurrency = 0
+	if got := a.RunSlots(); got != 1 {
+		t.Fatalf("concurrency 0 = %d, want serial", got)
+	}
+	if p := a.Problems(); len(p) != 0 {
+		t.Fatalf("zero concurrency flagged: %v", p)
 	}
 	a.Concurrency = 4
 	if p := a.Problems(); len(p) != 0 {
@@ -94,8 +102,8 @@ func TestConcurrencyConfig(t *testing.T) {
 	if p := a.Problems(); len(p) != 1 || !strings.Contains(p[0], "concurrency") {
 		t.Fatalf("negative concurrency: want one problem, got %v", p)
 	}
-	if got := a.RunSlots(); got != DefaultConcurrency {
-		t.Fatalf("negative concurrency must fall back to the default, got %d", got)
+	if got := a.RunSlots(); got != 1 {
+		t.Fatalf("negative concurrency must fall back to serial, got %d", got)
 	}
 }
 

@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"text/template"
 	"time"
@@ -160,12 +161,13 @@ func (s *Staging) Consumed() bool {
 
 // Result is a completed manual run (routines run).
 type Result struct {
-	RunID    string
-	Outcome  Outcome
-	ExitCode int
-	Duration time.Duration
-	Commit   string // memory commit hash, when one was made
-	Hint     string // classified failure cause, when one was recognized
+	RunID      string
+	Outcome    Outcome
+	ExitCode   int
+	Duration   time.Duration
+	Commit     string   // memory commit hash, when one was made
+	Hint       string   // classified failure cause, when one was recognized
+	Conflicted []string // memory files where a concurrent run's edits were union-merged in
 }
 
 const runIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -220,12 +222,19 @@ func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 // for the caller to import or discard. The caller must Cleanup() the staging.
 // Cancelling ctx kills the attempt's process group (shutdown semantics).
 func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Routine, meta Meta) (*ExecResult, *Staging, error) {
-	sr, err := Stage(dir, agent, r, meta)
+	sr, err := Stage(dir, agent, r, meta, nopLocker{})
 	if err != nil {
 		return nil, nil, err
 	}
 	return sr.Run(ctx)
 }
+
+// nopLocker is the manual-run path's memory lock: a single `routines run`
+// has no concurrent settlements to serialize against.
+type nopLocker struct{}
+
+func (nopLocker) Lock()   {}
+func (nopLocker) Unlock() {}
 
 // StagedRun is a fully prepared attempt: credentials resolved, workspace
 // built, memory snapshotted, inbox and schedule written -- everything that
@@ -249,9 +258,13 @@ type StagedRun struct {
 	ocArgs    []string
 }
 
-// Stage prepares one attempt without spawning anything. On error, everything
-// it acquired -- derived credentials, the workspace -- is already released.
-func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta) (*StagedRun, error) {
+// Stage prepares one attempt without spawning anything. mu is the caller's
+// memory lock, held only around the section that reads the memory worktree
+// and supervisor-owned state -- credential resolution can spend seconds on
+// the network (a github_app derivation is two HTTPS round trips) and must
+// not hold up every other attempt's settlement. On error, everything Stage
+// acquired -- derived credentials, the workspace -- is already released.
+func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (*StagedRun, error) {
 	model, err := EffectiveModel(agent, r)
 	if err != nil {
 		return nil, err
@@ -278,9 +291,6 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta) (*Sta
 		}
 	}()
 	mem := memory.At(dir)
-	if err := mem.Ensure(); err != nil {
-		return nil, err
-	}
 
 	workspace, err := os.MkdirTemp("", "openroutines-run-*")
 	if err != nil {
@@ -302,24 +312,36 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta) (*Sta
 	if err := copyDeclaredSkills(dir, workspace, r.FM.Skills); err != nil {
 		return nil, err
 	}
-	// One read of the worktree becomes both the run's working copy and the
-	// import's pristine base: snapshot into the base, clone the base into
-	// staging.
-	if err := mem.Snapshot(staging.BaseDir); err != nil {
-		return nil, err
-	}
-	if err := memory.CloneTree(staging.BaseDir, staging.MemoryDir); err != nil {
-		return nil, err
-	}
-	if r.FM.IsConsumer() {
-		through, err := prepareInbox(dir, workspace, r.Name)
-		if err != nil {
-			return nil, fmt.Errorf("delivery inbox: %w", err)
+	// The worktree-reading section, under the caller's memory lock: the
+	// snapshot and cursor an attempt starts from must never be a
+	// settlement-in-progress halfway through writing. One read of the
+	// worktree becomes both the run's working copy and the import's
+	// pristine base: snapshot into the base, clone the base into staging.
+	if err := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		if err := mem.Ensure(); err != nil {
+			return err
 		}
-		staging.ConsumerThrough = through
-	}
-	if err := prepareSchedule(dir, workspace, r, agent.Timezone, time.Now()); err != nil {
-		return nil, fmt.Errorf("forward schedule: %w", err)
+		if err := mem.Snapshot(staging.BaseDir); err != nil {
+			return err
+		}
+		if err := memory.CloneTree(staging.BaseDir, staging.MemoryDir); err != nil {
+			return err
+		}
+		if r.FM.IsConsumer() {
+			through, err := prepareInbox(dir, workspace, r.Name)
+			if err != nil {
+				return fmt.Errorf("delivery inbox: %w", err)
+			}
+			staging.ConsumerThrough = through
+		}
+		if err := prepareSchedule(dir, workspace, r, agent.Timezone, time.Now()); err != nil {
+			return fmt.Errorf("forward schedule: %w", err)
+		}
+		return nil
+	}(); err != nil {
+		return nil, err
 	}
 	if err := writeAgentDefinition(workspace, agent, r, oc.MCPServers(), meta); err != nil {
 		return nil, err
@@ -629,6 +651,7 @@ func Run(dir, name string, noMemory bool) (*Result, error) {
 	settlement, err := Settle(dir, r, staging, exec, Meta{RunID: runID, AttemptID: "attempt_01"}, "", nil)
 	res.Outcome = settlement.Outcome
 	res.Commit = settlement.Commit
+	res.Conflicted = settlement.Conflicted
 	return res, err
 }
 
@@ -638,6 +661,10 @@ type Settlement struct {
 	Detail    string  // the failure description recorded; "" for clean completions
 	Discarded bool    // staged events.md change discarded (events: false)
 	Commit    string  // settlement commit hash, "" when nothing changed
+	// Conflicted names files where this run and a concurrently settled run
+	// edited the same lines: the import kept both sides (union merge), and
+	// somebody should be able to see that it happened.
+	Conflicted []string
 }
 
 // Settle makes one attempt's end durable in memory -- the single settlement
@@ -656,12 +683,13 @@ func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, m
 	mem := memory.At(dir)
 	s := &Settlement{Outcome: res.Outcome, Detail: detail}
 	if res.Outcome == Completed {
-		discarded, err := importMemory(dir, r, staging)
+		discarded, conflicted, err := importMemory(dir, r, staging)
 		if err != nil {
 			s.Outcome = Crashed
 			s.Detail = "memory rejected: " + err.Error()
 		} else {
 			s.Discarded = discarded
+			s.Conflicted = conflicted
 			advanceConsumer(dir, r, staging, meta.RunID)
 		}
 	} else if s.Detail == "" && res.Outcome != Canceled {
@@ -702,16 +730,15 @@ func parseAttempt(attemptID string) int {
 // tree. A routine with events: false cannot record events: a staged change
 // to events.md is discarded -- the worktree copy wins, the rest of the tree
 // imports normally. Reports whether such a change was discarded.
-func importMemory(dir string, r *routine.Routine, staging *Staging) (bool, error) {
+func importMemory(dir string, r *routine.Routine, staging *Staging) (discarded bool, conflicted []string, err error) {
 	mem := memory.At(dir)
-	discarded := false
 	if !r.FM.RecordsEvents() {
-		var err error
 		if discarded, err = memory.RestoreFile(staging.MemoryDir, staging.BaseDir, "events.md"); err != nil {
-			return false, err
+			return false, nil, err
 		}
 	}
-	return discarded, mem.Import(staging.MemoryDir, staging.BaseDir)
+	conflicted, err = mem.Import(staging.MemoryDir, staging.BaseDir)
+	return discarded, conflicted, err
 }
 
 // prepareInbox fixes the delivery boundary at the memory branch's current

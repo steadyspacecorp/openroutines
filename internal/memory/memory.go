@@ -465,9 +465,9 @@ func Validate(stagingDir string) error {
 // appends is both of them. A deletion applies only where the worktree still
 // matches the base -- erasing lines another run just wrote is worse than
 // keeping a file its deleter no longer wants. Caller commits.
-func (m *Memory) Import(stagingDir, baseDir string) error {
+func (m *Memory) Import(stagingDir, baseDir string) (conflicted []string, err error) {
 	if err := Validate(stagingDir); err != nil {
-		return err
+		return nil, err
 	}
 	wt := m.Worktree()
 	// Refuse to import over uncommitted human curation: Import overwrites and
@@ -486,18 +486,19 @@ func (m *Memory) Import(stagingDir, baseDir string) error {
 			}
 			path := fields[len(fields)-1]
 			if !supervisorOwned[topSegment(path)] {
-				return fmt.Errorf("memory worktree has uncommitted changes (%s) -- refusing to import over them; commit or discard (git -C %s ...) and re-run", path, Dir)
+				return nil, fmt.Errorf("memory worktree has uncommitted changes (%s) -- refusing to import over them; commit or discard (git -C %s ...) and re-run", path, Dir)
 			}
 		}
 	}
-	if err := copyStaged(stagingDir, baseDir, wt, m.repoDir); err != nil {
-		return err
+	conflicted, err = copyStaged(stagingDir, baseDir, wt, m.repoDir)
+	if err != nil {
+		return nil, err
 	}
 	// Remove worktree files the routine deleted in staging -- but only where
 	// the base agrees the file existed when the run saw it and the worktree
 	// hasn't moved since: a file another run created or changed in the
 	// meantime is theirs to keep.
-	return filepath.WalkDir(wt, func(path string, d fs.DirEntry, err error) error {
+	return conflicted, filepath.WalkDir(wt, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -886,15 +887,15 @@ func (m *Memory) Status() WorktreeStatus {
 // passed. A rejection still fails the run, and Settle commits the failure
 // record -- so a half-copied worktree would commit part of a rejected run's
 // memory, which is the atomicity staging exists to provide.
-func copyStaged(stagingDir, baseDir, wt, repoDir string) error {
+func copyStaged(stagingDir, baseDir, wt, repoDir string) (conflicted []string, err error) {
 	root, err := os.OpenRoot(stagingDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = root.Close() }()
 	scratch, err := os.MkdirTemp(filepath.Dir(wt), ".openroutines-import-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
 
@@ -923,53 +924,64 @@ func copyStaged(stagingDir, baseDir, wt, repoDir string) error {
 		files = append(files, rel)
 		return copyStagedFile(root, rel, filepath.Join(scratch, rel))
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	for _, rel := range dirs {
 		if err := os.MkdirAll(filepath.Join(wt, rel), 0o755); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	// Promotion is the three-way decision, made on trusted bytes: the scratch
-	// copy is supervisor-owned by now, the base never entered the run's reach,
-	// and the worktree is ours.
+	// The three-way decision, made on trusted bytes: the scratch copy is
+	// supervisor-owned by now, the base never entered the run's reach, and
+	// the worktree is ours. Every file's final bytes are resolved into the
+	// scratch tree first -- the merge can fail (git merge-file refuses
+	// NUL-bearing content), and a failure discovered mid-promotion would
+	// leave a half-imported worktree for the settlement to commit as the
+	// run's memory. The rename-only pass below is what keeps the promise
+	// above: promoted only once the whole staged tree has passed.
+	var promote []string
 	for _, rel := range files {
 		staged, err := os.ReadFile(filepath.Join(scratch, rel))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		base, berr := os.ReadFile(filepath.Join(baseDir, rel))
 		if berr != nil && !os.IsNotExist(berr) {
-			return berr
+			return nil, berr
 		}
 		if berr == nil && bytes.Equal(staged, base) {
 			continue // untouched by the run: never regress what settled since
 		}
+		cur, cerr := os.ReadFile(filepath.Join(wt, rel))
+		if cerr != nil && !os.IsNotExist(cerr) {
+			return nil, cerr
+		}
+		if !os.IsNotExist(cerr) && !bytes.Equal(cur, base) && !bytes.Equal(cur, staged) {
+			// The worktree moved while the run held its snapshot: a
+			// concurrently settled run changed the same file.
+			merged, conflict, err := unionMerge(scratch, cur, base, staged, repoDir)
+			if err != nil {
+				return nil, fmt.Errorf("merging staged %s over concurrent changes: %w", rel, err)
+			}
+			if conflict {
+				conflicted = append(conflicted, rel)
+			}
+			if err := os.WriteFile(filepath.Join(scratch, rel), merged, 0o644); err != nil {
+				return nil, err
+			}
+		}
+		promote = append(promote, rel)
+	}
+	for _, rel := range promote {
 		dest := filepath.Join(wt, rel)
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return err
+			return nil, err
 		}
-		cur, cerr := os.ReadFile(dest)
-		if cerr != nil && !os.IsNotExist(cerr) {
-			return cerr
-		}
-		if os.IsNotExist(cerr) || bytes.Equal(cur, base) || bytes.Equal(cur, staged) {
-			// New file, an unmoved worktree, or an identical concurrent
-			// result: the staged copy lands whole.
-			if err := os.Rename(filepath.Join(scratch, rel), dest); err != nil {
-				return err
-			}
-			continue
-		}
-		merged, err := unionMerge(scratch, cur, base, staged, repoDir)
-		if err != nil {
-			return fmt.Errorf("merging staged %s over concurrent changes: %w", rel, err)
-		}
-		if err := os.WriteFile(dest, merged, 0o644); err != nil {
-			return err
+		if err := os.Rename(filepath.Join(scratch, rel), dest); err != nil {
+			return nil, err
 		}
 	}
-	return nil
+	return conflicted, nil
 }
 
 // unionMerge three-way-merges one file whose worktree copy moved while the
@@ -977,24 +989,42 @@ func copyStaged(stagingDir, baseDir, wt, repoDir string) error {
 // staged, base is the snapshot both descend from (empty when both sides
 // created the file). git merge-file --union resolves every conflicting hunk
 // by keeping both sides -- the right call for append-stream memory files,
-// and bounded like every other git invocation the supervisor makes.
-func unionMerge(scratch string, ours, base, theirs []byte, repoDir string) ([]byte, error) {
+// where the union of two appends is both of them. But it is detected before
+// it is resolved: --union silences the conflict exit, and on a non-append
+// edit -- two runs rewriting the same context.md fact -- a silent
+// both-sides keep is data damage nobody sees, so the caller gets told.
+func unionMerge(scratch string, ours, base, theirs []byte, repoDir string) (merged []byte, conflicted bool, err error) {
 	td, err := os.MkdirTemp(scratch, ".merge-*")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = os.RemoveAll(td) }()
 	paths := map[string][]byte{"ours": ours, "base": base, "theirs": theirs}
 	for name, content := range paths {
 		if err := os.WriteFile(filepath.Join(td, name), content, 0o644); err != nil {
-			return nil, err
+			return nil, false, err
 		}
+	}
+	// Detection pass: -p leaves the inputs untouched and exits with the
+	// conflict count. Anything past a plausible count is git failing, not
+	// conflicting.
+	detect := newGitCmd(repoDir, append(hermeticConfig, "merge-file", "-p",
+		filepath.Join(td, "ours"), filepath.Join(td, "base"), filepath.Join(td, "theirs")))
+	out, derr := detect.CombinedOutput()
+	detect.cancel()
+	if derr != nil {
+		code := gitExitCode(derr)
+		if code <= 0 || code >= 127 {
+			return nil, false, detect.fail([]string{"merge-file"}, derr, out)
+		}
+		conflicted = true
 	}
 	if _, err := git(repoDir, "merge-file", "--union",
 		filepath.Join(td, "ours"), filepath.Join(td, "base"), filepath.Join(td, "theirs")); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return os.ReadFile(filepath.Join(td, "ours"))
+	merged, err = os.ReadFile(filepath.Join(td, "ours"))
+	return merged, conflicted, err
 }
 
 // copyStagedFile copies one staged file into the scratch tree, bounded by the

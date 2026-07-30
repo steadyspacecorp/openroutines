@@ -63,11 +63,12 @@ type Defaults struct {
 // tokens for a day before anyone notices.
 const DefaultMaxTimeout = 6 * time.Hour
 
-// DefaultConcurrency is how many routines may run at once when concurrency
-// is not set. Every concurrent run is a container plus live model spend, so
-// the default buys "a long run doesn't block the agent" without inviting a
-// misconfigured schedule to light money on fire.
-const DefaultConcurrency = 2
+// ScaffoldConcurrency is the run-slot count the scaffold template writes
+// into new agents' openroutines.yml. Deliberately not a fallback the code
+// applies to agents that never wrote the key: every concurrent run is a
+// container plus live model spend, and an upgrade must not silently double
+// either -- an existing agent stays serial until its operator opts in.
+const ScaffoldConcurrency = 2
 
 // Memory holds memory-behavior settings; see design decision "Memory has three
 // shared primitives" for the retention window semantics.
@@ -107,14 +108,16 @@ func (a *Agent) MaxRunTimeout() time.Duration {
 }
 
 // RunSlots is how many routines may execute at once: concurrency in the
-// configuration file, DefaultConcurrency when unset. A nonsense value falls
-// back to the default -- Problems reports it; 1 is a valid choice and means
-// strictly serial runs.
+// configuration file. Unset and 0 both mean serial -- parallelism is an
+// opt-in an agent writes down, and the scaffold template opts new agents in
+// at ScaffoldConcurrency. Problems flags a negative value; New refuses to
+// boot on any problem, so the fallback here is for surfaces that read a
+// broken config anyway (status, check).
 func (a *Agent) RunSlots() int {
 	if a.Concurrency >= 1 {
 		return a.Concurrency
 	}
-	return DefaultConcurrency
+	return 1
 }
 
 // Retention returns the configured memory retention string ("" = default).

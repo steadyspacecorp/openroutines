@@ -64,6 +64,12 @@ func (w *prefixWriter) Write(p []byte) (int, error) {
 	for {
 		i := bytes.IndexByte(w.buf.Bytes(), '\n')
 		if i < 0 {
+			// A stream that never sends a newline must not grow the buffer
+			// without bound; past the same cap the renderer applies, the
+			// partial line goes out as one.
+			if w.buf.Len() > maxEventBytes {
+				w.Flush()
+			}
 			return len(p), nil
 		}
 		line := w.buf.Next(i + 1)

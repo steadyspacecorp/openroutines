@@ -74,7 +74,7 @@ func TestStagedCopyNeverFollowsSymlinks(t *testing.T) {
 	if err := os.Symlink(secret, filepath.Join(staging, "events.md")); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	if err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil {
+	if _, err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil {
 		t.Error("expected the copy to refuse a symlinked staged file")
 	}
 	if raw, _ := os.ReadFile(filepath.Join(wt, "events.md")); strings.Contains(string(raw), "SECRET") {
@@ -91,7 +91,7 @@ func TestStagedCopyRefusesHardLinks(t *testing.T) {
 	if err := os.Link(outside, filepath.Join(staging, "events.md")); err != nil {
 		t.Skip("hard links unavailable")
 	}
-	if err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil || !strings.Contains(err.Error(), "hard link") {
+	if _, err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil || !strings.Contains(err.Error(), "hard link") {
 		t.Errorf("expected hard-link rejection, got %v", err)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(wt, "events.md")); strings.Contains(string(raw), "SECRET") {
@@ -107,7 +107,7 @@ func TestStagedCopyRefusesPathsValidateWouldReject(t *testing.T) {
 		staging, wt := t.TempDir(), t.TempDir()
 		os.MkdirAll(filepath.Dir(filepath.Join(staging, rel)), 0o755)
 		os.WriteFile(filepath.Join(staging, rel), []byte("x\n"), 0o644)
-		if err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil {
+		if _, err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil {
 			t.Errorf("%s: expected the copy to refuse it", rel)
 		}
 		if _, err := os.Stat(filepath.Join(wt, rel)); !os.IsNotExist(err) {
@@ -121,7 +121,7 @@ func TestStagedCopyRefusesPathsValidateWouldReject(t *testing.T) {
 func TestStagedCopyRefusesOversizedFile(t *testing.T) {
 	staging, wt := t.TempDir(), t.TempDir()
 	os.WriteFile(filepath.Join(staging, "events.md"), make([]byte, maxFile+1), 0o644)
-	if err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("expected an oversize rejection, got %v", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestStagedCopyRejectionLeavesTheWorktreeUntouched(t *testing.T) {
 	if err := os.Symlink(filepath.Join(t.TempDir(), "secret.txt"), filepath.Join(staging, "zz.md")); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	if err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil {
+	if _, err := copyStaged(staging, t.TempDir(), wt, t.TempDir()); err == nil {
 		t.Fatal("expected the copy to refuse the symlink")
 	}
 	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "committed\n" {
@@ -191,7 +191,7 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 	// A human edit, uncommitted: refuse.
 	wt := At(repo).Worktree()
 	os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("- [ ] mid-edit\n"), 0o644)
-	if err := At(repo).Import(staging, t.TempDir()); err == nil || !strings.Contains(err.Error(), "uncommitted") {
+	if _, err := At(repo).Import(staging, t.TempDir()); err == nil || !strings.Contains(err.Error(), "uncommitted") {
 		t.Fatalf("expected dirty-worktree refusal, got %v", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(wt, "tasks.md")); string(got) != "- [ ] mid-edit\n" {
@@ -202,7 +202,7 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 	if _, err := At(repo).Commit("human curation"); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(repo).Import(staging, t.TempDir()); err != nil {
+	if _, err := At(repo).Import(staging, t.TempDir()); err != nil {
 		t.Fatalf("clean worktree should import: %v", err)
 	}
 
@@ -215,7 +215,7 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 	os.MkdirAll(filepath.Join(wt, "state"), 0o755)
 	os.WriteFile(filepath.Join(wt, "state", "r.json"), []byte("{}"), 0o644)
 	os.WriteFile(filepath.Join(staging, "events.md"), []byte("- staged fact\n- another\n"), 0o644)
-	if err := At(repo).Import(staging, t.TempDir()); err != nil {
+	if _, err := At(repo).Import(staging, t.TempDir()); err != nil {
 		t.Fatalf("supervisor-owned dirt must not block import: %v", err)
 	}
 }
@@ -513,5 +513,96 @@ func TestOriginRewriteRequiresADeployKey(t *testing.T) {
 
 	if got := resolvedOrigin(t, dir); got != "https://github.com/acme/agent.git" {
 		t.Errorf("origin rewritten without a deploy key to authenticate it: %q", got)
+	}
+}
+
+// The import is a three-way merge against the run's base snapshot; these are
+// the decisions it can make, tested directly because the wrong one is silent
+// (design decision "Overlap: kernel locks, skip-don't-queue").
+func TestImportThreeWayMerge(t *testing.T) {
+	repo := t.TempDir()
+	wt := At(repo).Worktree()
+	os.MkdirAll(wt, 0o755)
+	staging, base := t.TempDir(), t.TempDir()
+	write := func(dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// stale.md: untouched by the run while a concurrent settlement moved the
+	// worktree -- the stale staged copy must not regress it.
+	write(base, "stale.md", "v1\n")
+	write(staging, "stale.md", "v1\n")
+	write(wt, "stale.md", "v1\n- concurrent\n")
+	// mine.md: only this run changed it -- the staged copy lands whole.
+	write(base, "mine.md", "a\n")
+	write(staging, "mine.md", "a\nb\n")
+	write(wt, "mine.md", "a\n")
+	// both.md: both runs appended -- the union keeps both, and it is reported.
+	write(base, "both.md", "x\n")
+	write(staging, "both.md", "x\ntheirs\n")
+	write(wt, "both.md", "x\nours\n")
+	// gone.md: the run deleted it and nothing moved underneath -- deleted.
+	write(base, "gone.md", "old\n")
+	write(wt, "gone.md", "old\n")
+	// contested.md: the run deleted it but a concurrent settlement wrote to
+	// it -- the deletion loses.
+	write(base, "contested.md", "old\n")
+	write(wt, "contested.md", "old\n- news\n")
+
+	conflicted, err := At(repo).Import(staging, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := func(name string) string {
+		raw, _ := os.ReadFile(filepath.Join(wt, name))
+		return string(raw)
+	}
+	if got("stale.md") != "v1\n- concurrent\n" {
+		t.Errorf("stale.md regressed to the staged copy: %q", got("stale.md"))
+	}
+	if got("mine.md") != "a\nb\n" {
+		t.Errorf("mine.md = %q, want the staged change", got("mine.md"))
+	}
+	if b := got("both.md"); !strings.Contains(b, "ours") || !strings.Contains(b, "theirs") {
+		t.Errorf("both.md = %q, want both sides kept", b)
+	}
+	if len(conflicted) != 1 || conflicted[0] != "both.md" {
+		t.Errorf("conflicted = %v, want exactly [both.md]", conflicted)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "gone.md")); !os.IsNotExist(err) {
+		t.Error("gone.md should be deleted: the worktree still matched the base")
+	}
+	if got("contested.md") != "old\n- news\n" {
+		t.Errorf("contested.md = %q, want the concurrent write kept over the deletion", got("contested.md"))
+	}
+}
+
+// A merge that fails must not leave a half-imported worktree: Settle commits
+// whatever the worktree holds, failed attempts included, so promotion has to
+// be all or nothing.
+func TestImportMergeFailureLeavesWorktreeUntouched(t *testing.T) {
+	repo := t.TempDir()
+	wt := At(repo).Worktree()
+	os.MkdirAll(wt, 0o755)
+	staging, base := t.TempDir(), t.TempDir()
+	// aa.md sorts before zz.md, so it is resolved first and would land if
+	// promotion were interleaved with resolution.
+	os.WriteFile(filepath.Join(staging, "aa.md"), []byte("new\n"), 0o644)
+	// zz.md needs a merge, and git merge-file refuses NUL-bearing content.
+	os.WriteFile(filepath.Join(base, "zz.md"), []byte("x\n"), 0o644)
+	os.WriteFile(filepath.Join(staging, "zz.md"), []byte("x\ntheirs\n"), 0o644)
+	os.WriteFile(filepath.Join(wt, "zz.md"), []byte("x\x00ours\n"), 0o644)
+
+	if _, err := At(repo).Import(staging, base); err == nil {
+		t.Fatal("expected the NUL-content merge to fail the import")
+	}
+	if _, err := os.Stat(filepath.Join(wt, "aa.md")); !os.IsNotExist(err) {
+		t.Error("aa.md landed despite the failed import -- promotion must be all or nothing")
+	}
+	if raw, _ := os.ReadFile(filepath.Join(wt, "zz.md")); string(raw) != "x\x00ours\n" {
+		t.Errorf("zz.md modified by a failed import: %q", raw)
 	}
 }

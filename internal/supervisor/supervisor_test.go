@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -17,7 +18,30 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
+
+// A trigger poll registers bearer material from the tick goroutine while run
+// goroutines log through writers that read the same scrub set -- with a
+// plain map that is a fatal concurrent map read/write, not just a race.
+func TestScrubRegistrationRacesLogging(t *testing.T) {
+	secrets := scrub.NewSet(map[string]string{"master key": "seed-value"})
+	s := &Supervisor{Log: log.New(scrub.NewSetWriter(io.Discard, secrets), "", 0), secrets: secrets}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 500 {
+			s.registerScrub(map[string]string{"poll_token": fmt.Sprintf("bearer-%d", i)})
+		}
+	}()
+	for i := range 500 {
+		s.errorf("run line %d carrying seed-value", i)
+	}
+	<-done
+	if got := scrub.Redact("bearer-499 and seed-value", s.secrets.Snapshot()); strings.Contains(got, "bearer-499") || strings.Contains(got, "seed-value") {
+		t.Fatalf("registered and seeded values must both redact, got %q", got)
+	}
+}
 
 // fakeOpencode is a stand-in for the real binary: it reads fake-mode from
 // its own directory (the workspace is allow-list built and carries no test
@@ -131,6 +155,20 @@ func loadState(t *testing.T, s *Supervisor) *schedule.State {
 		t.Fatal(err)
 	}
 	return st
+}
+
+// optInConcurrency writes concurrency into a fixture's config, the way an
+// operator would: parallelism is opt-in, and these tests are the opt-in path.
+func optInConcurrency(t *testing.T, dir string, n int) {
+	t.Helper()
+	path := filepath.Join(dir, "openroutines.yml")
+	cfg, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(cfg, fmt.Appendf(nil, "concurrency: %d\n", n)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // tickWait runs one scheduling pass and waits for every attempt it launched
@@ -821,6 +859,7 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	writeRoutines(dir)
 	run(dir, "git", "remote", "add", "origin", bare)
 
+	optInConcurrency(t, dir, 2)
 	holder := newSupervisor(t, dir)
 	holder.leaseTTL = 6 * time.Second
 	ctx := context.Background()
@@ -891,6 +930,7 @@ func TestRunsExecuteInParallel(t *testing.T) {
 		"---\nschedule: \"* * * * *\"\n---\nDo the other fake thing.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	optInConcurrency(t, dir, 2)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
@@ -1054,17 +1094,10 @@ func TestOnlyTheRunningAttemptIsReserved(t *testing.T) {
 		"---\nschedule: \"* * * * *\"\n---\nDo the other fake thing.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// One run slot: with room for both, both reservations would be genuinely
-	// concurrent and genuinely owed. The property under test is that the
-	// reservation belongs to the executor -- a routine waiting for a slot has
-	// spent nothing.
-	cfg, err := os.ReadFile(filepath.Join(dir, "openroutines.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), append(cfg, []byte("concurrency: 1\n")...), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Serial (the unset default): with room for both, both reservations
+	// would be genuinely concurrent and genuinely owed. The property under
+	// test is that the reservation belongs to the executor -- a routine
+	// waiting for a slot has spent nothing.
 	withOrigin(t, dir)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
