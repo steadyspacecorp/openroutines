@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -114,7 +115,7 @@ type gitCmd struct {
 // flag does not survive execve.
 func newGitCmd(dir string, args []string) *gitCmd {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(originRewrite), args...)...)
 	cmd.Dir = dir
 	cmd.Env = []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
 	for _, name := range gitPassthrough {

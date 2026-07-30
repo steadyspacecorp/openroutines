@@ -168,6 +168,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	if configured, err := memory.ConfigureDeployKey(); err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	} else if configured {
+		memory.ConfigureOriginRewrite(s.Dir)
 		s.infof("deploy key configured for memory sync")
 	}
 	if err := s.mem.Ensure(); err != nil {
