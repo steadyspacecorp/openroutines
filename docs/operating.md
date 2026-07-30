@@ -53,7 +53,7 @@ A few properties fall out of the design (see [docs/design.md](design.md) for the
 
 ## Log level
 
-The log is rendered, not raw: a routine's own output prints whole, each tool call becomes a summary line plus the last 2KB of its output, and injected secrets are scrubbed before anything is truncated. Set `log_level` in `openroutines.yml` to change how much survives -- omitted means `info`:
+The log is rendered, not raw: a routine's own output prints whole, each tool call becomes a summary line plus the last 2KB of its output, every line is prefixed with its routine's name (runs execute concurrently and share one stdout), and injected secrets are scrubbed before anything is truncated. Set `log_level` in `openroutines.yml` to change how much survives -- omitted means `info`:
 
 - `debug` -- the full model-process transcript plus opencode's own diagnostics. For chasing a specific problem, not for running unattended.
 - `info` -- the default: the rendered run stream plus supervisor lifecycle lines (run started, completed, registered).

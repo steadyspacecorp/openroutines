@@ -491,17 +491,26 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 	// the level would have logged -- failure classification and the failure
 	// tail below read it.
 	tail := &tailBuffer{max: 4096}
+	// Log lines are attributed to their routine: runs execute concurrently
+	// and share one stdout. The prefix lands downstream of scrubbing and
+	// beside -- never in front of -- the tail buffer, which classification
+	// and the failure tail read raw.
 	var flush func()
 	if level == config.LogDebug {
-		scrubber := scrub.NewWriter(io.MultiWriter(os.Stdout, tail), secrets.scrub)
+		pw := newPrefixWriter(os.Stdout, r.Name)
+		scrubber := scrub.NewWriter(io.MultiWriter(pw, tail), secrets.scrub)
 		cmd.Stdout, cmd.Stderr = scrubber, scrubber
-		flush = scrubber.Flush
+		flush = func() { scrubber.Flush(); pw.Flush() }
 	} else {
 		sink := io.Writer(os.Stdout)
 		if level > config.LogInfo {
 			sink = io.Discard
 		}
-		dst := io.MultiWriter(sink, tail)
+		pw := newPrefixWriter(sink, r.Name)
+		// The two renderers land on one destination from os/exec's two drain
+		// goroutines; syncWriter keeps a line whole through the prefix
+		// buffer and the tail.
+		dst := &syncWriter{w: io.MultiWriter(pw, tail)}
 		// Renderers scrub before they truncate -- the ordering that keeps a
 		// truncation boundary from splitting a secret past the exact-value
 		// matcher. stderr is not part of the event stream; its renderer just
@@ -509,7 +518,7 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 		rout := newRenderer(dst, secrets.scrub)
 		rerr := newRenderer(dst, secrets.scrub)
 		cmd.Stdout, cmd.Stderr = rout, rerr
-		flush = func() { rout.Flush(); rerr.Flush() }
+		flush = func() { rout.Flush(); rerr.Flush(); pw.Flush() }
 	}
 	cmd.WaitDelay = pipeDrainDeadline
 

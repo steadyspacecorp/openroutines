@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
@@ -40,6 +41,66 @@ const (
 
 func newRenderer(dst io.Writer, secrets map[string]string) *renderer {
 	return &renderer{dst: dst, secrets: secrets}
+}
+
+// prefixWriter attributes run output to its routine: runs execute
+// concurrently and share one stdout, so an unattributed line could belong to
+// any of them. Lines are held until complete and each is written in a single
+// Write, so two runs' lines interleave whole, never mid-line. It wraps only
+// the log sink -- the tail buffer sits beside it, because failure
+// classification and the failure tail read raw output.
+type prefixWriter struct {
+	dst    io.Writer
+	prefix []byte
+	buf    bytes.Buffer
+}
+
+func newPrefixWriter(dst io.Writer, name string) *prefixWriter {
+	return &prefixWriter{dst: dst, prefix: []byte(name + " | ")}
+}
+
+func (w *prefixWriter) Write(p []byte) (int, error) {
+	w.buf.Write(p)
+	for {
+		i := bytes.IndexByte(w.buf.Bytes(), '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		line := w.buf.Next(i + 1)
+		out := make([]byte, 0, len(w.prefix)+len(line))
+		out = append(out, w.prefix...)
+		out = append(out, line...)
+		if _, err := w.dst.Write(out); err != nil {
+			return len(p), err
+		}
+	}
+}
+
+// Flush writes the partial line the stream ended on, newline-terminated.
+func (w *prefixWriter) Flush() {
+	if w.buf.Len() == 0 {
+		return
+	}
+	out := make([]byte, 0, len(w.prefix)+w.buf.Len()+1)
+	out = append(out, w.prefix...)
+	out = append(out, w.buf.Bytes()...)
+	out = append(out, '\n')
+	w.buf.Reset()
+	_, _ = w.dst.Write(out)
+}
+
+// syncWriter serializes the two stream renderers' writes: os/exec drains a
+// run's stdout and stderr on separate goroutines, and both land on the same
+// destination -- the prefix writer's line buffer and the tail behind it.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }
 
 // event is the slice of an opencode run event the renderer reads.
