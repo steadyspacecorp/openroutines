@@ -162,13 +162,12 @@ func EffectiveModel(agent *config.Agent, r *routine.Routine) (string, error) {
 }
 
 // EffectiveTimeout is what an attempt actually gets: the declared timeout
-// under the lease ceiling. The cap is applied here rather than left to
-// `check`, because the single-instance lease is heartbeated between runs and
-// a run that outlasts what the lease covers lets a second supervisor judge
-// this one dead and take over mid-run -- a correctness property cannot rest
-// on a command the operator may never run.
+// under the agent-wide ceiling (max_timeout in openroutines.yml). The cap is
+// applied here rather than left to `check`, because the ceiling is the
+// agent's guard against a runaway run burning tokens for a day -- a spend
+// property cannot rest on a command the operator may never run.
 func EffectiveTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
-	return min(DeclaredTimeout(agent, r), memory.MaxRunTimeout)
+	return min(DeclaredTimeout(agent, r), agent.MaxRunTimeout())
 }
 
 // DeclaredTimeout resolves frontmatter over agent defaults over 5m, before the

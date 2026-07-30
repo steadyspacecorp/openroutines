@@ -58,6 +58,11 @@ type Defaults struct {
 	Timeout string `yaml:"timeout"`
 }
 
+// DefaultMaxTimeout is the run-length ceiling when max_timeout is not set:
+// long enough for real work, short enough that a runaway run cannot burn
+// tokens for a day before anyone notices.
+const DefaultMaxTimeout = 6 * time.Hour
+
 // Memory holds memory-behavior settings; see design decision "Memory has three
 // shared primitives" for the retention window semantics.
 type Memory struct {
@@ -76,10 +81,22 @@ type Agent struct {
 	Owner       Owner                 `yaml:"owner"`
 	Timezone    string                `yaml:"timezone"`
 	Defaults    Defaults              `yaml:"defaults"`
+	MaxTimeout  string                `yaml:"max_timeout,omitempty"`
 	LogLevel    string                `yaml:"log_level,omitempty"`
 	Memory      *Memory               `yaml:"memory,omitempty"`
 	Variables   map[string]string     `yaml:"variables,omitempty"`
 	Credentials map[string]creds.Spec `yaml:"credentials,omitempty"`
+}
+
+// MaxRunTimeout is the agent-wide ceiling on a single attempt's effective
+// timeout: max_timeout in the configuration file, DefaultMaxTimeout when
+// unset. An unparseable value falls back to the default -- Problems reports
+// it; execution must not fail open to unlimited.
+func (a *Agent) MaxRunTimeout() time.Duration {
+	if d, err := time.ParseDuration(a.MaxTimeout); err == nil && d > 0 {
+		return d
+	}
+	return DefaultMaxTimeout
 }
 
 // Retention returns the configured memory retention string ("" = default).
@@ -157,6 +174,11 @@ func (a *Agent) Problems() []string {
 	if a.Defaults.Timeout != "" {
 		if _, err := time.ParseDuration(a.Defaults.Timeout); err != nil {
 			out = append(out, fmt.Sprintf("defaults.timeout %q is not a valid duration", a.Defaults.Timeout))
+		}
+	}
+	if a.MaxTimeout != "" {
+		if d, err := time.ParseDuration(a.MaxTimeout); err != nil || d <= 0 {
+			out = append(out, fmt.Sprintf("max_timeout %q is not a valid duration", a.MaxTimeout))
 		}
 	}
 	if _, err := memory.ParseRetention(a.Retention()); err != nil {

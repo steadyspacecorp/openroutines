@@ -40,12 +40,12 @@ func checkOutput(t *testing.T, dir string) string {
 	return string(out)
 }
 
-// A run may not outlast the single-instance lease. The runner enforces that;
-// check is where an operator learns their setting will be cut down, before a
-// routine is quietly killed at the ceiling in production.
-func TestCheckWarnsOnTimeoutsTheLeaseCannotCover(t *testing.T) {
+// A run may not outlast the agent's max_timeout ceiling. The runner enforces
+// that; check is where an operator learns their setting will be cut down,
+// before a routine is quietly killed at the ceiling in production.
+func TestCheckWarnsOnTimeoutsAboveTheCeiling(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML+"max_timeout: 1h\n"), 0o644)
 	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
 	os.WriteFile(filepath.Join(dir, "routines", "marathon.md"), []byte(
 		"---\nschedule: \"0 9 * * *\"\ntimeout: 90m\n---\nTake ages.\n"), 0o644)
@@ -53,12 +53,12 @@ func TestCheckWarnsOnTimeoutsTheLeaseCannotCover(t *testing.T) {
 		"---\nschedule: \"0 9 * * *\"\ntimeout: 10m\n---\nBe quick.\n"), 0o644)
 
 	out := checkOutput(t, dir)
-	if !strings.Contains(out, "marathon: timeout 1h30m0s exceeds the 15m0s a single run may take") ||
-		!strings.Contains(out, "capped at 15m0s") {
-		t.Fatalf("expected a lease-ceiling warning for marathon:\n%s", out)
+	if !strings.Contains(out, "marathon: timeout 1h30m0s exceeds the agent's 1h0m0s ceiling") ||
+		!strings.Contains(out, "capped at 1h0m0s") {
+		t.Fatalf("expected a ceiling warning for marathon:\n%s", out)
 	}
 	if strings.Contains(out, "sprint: timeout") {
-		t.Fatalf("a 10m timeout fits inside the lease and must not warn:\n%s", out)
+		t.Fatalf("a 10m timeout fits inside the ceiling and must not warn:\n%s", out)
 	}
 }
 

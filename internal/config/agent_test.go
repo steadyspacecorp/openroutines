@@ -39,6 +39,37 @@ func TestVariableNameValidation(t *testing.T) {
 	}
 }
 
+// max_timeout is the agent-wide run ceiling: parsed when set, the default
+// when absent, a reported problem (never fail-open to unlimited) when junk.
+func TestMaxTimeoutCeiling(t *testing.T) {
+	a := Agent{
+		Name:        "a",
+		Description: "d",
+		Owner:       Owner{Email: "o@example.com"},
+		Timezone:    "UTC",
+		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
+	}
+	if got := a.MaxRunTimeout(); got != DefaultMaxTimeout {
+		t.Fatalf("unset max_timeout = %s, want the %s default", got, DefaultMaxTimeout)
+	}
+	a.MaxTimeout = "12h"
+	if p := a.Problems(); len(p) != 0 {
+		t.Fatalf("valid max_timeout flagged: %v", p)
+	}
+	if got := a.MaxRunTimeout(); got.Hours() != 12 {
+		t.Fatalf("max_timeout 12h parsed as %s", got)
+	}
+	for _, bad := range []string{"six hours", "-1h", "0"} {
+		a.MaxTimeout = bad
+		if p := a.Problems(); len(p) != 1 || !strings.Contains(p[0], "max_timeout") {
+			t.Fatalf("max_timeout %q: want one problem, got %v", bad, p)
+		}
+		if got := a.MaxRunTimeout(); got != DefaultMaxTimeout {
+			t.Fatalf("junk max_timeout %q must fall back to the default, got %s", bad, got)
+		}
+	}
+}
+
 // The configuration file resolves newest spelling first: .yml, then the
 // legacy .yaml, then the original agent.yaml -- all read, so a pinned
 // agent renames on its own schedule (#50).

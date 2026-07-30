@@ -162,14 +162,12 @@ func cmdCheck(_ []string) int {
 				errs = append(errs, fmt.Sprintf("timeout %q is not a valid duration", r.FM.Timeout))
 			}
 		}
-		// The single-instance lease is heartbeated between runs, so a run
-		// longer than the lease can cover leaves it stale mid-flight -- long
-		// enough for a second supervisor to judge this one dead and take over.
-		// The runner caps the timeout at the ceiling; say so here, because a
-		// routine silently cut short is worse news than a rejected setting.
+		// The runner caps every attempt at the agent's max_timeout ceiling;
+		// say so here, because a routine silently cut short is worse news
+		// than a rejected setting.
 		if agent != nil {
-			if declared := runner.DeclaredTimeout(agent, r); declared > memory.MaxRunTimeout {
-				warnf("%s: timeout %s exceeds the %s a single run may take -- the single-instance lease cannot cover a run that long, so attempts are capped at %s; split the work into shorter runs", r.Name, declared, memory.MaxRunTimeout, memory.MaxRunTimeout)
+			if declared, ceiling := runner.DeclaredTimeout(agent, r), agent.MaxRunTimeout(); declared > ceiling {
+				warnf("%s: timeout %s exceeds the agent's %s ceiling, so attempts are capped at %s -- raise max_timeout in %s or split the work into shorter runs", r.Name, declared, ceiling, ceiling, config.FileName)
 			}
 		}
 		if r.FM.Model != "" && !strings.Contains(r.FM.Model, "/") {

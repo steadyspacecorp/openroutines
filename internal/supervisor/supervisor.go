@@ -482,7 +482,18 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 	s.infof("%s: %s %s starting (scheduled %s)", r.Name, p.RunID, meta.AttemptID, meta.ScheduledFor)
 
-	res, staging, err := runner.Execute(ctx, s.Dir, agent, r, meta)
+	// The lease is heartbeated while the attempt runs, not only before it:
+	// run length and lease TTL are decoupled, so a run may last hours without
+	// inviting a second instance to judge this one dead. The heartbeat stops
+	// -- joined, not just signalled -- before settlement touches the worktree.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	stopHeartbeat := func() {}
+	if !s.noOrigin {
+		stopHeartbeat = s.keepLeaseAlive(runCtx, cancelRun)
+	}
+	res, staging, err := runner.Execute(runCtx, s.Dir, agent, r, meta)
+	stopHeartbeat()
 	detail := ""
 	fatal := false
 	if err != nil {
@@ -528,8 +539,12 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 	switch {
 	case settlement.Outcome == runner.Canceled:
-		s.infof("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
-		return // no push: shutdown's final commit and push carry the record
+		if ctx.Err() != nil {
+			s.infof("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
+		} else {
+			s.warnf("%s: %s cancelled -- lease lost mid-run; whoever holds the lease retries it", r.Name, p.RunID)
+		}
+		return // no push: shutdown's final commit carries the record, and a lease loser must not push
 	case settlement.Outcome == runner.Completed:
 		s.infof("%s: %s completed in %s", r.Name, p.RunID, res.Duration)
 	case abandoned:
@@ -823,10 +838,61 @@ func (s *Supervisor) renewLease() bool {
 // leaseFresh reports whether the last heartbeat is recent enough that another
 // one before the next run would be redundant. What this permits stays inside
 // the TTL by construction: a run may begin with a lease up to a quarter of the
-// TTL old and last at most memory.MaxRunTimeout (half the TTL), leaving a
-// quarter to spare.
+// TTL old, and keepLeaseAlive renews on the same quarter-TTL cadence once the
+// run is executing, so staleness never exceeds half the TTL.
 func (s *Supervisor) leaseFresh() bool {
 	return time.Since(s.leaseRenewed) < s.leaseTTL/4
+}
+
+// keepLeaseAlive heartbeats the lease every quarter TTL while an attempt
+// executes, from a goroutine that lives only while the supervisor is blocked
+// on the run: the returned stop joins it, so no lease operation ever overlaps
+// the worktree work that follows settlement. (The run's own git activity is
+// the snapshot taken in its first seconds; the first heartbeat lands a
+// quarter TTL later, and lease reads and writes touch only the lease ref and
+// the object store besides.) A renewal that fails inside the TTL of the last
+// accepted heartbeat is tolerated -- origin blips pass, and until the TTL
+// expires this instance is still provably the only writer. Past the TTL, or
+// the moment a live foreign lease appears, the run is cancelled: an instance
+// that cannot prove it is the only writer must not let a model process keep
+// acting under identities that a replacement is about to re-run.
+func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.CancelFunc) (stop func()) {
+	quit := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(s.leaseTTL / 4)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if s.renewLease() {
+					continue
+				}
+				if s.foreignLeaseLive() || time.Since(s.leaseRenewed) > s.leaseTTL {
+					s.errorf("lease lost mid-run -- cancelling the attempt")
+					cancelRun()
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		close(quit)
+		<-done
+	}
+}
+
+// foreignLeaseLive reports whether origin currently carries someone else's
+// unexpired lease -- the one condition that means another instance may
+// already be dispatching.
+func (s *Supervisor) foreignLeaseLive() bool {
+	lease, err := s.mem.ReadLease()
+	return err == nil && lease != nil && lease.Holder != s.InstanceID && time.Since(lease.At) <= s.leaseTTL
 }
 
 // holdLease records a successful heartbeat, announcing the recovery when the

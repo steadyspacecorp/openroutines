@@ -7,5 +7,6 @@ timezone: "{{TIMEZONE}}"
 defaults:
   model: "{{DEFAULT_MODEL}}"
   timeout: 5m
+max_timeout: 6h
 memory:
   retention: 30d

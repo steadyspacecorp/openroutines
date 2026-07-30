@@ -217,17 +217,14 @@ func short(sha string) string {
 // --- Lease: "one writer" enforced, not assumed -------------------------------
 
 // The lease: a single-writer heartbeat ref with a bounded TTL. The supervisor
-// heartbeats before every run it dispatches, so the lease goes at most one run
-// stale; the TTL is twice the longest run the framework supports, which is
-// what makes "a live lease means a live instance" checkable rather than hoped
-// for (design decision "The lease is renewed per run, not per tick").
+// heartbeats before every run it dispatches and on a quarter-TTL cadence
+// while a run executes, so the lease never goes more than half a TTL stale
+// under a live supervisor no matter how long its runs are -- the TTL bounds
+// takeover latency, not run length (design decision "The lease is renewed
+// per run, not per tick").
 const (
 	leaseRef = "refs/openroutines/lease"
 	LeaseTTL = 30 * time.Minute
-
-	// MaxRunTimeout is the longest effective timeout the lease can cover.
-	// Attempts are capped at it; `openroutines check` warns above it.
-	MaxRunTimeout = LeaseTTL / 2
 )
 
 // leaseContent formats the heartbeat blob.

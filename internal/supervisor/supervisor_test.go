@@ -834,6 +834,118 @@ func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
 	}
 }
 
+// One run can now outlast the lease TTL: keepLeaseAlive renews on a
+// quarter-TTL cadence while the attempt executes, so run length and TTL are
+// decoupled -- what lets max_timeout be hours while takeover latency stays
+// minutes (design decision "The lease is renewed per run, not per tick").
+func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
+	dir := fixture(t, "slow")
+	base := t.TempDir()
+	bare := filepath.Join(base, "origin.git")
+	runCmd(t, base, "git", "init", "-q", "-b", "main", "--bare", bare)
+	runCmd(t, dir, "git", "remote", "add", "origin", bare)
+
+	holder := newSupervisor(t, dir)
+	// The run sleeps 3s against a 1.5s TTL: a lease renewed only at dispatch
+	// is 2.2s stale at the assertion below (expired, 0.7s to spare) while the
+	// in-run heartbeat keeps it younger than ~0.5s (live, 1s to spare).
+	holder.leaseTTL = 1500 * time.Millisecond
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+	holder.Tick(ctx, t0) // register
+
+	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	started := filepath.Join(binDir, "started")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		holder.Tick(ctx, t0.Add(61*time.Second))
+	}()
+	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(readFile(t, started), "run_"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the run never started")
+		}
+	}
+	time.Sleep(2200 * time.Millisecond) // deep in the run, past what the dispatch heartbeat could cover
+
+	other := t.TempDir()
+	os.MkdirAll(filepath.Join(other, "routines"), 0o755)
+	os.WriteFile(filepath.Join(other, "openroutines.yml"), []byte(agentYAML("UTC")), 0o644)
+	runCmd(t, other, "git", "init", "-q", "-b", "main", ".")
+	runCmd(t, other, "git", "remote", "add", "origin", bare)
+	second := newSupervisor(t, other)
+	second.InstanceID = "second-instance"
+	second.leaseTTL = holder.leaseTTL
+
+	acquireCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	if err := second.acquireLease(acquireCtx); err == nil {
+		t.Fatal("second instance took the lease while a long run was executing")
+	}
+	<-done
+	if got := strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_"); got != 1 {
+		t.Fatalf("the long run should have completed under the heartbeat, got %d ledger entries", got)
+	}
+}
+
+// A lease that is provably gone mid-run cancels the run: the attempt is
+// handed back and whoever holds the lease retries it. An instance that
+// cannot prove it is the only writer must not let a model process keep
+// acting under identities a replacement is about to re-run.
+func TestLostLeaseCancelsTheRun(t *testing.T) {
+	dir := fixture(t, "slow")
+	base := t.TempDir()
+	bare := filepath.Join(base, "origin.git")
+	runCmd(t, base, "git", "init", "-q", "-b", "main", "--bare", bare)
+	runCmd(t, dir, "git", "remote", "add", "origin", bare)
+
+	holder := newSupervisor(t, dir)
+	holder.leaseTTL = 1500 * time.Millisecond
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+	holder.Tick(ctx, t0) // register
+
+	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	started := filepath.Join(binDir, "started")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		holder.Tick(ctx, t0.Add(61*time.Second))
+	}()
+	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(readFile(t, started), "run_"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the run never started")
+		}
+	}
+
+	// Usurp the lease at origin, CAS-looping against the holder's renewals.
+	// The next heartbeat finds a live foreign lease and must cancel the run.
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		lease, err := holder.mem.ReadLease()
+		if err != nil || lease == nil {
+			t.Fatalf("reading the lease to usurp it: %v", err)
+		}
+		if _, err := holder.mem.WriteLease("usurper", time.Now(), lease.SHA); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("could not usurp the lease")
+		}
+	}
+	<-done
+
+	st, err := schedule.Load(holder.stateDir(), "every-minute")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Pending == nil || st.Pending.Attempts != 0 {
+		t.Fatalf("a cancelled attempt should be handed back for the lease holder to retry: %+v", st.Pending)
+	}
+	if got := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")); strings.Contains(got, "ran run_") {
+		t.Fatalf("a cancelled run's staged memory must not be imported: %q", got)
+	}
+}
+
 // The attempt that spawns a model process must be committed and pushed before
 // it starts. Production recovery is container replacement: an attempt that
 // takes the container down with it (OOM, host loss, eviction) never settles,

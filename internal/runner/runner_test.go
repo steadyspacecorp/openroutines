@@ -33,23 +33,29 @@ func genDef(t *testing.T, meta Meta, fm ...routine.Frontmatter) string {
 	return string(raw)
 }
 
-// A run may not outlast the single-instance lease, so the ceiling is applied
-// where attempts actually read it -- not left to a `check` the operator may
-// never run. The declared value stays readable for `check` to warn about.
-func TestTimeoutIsCappedAtTheLeaseCeiling(t *testing.T) {
+// The ceiling is the agent's own max_timeout, applied where attempts read
+// the timeout -- not left to a `check` the operator may never run. The
+// declared value stays readable for `check` to warn about.
+func TestTimeoutIsCappedAtTheAgentCeiling(t *testing.T) {
 	agent := &config.Agent{Name: "a", Description: "d"}
 	agent.Defaults.Timeout = "90m"
 	marathon := &routine.Routine{Name: "marathon"}
 	if got := DeclaredTimeout(agent, marathon); got != 90*time.Minute {
 		t.Fatalf("declared timeout = %s, want 90m", got)
 	}
-	if got := EffectiveTimeout(agent, marathon); got != memory.MaxRunTimeout {
-		t.Fatalf("effective timeout = %s, want the %s ceiling", got, memory.MaxRunTimeout)
+	if got := EffectiveTimeout(agent, marathon); got != 90*time.Minute {
+		t.Fatalf("effective timeout = %s, want 90m under the default ceiling", got)
 	}
 
-	sprint := &routine.Routine{Name: "sprint", FM: routine.Frontmatter{Timeout: "10m"}}
-	if got := EffectiveTimeout(agent, sprint); got != 10*time.Minute {
-		t.Fatalf("effective timeout = %s, want the declared 10m untouched", got)
+	agent.MaxTimeout = "1h"
+	if got := EffectiveTimeout(agent, marathon); got != time.Hour {
+		t.Fatalf("effective timeout = %s, want the 1h max_timeout ceiling", got)
+	}
+
+	agent.MaxTimeout = ""
+	week := &routine.Routine{Name: "week", FM: routine.Frontmatter{Timeout: "168h"}}
+	if got := EffectiveTimeout(agent, week); got != config.DefaultMaxTimeout {
+		t.Fatalf("effective timeout = %s, want the %s default ceiling", got, config.DefaultMaxTimeout)
 	}
 }
 
