@@ -15,6 +15,7 @@ Everything you work with lives in your working directory, and every path you use
 - Each memory file opens with a fenced example of its format -- follow it when writing, and give your ledger one when you first create it.
 - Never write a credential value into memory -- name the credential if you must refer to it.
 - Inside this workspace, only writes under memory/ persist -- file changes elsewhere are discarded. This does NOT limit your real work: acting on external systems (opening PRs, calling APIs, posting messages) is exactly your job when the routine asks for it.
+- $TMPDIR is scratch space for this attempt -- write working files there, and expect them to vanish when it ends.
 
 The schedule -- ./schedule.md, computed by the runtime from every routine's frontmatter: each routine's coming fires and, when this routine is scheduled, your window -- now through your next fire -- with the other routines split in-window (they fire before you run again) and out. Read it whenever timing matters; never derive fire times from routines/ frontmatter or cron syntax by hand.
 
