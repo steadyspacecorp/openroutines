@@ -10,29 +10,16 @@ From nothing to a running agent: install the CLI, scaffold an agent, configure i
 
 That's the whole list. You don't install opencode or any language runtime -- everything the agent runs on ships inside the container.
 
-None of it is private, either. The image your routines run in locally builds from public bases, so you can scaffold an agent, write routines, and run them against the real model without any registry access at all. GHCR is a deploy-time dependency only -- see [Operating in production](operating.md).
+None of it is private, either. The image your routines run in locally builds from public bases and installs the released binary from the public download site, so you can scaffold an agent, write routines, run them against the real model, and deploy without any registry access at all -- see [Operating in production](operating.md).
 
 ## Install the CLI
 
-**While this repo is private**, brew and the install script are not live yet -- install from [Releases](https://github.com/steadyspacecorp/openroutines/releases) instead:
-
 ```bash
-# pick your platform: darwin|linux, arm64|amd64
-gh release download --repo steadyspacecorp/openroutines --pattern "openroutines_*_darwin_arm64" --pattern "checksums.txt" -D /tmp/or
-(cd /tmp/or && shasum -a 256 -c --ignore-missing checksums.txt)
-chmod +x /tmp/or/openroutines_* && mv /tmp/or/openroutines_* ~/bin/openroutines   # any dir on your PATH
+curl -fsSL https://get.openroutines.dev/install.sh | bash
 openroutines --version
 ```
 
-(On macOS, always install by moving the file into place as above -- overwriting a running binary in place invalidates the kernel's signature cache. The darwin binaries are ad-hoc signed; Gatekeeper does not quarantine files downloaded via `gh`.)
-
-Once public, installation becomes:
-
-```bash
-brew install openroutines
-# or
-curl -fsSL https://openroutines.dev/install.sh | sh
-```
+The installer verifies the checksum and installs to `~/.local/bin` (override with `OPENROUTINES_INSTALL_DIR`; pin a version with `OPENROUTINES_VERSION`). It replaces the binary by moving a fresh copy into place, which on macOS is also what keeps the kernel's signature cache valid -- the darwin arm64 binaries carry the Go linker's ad-hoc signature. `brew install openroutines` is planned for once the repo is public.
 
 ## Scaffold and configure
 
