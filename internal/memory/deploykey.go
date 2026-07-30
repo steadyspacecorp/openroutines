@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,10 @@ const (
 // sshCommand, when set, is exported as GIT_SSH_COMMAND on every git
 // invocation so pushes and fetches authenticate with the deploy key.
 var sshCommand string
+
+// originRewrite, when set, is passed as -c url.<ssh>.insteadOf=<https> on
+// every git invocation so an HTTPS origin authenticates with the deploy key.
+var originRewrite []string
 
 // ConfigureDeployKey materializes OPENROUTINES_DEPLOY_KEY (if present) as a
 // supervisor-only key file and routes all git SSH through it. Returns whether
@@ -63,4 +68,34 @@ func ConfigureDeployKey() (bool, error) {
 		keyPath, filepath.Join(sshDir, "known_hosts"),
 	)
 	return true, nil
+}
+
+// ConfigureOriginRewrite routes an HTTPS origin through SSH, so the deploy
+// key -- an SSH credential -- can authenticate it. `scaffold` leaves the
+// origin for the operator to add and `gh` defaults to https, so an HTTPS
+// origin is the common case; without this the container has no credential
+// for it at all and git exits asking for a username it cannot read. The
+// rewrite lives on the supervisor's own invocations: .git/config and the
+// built image stay as the operator wrote them.
+//
+// Left alone: an origin that is already SSH, one carrying credentials of its
+// own, and one on a non-default port, whose SSH port the URL does not say.
+func ConfigureOriginRewrite(repoDir string) {
+	if sshCommand == "" {
+		return
+	}
+	raw, err := git(repoDir, "remote", "get-url", "origin")
+	if err != nil {
+		return
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.Port() != "" || u.User != nil {
+		return
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return
+	}
+	originRewrite = []string{
+		"-c", fmt.Sprintf("url.git@%s:.insteadOf=%s://%s/", u.Host, u.Scheme, u.Host),
+	}
 }
