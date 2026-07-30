@@ -22,12 +22,14 @@ type Spec struct {
 	InjectAs string `yaml:"inject_as,omitempty"` // oauth2_client
 }
 
-// Derived is run-scoped material minted from a stored root secret: the
-// exact environment to inject, values the log scrubber must redact, and
-// cleanup that disposes of anything revocable. Cleanup is best-effort and
-// safe to call once at attempt end.
+// Derived is short-lived material minted from a stored root secret: the
+// exact environment to inject into a run, the bearer value (when the type
+// produces one) available to trusted supervisor callers, values the log
+// scrubber must redact, and cleanup that disposes of anything revocable.
+// Cleanup is best-effort and safe to call once after the material's use.
 type Derived struct {
 	Env     map[string]string
+	Bearer  string
 	Scrub   map[string]string
 	Cleanup func()
 }

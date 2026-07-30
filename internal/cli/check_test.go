@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
 const checkAgentYAML = `name: test-agent
@@ -76,5 +78,28 @@ func TestCheckWarnsOnMissingOpencodeJSON(t *testing.T) {
 	out = checkOutput(t, dir)
 	if strings.Contains(out, "opencode.json is missing") {
 		t.Fatalf("a present opencode.json must not warn:\n%s", out)
+	}
+}
+
+func TestCheckAllowsTypedTriggerCredential(t *testing.T) {
+	dir := t.TempDir()
+	config := checkAgentYAML + "credentials:\n  gh_key:\n    type: github_app\n    app_id: \"1\"\n"
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(config), 0o644)
+	os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
+	os.WriteFile(filepath.Join(dir, "routines", "watch-private.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\ntrigger:\n  poll: https://api.github.com/repos/example/private/actions/runs\n  credential: gh_key\ncredentials: [gh_key]\n---\nWatch the private repository.\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600)
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.Write(dir, key, map[string]string{"gh_key": "stored-app-key", "fake_api_key": "provider-key"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := checkOutput(t, dir)
+	if strings.Contains(out, "use a raw credential") || !strings.Contains(out, "watch-private (") {
+		t.Fatalf("typed trigger credential should pass routine validation:\n%s", out)
 	}
 }

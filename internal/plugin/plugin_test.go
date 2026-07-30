@@ -167,13 +167,14 @@ func TestLoadRefusals(t *testing.T) {
 		t.Fatalf("empty payload should be refused, got %v", err)
 	}
 
-	// A typed trigger credential is refused at load, before any copy.
+	// Typed credentials work for plugin trigger polls too: installation
+	// supplies the metadata, and the supervisor sends only derived material.
 	dir = write(t, map[string]string{
 		"PLUGIN.md":        "---\nname: demo\ndescription: d\ncredentials:\n  gh_key:\n    description: App key\n    type: github_app\n---\n",
 		"routines/demo.md": "---\ntrigger:\n  poll: https://example.com/x\n  credential: gh_key\ncredentials: [gh_key]\n---\nx\n",
 	})
-	if _, err := Load(dir, nil); err == nil || !strings.Contains(err.Error(), "typed") {
-		t.Fatalf("typed trigger credential should be refused, got %v", err)
+	if _, err := Load(dir, nil); err != nil {
+		t.Fatalf("typed trigger credential should load: %v", err)
 	}
 }
 

@@ -150,12 +150,6 @@ func cmdCheck(_ []string) int {
 			if t.Credential != "" && !slices.Contains(r.FM.Credentials, t.Credential) {
 				errs = append(errs, fmt.Sprintf("trigger credential %q must also be listed in credentials", t.Credential))
 			}
-			// A typed credential's stored value is a root secret (the run
-			// receives derived material instead); a poll would send that
-			// root secret as a bearer token.
-			if t.Credential != "" && agent != nil && agent.Credentials[t.Credential].Type != "" {
-				errs = append(errs, fmt.Sprintf("trigger credential %q is typed (%s) -- a poll would send the stored root secret as a bearer token; use a raw credential", t.Credential, agent.Credentials[t.Credential].Type))
-			}
 			if d, err := t.IntervalDuration(); err == nil && d < time.Minute {
 				warnf("%s: trigger interval %q is below the 1m tick -- polls can't happen more often than the tick", r.Name, t.Interval)
 			}

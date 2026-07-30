@@ -75,15 +75,22 @@ func deriveGitHubApp(s Spec, stored, apiBase string) (*Derived, error) {
 	if token.Token == "" {
 		return nil, fmt.Errorf("github_app: GitHub did not return an installation token")
 	}
+	// From here the token is live; a failure must not leave it valid until
+	// its natural expiry.
+	revoke := func() {
+		_ = githubRequest(apiBase, "DELETE", "/installation/token", token.Token, nil, nil)
+	}
 
 	var bot struct {
 		ID int64 `json:"id"`
 	}
 	botName := inst.AppSlug + "[bot]"
 	if err := githubRequest(apiBase, "GET", "/users/"+inst.AppSlug+"%5Bbot%5D", token.Token, nil, &bot); err != nil {
+		revoke()
 		return nil, err
 	}
 	if bot.ID == 0 {
+		revoke()
 		return nil, fmt.Errorf("github_app: GitHub did not return the App bot identity")
 	}
 	botEmail := fmt.Sprintf("%d+%s@users.noreply.github.com", bot.ID, botName)
@@ -98,10 +105,9 @@ func deriveGitHubApp(s Spec, stored, apiBase string) (*Derived, error) {
 			"GIT_COMMITTER_NAME":  botName,
 			"GIT_COMMITTER_EMAIL": botEmail,
 		},
-		Scrub: map[string]string{"github_app installation token": token.Token},
-		Cleanup: func() {
-			_ = githubRequest(apiBase, "DELETE", "/installation/token", token.Token, nil, nil)
-		},
+		Bearer:  token.Token,
+		Scrub:   map[string]string{"github_app installation token": token.Token},
+		Cleanup: revoke,
 	}, nil
 }
 

@@ -61,7 +61,7 @@ trigger:
 ```
 
 - `poll` -- the URL to check
-- `credential` -- optional; sent as a bearer token (must also appear in the routine's `credentials`, and must be a raw credential, not a typed one)
+- `credential` -- optional; sent as a bearer token and must also appear in the routine's `credentials`. Raw credentials are sent verbatim; typed credentials contribute only short-lived bearer material derived fresh for the poll, never their stored root secret.
 - `select` -- optional; extracts one value from a JSON response by RFC 6901 pointer (e.g. `/messages/0/ts`); without it, the response is reduced to a digest and compared
 - `interval` -- poll cadence (default 5m, floor one minute)
 

@@ -120,6 +120,17 @@ func New(dir string) (*Supervisor, error) {
 	}, nil
 }
 
+// registerScrub adds a trigger poll's bearer material to the supervisor's
+// scrub set, under prefixed names so an agent credential name can never
+// collide with the master or deploy key entries. Entries are overwritten by
+// the next poll rather than removed: a bearer that outlives its poll (an
+// oauth2_client token expires on the provider's clock) stays redactable.
+func (s *Supervisor) registerScrub(values map[string]string) {
+	for name, v := range values {
+		s.secrets["trigger "+name] = v
+	}
+}
+
 func (s *Supervisor) stateDir() string { return s.mem.StateDir() }
 
 // infof, warnf, and errorf gate the supervisor's own lines by the agent's

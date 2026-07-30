@@ -301,11 +301,6 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 				badf("routine %s grants mcp server %q, missing from the PLUGIN.md mcp block", r.Name, m)
 			}
 		}
-		if t := r.FM.Trigger; t != nil && t.Credential != "" {
-			if p.Manifest.Credentials[t.Credential].Type != "" {
-				badf("routine %s: trigger credential %q is typed -- a poll sends its credential verbatim; use a raw credential", r.Name, t.Credential)
-			}
-		}
 	}
 
 	if len(problems) != 0 {
