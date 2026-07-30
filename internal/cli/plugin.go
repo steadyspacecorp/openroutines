@@ -56,10 +56,6 @@ func pluginAdd(args []string) int {
 	}
 	source = rest[0]
 
-	if _, err := os.Stat(config.Path(".")); err != nil {
-		return fail(fmt.Errorf("run plugin add from inside an agent repository"))
-	}
-
 	root, provenance, cleanup, err := plugin.Fetch(source, subPath, "")
 	if err != nil {
 		return fail(err)
