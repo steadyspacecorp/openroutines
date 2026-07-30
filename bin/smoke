@@ -21,6 +21,7 @@ bin="$work/openroutines"
 printf 'smoke: testing %s\n' "$("$bin" version)"
 
 run scaffold "$work/agent" || die "scaffold"
+[ "$(readlink "$work/agent/CLAUDE.md")" = "AGENTS.md" ] || die "CLAUDE.md is not a symlink to AGENTS.md"
 cd "$work/agent"
 printf 'smoke-agent\nSmoke-tests the openroutines CLI\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
   | "$bin" configure >"$work/out" 2>&1 || die "configure"

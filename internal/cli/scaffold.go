@@ -58,6 +58,13 @@ func cmdScaffold(args []string) int {
 		return fail(err)
 	}
 
+	// Claude Code reads CLAUDE.md, not AGENTS.md; a symlink keeps one source
+	// of truth, so update's AGENTS.md rewrites flow through it. Created here
+	// because go:embed refuses symlinks, so it cannot live in template/.
+	if err := os.Symlink("AGENTS.md", filepath.Join(target, "CLAUDE.md")); err != nil {
+		return fail(err)
+	}
+
 	// The version pin: this binary's version is what the agent runs against.
 	if err := os.WriteFile(filepath.Join(target, ".openroutines-version"), []byte(version.Version+"\n"), 0o644); err != nil {
 		return fail(err)
