@@ -94,12 +94,22 @@ func TestCheckAllowsTypedTriggerCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := creds.Write(dir, key, map[string]string{"gh_key": "stored-app-key", "fake_api_key": "provider-key"}); err != nil {
+	if err := creds.Write(dir, key, map[string]string{"gh_key": testKeyPEM(t), "fake_api_key": "provider-key"}); err != nil {
 		t.Fatal(err)
 	}
 
 	out := checkOutput(t, dir)
 	if strings.Contains(out, "use a raw credential") || !strings.Contains(out, "watch-private (") {
 		t.Fatalf("typed trigger credential should pass routine validation:\n%s", out)
+	}
+
+	// The same agent with a truncated key in the store must fail check:
+	// before #69 this passed and first surfaced as a failed production run.
+	if err := creds.Write(dir, key, map[string]string{"gh_key": "-----BEGIN PRIVATE KEY-----", "fake_api_key": "provider-key"}); err != nil {
+		t.Fatal(err)
+	}
+	out = checkOutput(t, dir)
+	if !strings.Contains(out, "not a PEM private key") || !strings.Contains(out, "credentials set gh_key") {
+		t.Fatalf("check should flag a stored github_app value that cannot serve its type:\n%s", out)
 	}
 }

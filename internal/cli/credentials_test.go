@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +27,19 @@ credentials:
     app_id: "1"
 `
 
+func testKeyPEM(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+}
+
 // credentialsAgent builds an agent directory with a master key and the given
 // openroutines.yml, ready for the credentials commands to open its store.
 func credentialsAgent(t *testing.T, agentYAML string) string {
@@ -38,7 +55,7 @@ func credentialsAgent(t *testing.T, agentYAML string) string {
 }
 
 // withStdin feeds input to os.Stdin for the duration of run, restoring it
-// afterward -- credentialsSet reads a piped value as a single line.
+// afterward.
 func withStdin(t *testing.T, input string, run func()) {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -55,11 +72,29 @@ func withStdin(t *testing.T, input string, run func()) {
 	run()
 }
 
-// A credential declared type: github_app never puts its stored value in a
-// run's environment -- the run gets a minted installation token instead. The
-// confirmation printed by `credentials set` has to say that, not the raw
-// "receive it as GITHUB_APP_PRIVATE_KEY" message, which sends anyone who
-// trusts it to reference an env var that is always empty (#66).
+func setPiped(t *testing.T, dir, name, input string) int {
+	t.Helper()
+	var code int
+	withStdin(t, input, func() {
+		capture(t, dir, func() { code = credentialsSet([]string{name}) })
+	})
+	return code
+}
+
+func storedValue(t *testing.T, dir, name string) (string, bool) {
+	t.Helper()
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := creds.Read(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, ok := store[name]
+	return v, ok
+}
+
 func TestCredentialsSetDescribesTypedCredential(t *testing.T) {
 	dir := credentialsAgent(t, credentialsAgentYAML)
 	var out string
@@ -75,8 +110,6 @@ func TestCredentialsSetDescribesTypedCredential(t *testing.T) {
 	}
 }
 
-// An oauth2_client credential's injected name is the entry's inject_as, not
-// the credential's own name.
 func TestCredentialsSetDescribesOAuth2ClientCredential(t *testing.T) {
 	config := credentialsAgentYAML + "  support_desk_secret:\n    type: oauth2_client\n    token_url: https://example.invalid/token\n    client_id: abc\n    inject_as: support_desk_token\n"
 	dir := credentialsAgent(t, config)
@@ -90,8 +123,6 @@ func TestCredentialsSetDescribesOAuth2ClientCredential(t *testing.T) {
 	}
 }
 
-// A credential with no metadata entry is raw: the existing message is still
-// correct there and must not regress.
 func TestCredentialsSetDescribesRawCredential(t *testing.T) {
 	dir := credentialsAgent(t, credentialsAgentYAML)
 	var out string
@@ -101,5 +132,46 @@ func TestCredentialsSetDescribesRawCredential(t *testing.T) {
 	want := "Added slack_webhook -- routines that declare it receive it as SLACK_WEBHOOK"
 	if !strings.Contains(out, want) {
 		t.Fatalf("missing %q:\n%s", want, out)
+	}
+}
+
+func TestSetStoresMultiLineValueEscaped(t *testing.T) {
+	dir := credentialsAgent(t, credentialsAgentYAML)
+	pemKey := testKeyPEM(t)
+	if code := setPiped(t, dir, "app_key", pemKey); code != 0 {
+		t.Fatalf("set exited %d", code)
+	}
+	v, ok := storedValue(t, dir, "app_key")
+	if !ok {
+		t.Fatal("nothing stored")
+	}
+	if strings.Contains(v, "\n") {
+		t.Fatalf("stored value must be one line, got %d lines", strings.Count(v, "\n")+1)
+	}
+	if v != strings.ReplaceAll(strings.TrimSpace(pemKey), "\n", `\n`) {
+		t.Fatalf("stored value is not the escaped form of the input:\n%s", v)
+	}
+	if err := creds.ValidateStored(creds.Spec{Type: "github_app", AppID: "1"}, v); err != nil {
+		t.Fatalf("escaped stored key does not validate: %v", err)
+	}
+}
+
+func TestSetStoresSingleLineValueVerbatim(t *testing.T) {
+	dir := credentialsAgent(t, credentialsAgentYAML)
+	if code := setPiped(t, dir, "token", "s3cret\n"); code != 0 {
+		t.Fatalf("set exited %d", code)
+	}
+	if v, _ := storedValue(t, dir, "token"); v != "s3cret" {
+		t.Fatalf("stored %q, want s3cret", v)
+	}
+}
+
+func TestSetRefusesTruncatedPEM(t *testing.T) {
+	dir := credentialsAgent(t, credentialsAgentYAML)
+	if code := setPiped(t, dir, "app_key", "-----BEGIN PRIVATE KEY-----\n"); code == 0 {
+		t.Fatal("set accepted the first line of a PEM key")
+	}
+	if _, ok := storedValue(t, dir, "app_key"); ok {
+		t.Fatal("a refused value must not be stored")
 	}
 }

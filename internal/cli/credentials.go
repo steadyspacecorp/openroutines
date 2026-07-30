@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -12,6 +12,15 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+)
+
+// The PEM armor markers `credentials set` recognizes, for two behaviors: at
+// the hidden prompt a pasted key is read line by line until its END marker,
+// and a key that begins and never ends -- the truncated paste this command
+// used to store silently -- is refused.
+const (
+	pemBegin = "-----BEGIN"
+	pemEnd   = "-----END"
 )
 
 const credentialsUsage = `Manage this agent's encrypted credentials (values never leave the store)
@@ -138,14 +147,38 @@ func credentialsSet(args []string) int {
 			return fail(rerr)
 		}
 		value = string(raw)
+		// A pasted PEM arrives at the hidden prompt one line at a time --
+		// the first read returns only the BEGIN line. Keep reading until
+		// the END marker so the paste lands whole; a paste cut short is
+		// refused below rather than stored as a half key.
+		for strings.HasPrefix(value, pemBegin) && !strings.Contains(value, pemEnd) {
+			more, rerr := term.ReadPassword(int(os.Stdin.Fd()))
+			if rerr != nil {
+				break
+			}
+			value += "\n" + string(more)
+		}
 	} else {
-		// Piped: read one line, for scripting (printf 'secret' | ... set name).
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		value = line
+		// Piped: the whole stream is the value, so `... set app_key <
+		// key.pem` stores the file rather than its first line.
+		raw, rerr := io.ReadAll(os.Stdin)
+		if rerr != nil {
+			return fail(rerr)
+		}
+		value = string(raw)
 	}
-	value = strings.TrimSpace(value)
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\r\n", "\n"))
 	if value == "" {
 		return fail(fmt.Errorf("empty value -- nothing stored"))
+	}
+	if strings.HasPrefix(value, pemBegin) && !strings.Contains(value, pemEnd) {
+		return fail(fmt.Errorf("the value is the beginning of a PEM key without its end -- pipe the whole file: openroutines credentials set %s < key.pem", name))
+	}
+	// Stored values are one line: exact-string log scrubbing cannot match a
+	// value that spans lines. Typed consumers decode the escaping on use.
+	multiline := strings.Contains(value, "\n")
+	if multiline {
+		value = strings.ReplaceAll(value, "\n", `\n`)
 	}
 
 	_, replacing := store[name]
@@ -162,6 +195,9 @@ func credentialsSet(args []string) int {
 		spec = agent.Credentials[name]
 	}
 	fmt.Printf("%s %s %s\n", verb, name, creds.InjectionDescription(name, spec))
+	if multiline {
+		fmt.Printf("Multi-line value stored in the one-line escaped form (\\n between lines), which keeps it scrubbable from logs -- typed credentials decode it on use\n")
+	}
 	return 0
 }
 

@@ -111,25 +111,32 @@ func deriveGitHubApp(s Spec, stored, apiBase string) (*Derived, error) {
 	}, nil
 }
 
-// githubAppJWT signs the 9-minute RS256 App JWT. The stored key may carry
+// parseAppKey decodes the stored App private key. The stored value may carry
 // real PEM newlines or escaped \n sequences (the one-line form keeps the
 // encrypted value scrubbable as an exact string).
-func githubAppJWT(appID, stored string) (string, error) {
+func parseAppKey(stored string) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode([]byte(strings.ReplaceAll(stored, `\n`, "\n")))
 	if block == nil {
-		return "", fmt.Errorf("github_app: stored value is not a PEM private key")
+		return nil, fmt.Errorf("github_app: stored value is not a PEM private key")
 	}
-	var key *rsa.PrivateKey
 	if parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
 		rsaKey, isRSA := parsed.(*rsa.PrivateKey)
 		if !isRSA {
-			return "", fmt.Errorf("github_app: private key is not RSA")
+			return nil, fmt.Errorf("github_app: private key is not RSA")
 		}
-		key = rsaKey
-	} else if parsed, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
-		key = parsed
-	} else {
-		return "", fmt.Errorf("github_app: cannot parse the stored private key")
+		return rsaKey, nil
+	}
+	if parsed, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return parsed, nil
+	}
+	return nil, fmt.Errorf("github_app: cannot parse the stored private key")
+}
+
+// githubAppJWT signs the 9-minute RS256 App JWT.
+func githubAppJWT(appID, stored string) (string, error) {
+	key, err := parseAppKey(stored)
+	if err != nil {
+		return "", err
 	}
 
 	b64 := func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
