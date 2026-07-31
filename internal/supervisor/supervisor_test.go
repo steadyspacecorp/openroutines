@@ -30,12 +30,19 @@ const fakeOpencode = `#!/bin/sh
 d=$(dirname "$0")
 mode=$(cat "$d/fake-mode" 2>/dev/null || echo ok)
 # Every mode leaves the session storage a real opencode leaves in the
-# attempt home -- the surface the runner captures token usage from.
+# attempt home -- the surface the runner captures token usage from, and
+# reads how the session ended.
 mkdir -p .home/.local/share/opencode/storage/message/ses_fake
-printf '{"role":"assistant","modelID":"fake","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}' \
-  > .home/.local/share/opencode/storage/message/ses_fake/msg_1.json
+msg=.home/.local/share/opencode/storage/message/ses_fake/msg_1.json
+printf '{"role":"assistant","modelID":"fake","finish":"stop","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}' \
+  > "$msg"
 case "$mode" in
   fail) echo "boom"; exit 1 ;;
+  stalled) # The agent loop died on a rejected tool call: the session never
+     # finished its turn, no memory was written, and opencode still exits 0.
+     printf '{"role":"assistant","modelID":"fake","finish":"tool-calls","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}' \
+       > "$msg"
+     echo "stalled" ;;
   slow) echo "$OPENROUTINES_RUN_ID" >> "$(dirname "$0")/started"
      sleep 3
      mkdir -p memory/ledgers
@@ -219,6 +226,41 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
 	if !strings.Contains(records, `"outcome":"completed"`) {
 		t.Fatalf("run record missing: %q", records)
+	}
+}
+
+// A session that died mid-turn -- the agent loop stopped on a rejected tool
+// call -- exits 0 with nothing written. Recorded as completed, that advances
+// the watermark and clears pending, which is the "silently skipped" outcome
+// the scheduler exists to prevent, with a green run record on top of it.
+func TestSessionThatEndedMidTurnIsNotCompleted(t *testing.T) {
+	dir := fixture(t, "stalled")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.Tick(ctx, t0) // register
+	s.Tick(ctx, t0.Add(61*time.Second))
+
+	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	if strings.Contains(records, `"outcome":"completed"`) {
+		t.Fatalf("an exit code alone must not report a run completed: %q", records)
+	}
+	if !strings.Contains(records, `"outcome":"crashed"`) {
+		t.Fatalf("run record should be crashed: %q", records)
+	}
+	if !strings.Contains(records, "tool-calls") {
+		t.Errorf("the run record should carry why the session failed: %q", records)
+	}
+	st := loadState(t, s)
+	if st.Pending == nil {
+		t.Fatal("the run must stay pending so it retries -- not silently skipped")
+	}
+	if st.Watermark.After(t0) {
+		t.Errorf("the watermark must not advance past unfinished work, got %v", st.Watermark)
+	}
+	if events := readFile(t, filepath.Join(dir, "memory", "events.md")); !strings.Contains(events, "crashed") {
+		t.Errorf("the failure should be recorded as an event: %q", events)
 	}
 }
 

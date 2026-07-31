@@ -36,37 +36,47 @@ const attemptHomeName = ".home"
 // mode) and returns its stdout.
 type opencodeExec func(args ...string) ([]byte, error)
 
-// captureUsage reads what the attempt consumed. Preferred surface: ask
-// opencode itself (session list + export -- messages live in its database
-// from 1.18 on). Fallback: the pre-1.18 message JSONs on disk. The store
-// is attempt-scoped either way (the home is fresh per attempt), and
-// absence is nil, never zero -- bookkeeping must never fail a run.
-func captureUsage(workspace string, oc opencodeExec) *Usage {
-	if oc != nil {
-		if u := captureViaExport(oc); u != nil {
-			return u
-		}
-	}
-	return captureFromLegacyFiles(workspace)
+// Session is what opencode's own record says about one attempt: what it
+// consumed, and whether it ended the way a finished run ends. Usage is nil
+// when the runtime didn't report -- never zero. Failure is empty unless the
+// record positively says the session ended badly.
+type Session struct {
+	Usage   *Usage
+	Failure string
 }
 
-// captureViaExport asks opencode for the attempt's session: the fresh home
+// captureSession reads the attempt's session. Preferred surface: ask
+// opencode itself (session list + export -- messages live in its database
+// from 1.18 on). Fallback: the pre-1.18 message JSONs on disk. The store
+// is attempt-scoped either way (the home is fresh per attempt), and an
+// unreadable one says nothing -- bookkeeping must never fail a run.
+func captureSession(workspace string, oc opencodeExec) Session {
+	if oc != nil {
+		if msgs, ok := messagesViaExport(oc); ok {
+			return summarize(msgs)
+		}
+	}
+	return summarize(messagesFromLegacyFiles(workspace))
+}
+
+// messagesViaExport asks opencode for the attempt's session: the fresh home
 // holds at most one, `session list --format json` names it, and `export`
-// prints {info, messages} with per-message token counts.
-func captureViaExport(oc opencodeExec) *Usage {
+// prints {info, messages}. Reports whether the session was read at all --
+// it wasn't when the fallback is worth trying.
+func messagesViaExport(oc opencodeExec) ([]assistantInfo, bool) {
 	raw, err := oc("session", "list", "--format", "json", "-n", "1")
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var sessions []struct {
 		ID string `json:"id"`
 	}
 	if json.Unmarshal(raw, &sessions) != nil || len(sessions) == 0 || sessions[0].ID == "" {
-		return nil
+		return nil, false
 	}
 	raw, err = oc("export", sessions[0].ID)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var export struct {
 		Messages []struct {
@@ -74,29 +84,22 @@ func captureViaExport(oc opencodeExec) *Usage {
 		} `json:"messages"`
 	}
 	if json.Unmarshal(raw, &export) != nil {
-		return nil
+		return nil, false
 	}
-	var u Usage
-	seen := false
+	msgs := make([]assistantInfo, 0, len(export.Messages))
 	for _, m := range export.Messages {
-		if m.Info.addTo(&u) {
-			seen = true
-		}
+		msgs = append(msgs, m.Info)
 	}
-	if !seen {
-		return nil
-	}
-	return &u
+	return msgs, len(msgs) > 0
 }
 
-// captureFromLegacyFiles sums the message JSONs opencode wrote before 1.18
+// messagesFromLegacyFiles reads the message JSONs opencode wrote before 1.18
 // moved persistence into its database. Also the seam the fake opencode in
 // tests writes to.
-func captureFromLegacyFiles(workspace string) *Usage {
+func messagesFromLegacyFiles(workspace string) []assistantInfo {
 	pattern := filepath.Join(workspace, attemptHomeName, ".local", "share", "opencode", "storage", "message", "*", "*.json")
 	files, _ := filepath.Glob(pattern)
-	var u Usage
-	seen := false
+	var msgs []assistantInfo
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
@@ -106,14 +109,51 @@ func captureFromLegacyFiles(workspace string) *Usage {
 		if json.Unmarshal(raw, &msg) != nil {
 			continue
 		}
-		if msg.addTo(&u) {
-			seen = true
+		msgs = append(msgs, msg)
+	}
+	return msgs
+}
+
+// finishStop is the finish reason opencode records for an assistant message
+// that ended its turn because the model was done -- as opposed to one that
+// ended a step to call tools and never came back.
+const finishStop = "stop"
+
+// summarize folds the session's assistant messages into what the attempt
+// records: token sums, and whether the session ended the way a finished run
+// ends. The failure claim rests on positive evidence only -- an errored
+// message, or a runtime that reported finish reasons and never reported a
+// finished turn. A record that says nothing about how it ended (an older
+// opencode, a field that moves) leaves the process's own verdict standing,
+// because a capture that failed open costs one confusing run record while
+// one that failed closed would fail every run on the agent.
+func summarize(msgs []assistantInfo) Session {
+	var s Session
+	var u Usage
+	tokens, finished := false, false
+	lastFinish := ""
+	for _, m := range msgs {
+		if m.Role != "assistant" {
+			continue
+		}
+		if m.addTo(&u) {
+			tokens = true
+		}
+		if m.Error != nil && s.Failure == "" {
+			s.Failure = "the model session ended on an error: " + m.Error.describe()
+		}
+		if m.Finish != "" {
+			lastFinish = m.Finish
+			finished = finished || (m.Finish == finishStop && m.Error == nil)
 		}
 	}
-	if !seen {
-		return nil
+	if tokens {
+		s.Usage = &u
 	}
-	return &u
+	if s.Failure == "" && lastFinish != "" && !finished {
+		s.Failure = fmt.Sprintf("the model session never finished a turn (last step finished on %q) -- the agent loop stopped on a step it did not come back from", lastFinish)
+	}
+	return s
 }
 
 // assistantInfo is the slice of an opencode message record the capture
@@ -129,13 +169,31 @@ type assistantInfo struct {
 			Write int64 `json:"write"`
 		} `json:"cache"`
 	} `json:"tokens"`
-	Cost float64 `json:"cost"`
+	Cost   float64     `json:"cost"`
+	Finish string      `json:"finish"`
+	Error  *namedError `json:"error"`
+}
+
+// namedError is opencode's error shape on a message: a tagged name with the
+// provider's own message under data, when there is one.
+type namedError struct {
+	Name string `json:"name"`
+	Data struct {
+		Message string `json:"message"`
+	} `json:"data"`
+}
+
+func (e *namedError) describe() string {
+	if e.Data.Message != "" {
+		return e.Data.Message
+	}
+	return e.Name
 }
 
 // addTo folds one assistant message into the sum, reporting whether it
 // counted.
 func (m assistantInfo) addTo(u *Usage) bool {
-	if m.Role != "assistant" || m.Tokens == nil {
+	if m.Tokens == nil {
 		return false
 	}
 	u.Input += m.Tokens.Input
