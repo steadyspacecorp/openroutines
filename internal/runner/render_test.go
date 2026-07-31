@@ -79,7 +79,7 @@ func TestRendererSuppressesSuccessfulToolOutput(t *testing.T) {
 // Scrubbing happens before truncation: a secret sitting across the
 // truncation boundary must still redact, never leak half of itself.
 func TestRendererScrubsBeforeTruncating(t *testing.T) {
-	secret := "tok-0123456789abcdef0123456789abcdef"
+	secret := "tok-0123456789abcdef0123456789abcdef" // gitleaks:allow -- synthetic fixture
 	output := strings.Repeat("x", toolOutputBytes-10) + secret + strings.Repeat("y", toolOutputBytes)
 	out := renderEvents(t, map[string]string{"api_token": secret}, toolEvent(t, "bash", "echo $API_TOKEN", output, 0))
 	if strings.Contains(out, secret) || strings.Contains(out, secret[:12]) {

@@ -1,0 +1,8 @@
+# Historical commits of the same synthetic test fixtures that now carry an
+# inline `gitleaks:allow` directive. The directive fixes the working tree; it
+# cannot fix commits already written, so a full-history scan needs these.
+# Every entry is a fake key from a test, never a real credential.
+4d09c53f4260b7aaec73750123fd8a75828e275d:internal/runner/render_test.go:generic-api-key:70
+8947649cc2089881aefc0617ebc3b81a502dccf9:internal/memory/memory_test.go:generic-api-key:268
+c1b0454c9420f94f8eb0c8f0b54fd489ef317ed1:internal/memory/memory_test.go:generic-api-key:265
+91595f57c3aeec6ec2bc2c6389305e37afe5ba8c:internal/creds/oauth2client_test.go:generic-api-key:21
