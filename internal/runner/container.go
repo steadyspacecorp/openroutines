@@ -56,7 +56,7 @@ func ensureRuntimeImage(agentDir, tag string) error {
 	cmd := exec.Command("docker", "build", "--quiet", "--target", "runtime", "-t", tag, agentDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("building runtime image failed (is Docker running?): %v\n%s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("building runtime image failed (is Docker running?): %w\n%s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -340,7 +341,8 @@ func mergeFile(ours, base, theirs []byte) ([]byte, bool, error) {
 	}
 	cmd := exec.Command("git", "merge-file", "-p", "-L", "local", "-L", "upstream base", "-L", "upstream", paths[0], paths[1], paths[2])
 	out, runErr := cmd.Output()
-	if exit, ok := runErr.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+	var exit *exec.ExitError
+	if errors.As(runErr, &exit) && exit.ExitCode() == 1 {
 		return out, true, nil
 	}
 	if runErr != nil {

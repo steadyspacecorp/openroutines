@@ -481,28 +481,28 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 			ocExec = hostOpencodeExec(workspace)
 			ro, rw := sandbox.Paths(workspace, staging.MemoryDir, runTmp, home, attemptHome)
 			cmd = exec.Command(sandbox.HelperPath, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
-			cmd.Env = append(env,
-				"PATH="+os.Getenv("PATH"),
-				"HOME="+attemptHome,
-				"XDG_DATA_HOME="+filepath.Join(attemptHome, ".local", "share"),
-				"XDG_CONFIG_HOME="+filepath.Join(attemptHome, ".config"),
-				"XDG_CACHE_HOME="+filepath.Join(attemptHome, ".cache"),
-				"TMPDIR="+runTmp,
-				sandbox.EnvRO+"="+sandbox.JoinPaths(ro),
-				sandbox.EnvRW+"="+sandbox.JoinPaths(rw),
-				sandbox.EnvAttemptUID+"="+strconv.FormatUint(uint64(meta.AttemptUID), 10),
-				sandbox.EnvUnsafeOverride+"="+os.Getenv(sandbox.EnvUnsafeOverride),
-			)
+			cmd.Env = slices.Concat(env, []string{
+				"PATH=" + os.Getenv("PATH"),
+				"HOME=" + attemptHome,
+				"XDG_DATA_HOME=" + filepath.Join(attemptHome, ".local", "share"),
+				"XDG_CONFIG_HOME=" + filepath.Join(attemptHome, ".config"),
+				"XDG_CACHE_HOME=" + filepath.Join(attemptHome, ".cache"),
+				"TMPDIR=" + runTmp,
+				sandbox.EnvRO + "=" + sandbox.JoinPaths(ro),
+				sandbox.EnvRW + "=" + sandbox.JoinPaths(rw),
+				sandbox.EnvAttemptUID + "=" + strconv.FormatUint(uint64(meta.AttemptUID), 10),
+				sandbox.EnvUnsafeOverride + "=" + os.Getenv(sandbox.EnvUnsafeOverride),
+			})
 		} else {
 			// OPENROUTINES_NATIVE=1: an explicit, unconfined dev opt-in
 			// (local user runs are confined by the run container instead).
 			// The developer's real HOME stays: their opencode auth lives there.
 			cmd = exec.Command("opencode", ocArgs...)
-			cmd.Env = append(env,
-				"PATH="+os.Getenv("PATH"),
-				"HOME="+home,
-				"TMPDIR="+runTmp,
-			)
+			cmd.Env = slices.Concat(env, []string{
+				"PATH=" + os.Getenv("PATH"),
+				"HOME=" + home,
+				"TMPDIR=" + runTmp,
+			})
 		}
 		cmd.Dir = workspace
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -597,7 +597,8 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 		// process's, not the orphan's -- only the tail of the log is lost.
 		if werr != nil && !errors.Is(werr, exec.ErrWaitDelay) {
 			res.Outcome = Crashed
-			if ee, isExit := werr.(*exec.ExitError); isExit {
+			var ee *exec.ExitError
+			if errors.As(werr, &ee) {
 				res.ExitCode = ee.ExitCode()
 			} else {
 				res.ExitCode = -1
@@ -890,7 +891,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 	key, keyErr := creds.LoadKey(dir)
 	if keyErr != nil {
 		if len(r.FM.Credentials) > 0 {
-			return nil, fmt.Errorf("routine declares credentials but %v", keyErr)
+			return nil, fmt.Errorf("routine declares credentials but %w", keyErr)
 		}
 		// No store: opencode may still have its own auth for the provider.
 		return out, nil
