@@ -173,9 +173,16 @@ grep -q 'update-demo' "$work/out" || die "plugin list omitted installed plugin"
 step "plugin update merges upstream with local edits and advances provenance"
 
 # The installed routines must satisfy check once their credentials exist and
-# the typed entry is declared (values are fake; check only wires names).
+# the typed entries are declared. The github_app value must be a real PEM:
+# check parses it, and piping the multi-line file end to end exercises the
+# escaped one-line storage form (#69). A truncated key must refuse, not
+# store its first line and report success.
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work/app-key.pem" 2>/dev/null || die "openssl genpkey"
 printf 'fake\n' | run credentials set reporter_token || die "credentials set reporter_token"
-printf 'fake\n' | run credentials set watcher_app_key || die "credentials set watcher_app_key"
+run credentials set watcher_app_key < "$work/app-key.pem" || die "credentials set watcher_app_key (piped PEM)"
+if head -1 "$work/app-key.pem" | "$bin" credentials set half_key >/dev/null 2>&1; then
+  die "credentials set accepted a truncated PEM"
+fi
 printf 'fake\n' | run credentials set support_desk_secret || die "credentials set support_desk_secret"
 cat >> openroutines.yml <<'EOF'
 credentials:

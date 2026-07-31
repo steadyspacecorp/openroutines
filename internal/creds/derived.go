@@ -107,6 +107,19 @@ func InjectionDescription(name string, s Spec) string {
 	}
 }
 
+// ValidateStored reports whether a stored value can serve its declared
+// type, judged from the value alone -- no network. A github_app value must
+// parse as an RSA private key: a truncated paste otherwise decrypts cleanly,
+// passes every name check, and first fails in a production run trying to
+// sign with it. Other types' values are opaque bytes with nothing to judge.
+func ValidateStored(s Spec, stored string) error {
+	if s.Type == "github_app" {
+		_, err := parseAppKey(stored)
+		return err
+	}
+	return nil
+}
+
 // Derive materializes one typed credential. Providers are built into the
 // framework -- agent repositories cannot supply derivation code, which would
 // otherwise be a privileged plugin boundary on the trusted side.

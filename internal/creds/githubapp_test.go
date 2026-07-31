@@ -176,3 +176,23 @@ func TestSpecProblems(t *testing.T) {
 		}
 	}
 }
+
+// ValidateStored judges a stored github_app value offline: both stored
+// forms parse, and a truncated first line -- the artifact `credentials set`
+// used to store silently (#69) -- is rejected. Other types stay opaque.
+func TestValidateStoredGitHubAppKey(t *testing.T) {
+	spec := Spec{Type: "github_app", AppID: "1"}
+	pemKey := testKeyPEM(t)
+	if err := ValidateStored(spec, pemKey); err != nil {
+		t.Fatalf("real-newline PEM should validate: %v", err)
+	}
+	if err := ValidateStored(spec, strings.ReplaceAll(pemKey, "\n", `\n`)); err != nil {
+		t.Fatalf("escaped one-line PEM should validate: %v", err)
+	}
+	if err := ValidateStored(spec, "-----BEGIN PRIVATE KEY-----"); err == nil {
+		t.Fatal("a truncated PEM must not validate")
+	}
+	if err := ValidateStored(Spec{Type: "oauth2_client"}, "opaque"); err != nil {
+		t.Fatalf("oauth2_client values are opaque bytes: %v", err)
+	}
+}

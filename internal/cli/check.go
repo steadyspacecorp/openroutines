@@ -296,10 +296,17 @@ func cmdCheck(args []string) int {
 		}
 		if agent != nil {
 			// A typed entry names a stored credential; one without a stored
-			// value is dormant misconfiguration.
+			// value is dormant misconfiguration. One with a stored value
+			// must be able to serve its type -- a truncated key paste
+			// otherwise first surfaces as a failed run in production.
 			for name, spec := range agent.Credentials {
-				if _, ok := store[name]; !ok {
+				v, ok := store[name]
+				if !ok {
 					warnf("credential entry %q (type %s) has no stored value in %s", name, spec.Type, creds.FileName)
+					continue
+				}
+				if err := creds.ValidateStored(spec, v); err != nil {
+					failf("credential %q: %v -- re-store it: openroutines credentials set %s", name, err, name)
 				}
 			}
 		}
