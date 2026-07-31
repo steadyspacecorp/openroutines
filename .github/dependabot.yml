@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns:
+          - "*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The template's base image -- the only Dockerfile here, and the one every
+  # scaffolded agent inherits. Listed explicitly because the docker fetcher
+  # does not recurse.
+  - package-ecosystem: docker
+    directory: /template
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns:
+          - "*"
