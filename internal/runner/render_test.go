@@ -38,10 +38,9 @@ func toolEvent(t *testing.T, tool, title, output string, exit int) string {
 	return string(raw)
 }
 
-// The routine's own text prints whole; tool calls become a summary line with
-// their output bounded to a tail -- the fix for #62's unbounded `gh run view`
-// dump landing in the container log.
-func TestRendererBoundsToolOutput(t *testing.T) {
+// The routine's own text prints whole; a failed tool keeps its bounded output
+// tail -- where the diagnostic lands -- instead of dumping the whole result.
+func TestRendererBoundsFailedToolOutput(t *testing.T) {
 	big := strings.Repeat("noise\n", 100_000) + "the part that matters"
 	out := renderEvents(t, nil,
 		`{"type":"step_start","part":{}}`,
@@ -65,6 +64,18 @@ func TestRendererBoundsToolOutput(t *testing.T) {
 	}
 }
 
+// A successful tool is an audit summary at info, not a copy of everything it
+// read or fetched. The size says detail existed and debug is where to find it.
+func TestRendererSuppressesSuccessfulToolOutput(t *testing.T) {
+	out := renderEvents(t, nil, toolEvent(t, "read", "work/memory/context.md", "private document contents", 0))
+	if !strings.Contains(out, "[tool read] work/memory/context.md") || !strings.Contains(out, "25B output suppressed") {
+		t.Fatalf("successful tool should retain a useful summary:\n%s", out)
+	}
+	if strings.Contains(out, "private document contents") {
+		t.Fatalf("successful tool output leaked into the info log:\n%s", out)
+	}
+}
+
 // Scrubbing happens before truncation: a secret sitting across the
 // truncation boundary must still redact, never leak half of itself.
 func TestRendererScrubsBeforeTruncating(t *testing.T) {
@@ -73,6 +84,9 @@ func TestRendererScrubsBeforeTruncating(t *testing.T) {
 	out := renderEvents(t, map[string]string{"api_token": secret}, toolEvent(t, "bash", "echo $API_TOKEN", output, 0))
 	if strings.Contains(out, secret) || strings.Contains(out, secret[:12]) {
 		t.Fatalf("secret (or a truncated half of it) leaked:\n%s", out)
+	}
+	if !strings.Contains(out, "output suppressed") {
+		t.Fatalf("successful secret-bearing output should reduce to a summary:\n%s", out)
 	}
 }
 

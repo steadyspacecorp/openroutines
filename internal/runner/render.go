@@ -13,10 +13,10 @@ import (
 
 // renderer turns opencode's --format json event stream into the bounded run
 // log (design decision "Run output is rendered, bounded, and leveled"): the
-// routine's own text prints in full, each tool call becomes a summary line
-// plus a bounded output tail, and anything unrecognized -- a schema the
-// framework doesn't know, a plain-text line -- passes through truncated
-// rather than failing the run. Scrubbing happens before truncation, always:
+// routine's own text prints in full, each tool call becomes a summary line,
+// failed tools add a bounded diagnostic tail, and anything unrecognized --
+// a schema the framework doesn't know, a plain-text line -- passes through
+// truncated rather than failing the run. Scrubbing happens before truncation, always:
 // a truncation boundary must never split a secret past the exact-value
 // matcher.
 type renderer struct {
@@ -190,8 +190,9 @@ func (r *renderer) render(line string) {
 	}
 }
 
-// renderTool prints one completed tool call: a summary line, then the
-// scrubbed tail of its output.
+// renderTool prints one completed tool call. Success is one summary line with
+// the amount of output suppressed; a failure also keeps the scrubbed output
+// tail, because that is the immediate diagnostic even when the model recovers.
 func (r *renderer) renderTool(ev *event) {
 	st := &ev.Part.State
 	line := fmt.Sprintf("[tool %s] %s", ev.Part.Tool, firstBytes(scrub.Redact(st.Title, r.secrets), 256))
@@ -207,9 +208,17 @@ func (r *renderer) renderTool(ev *event) {
 		output = st.Error
 	}
 	output = scrub.Redact(output, r.secrets)
-	if len(output) > toolOutputBytes {
-		notes = append(notes, fmt.Sprintf("%s output, last %s shown", byteSize(len(output)), byteSize(toolOutputBytes)))
-		output = lastBytes(output, toolOutputBytes)
+	failed := st.Error != "" || (st.Metadata.Exit != nil && *st.Metadata.Exit != 0) || (st.Status != "" && st.Status != "completed")
+	if strings.TrimSpace(output) != "" {
+		if failed {
+			if len(output) > toolOutputBytes {
+				notes = append(notes, fmt.Sprintf("%s output, last %s shown", byteSize(len(output)), byteSize(toolOutputBytes)))
+				output = lastBytes(output, toolOutputBytes)
+			}
+		} else {
+			notes = append(notes, fmt.Sprintf("%s output suppressed", byteSize(len(output))))
+			output = ""
+		}
 	}
 	if len(notes) > 0 {
 		line += " (" + strings.Join(notes, ", ") + ")"
