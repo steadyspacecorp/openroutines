@@ -26,6 +26,7 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 | `schedule` | Cron expression, evaluated in the agent's timezone. A routine needs a `schedule`, a `trigger`, or both. |
 | `trigger` | An outbound change-detection poll that wakes the routine when something changed -- see [Triggers](#triggers). |
 | `timeout` | Per-run timeout (default from `openroutines.yml`'s `defaults:`). On expiry the whole process group is killed and the outcome recorded. Every run ends with its process group either way, expiry or not: a tool the run backgrounded is killed with it, unless it detached into a session of its own. The ceiling is the agent's `max_timeout` in `openroutines.yml` (6h when unset) -- a runaway-spend guard, not a system limit; a larger declared value is capped at the ceiling and `check` warns. |
+| `url` | A canonical URL for external records this routine creates. It arrives as `$OPENROUTINES_URL`; the default is `https://openroutines.dev`. |
 | `active` | `false` parks the routine; the supervisor skips it. `routines activate` / `deactivate` flip it. |
 | `skills` | The skills this routine may load -- and only these. See [Extending your agent](extending.md). |
 | `credentials` | The credentials injected into this run's environment -- and only these. `steady_token` arrives as `$STEADY_TOKEN`. |

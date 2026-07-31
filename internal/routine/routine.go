@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,6 +24,10 @@ import (
 // no separators, no dots, no way to spell an escape.
 var NamePattern = regexp.MustCompile(`^[a-z0-9]+([_-][a-z0-9]+)*$`)
 
+// DefaultURL is the canonical link supplied to routines that do not declare
+// one of their own.
+const DefaultURL = "https://openroutines.dev"
+
 // Frontmatter is a routine's declared scope. Every field is optional except
 // that at least one of Schedule and Trigger must be set; see design
 // decisions "Routines are markdown files" and "Triggers" for defaults.
@@ -30,6 +35,7 @@ type Frontmatter struct {
 	Schedule    string        `yaml:"schedule"`
 	Trigger     *trigger.Spec `yaml:"trigger,omitempty"` // outbound change-detection wake-up
 	Timeout     string        `yaml:"timeout,omitempty"`
+	URL         string        `yaml:"url,omitempty"`
 	Active      *bool         `yaml:"active,omitempty"`
 	Skills      []string      `yaml:"skills"`
 	Credentials []string      `yaml:"credentials"`
@@ -50,6 +56,15 @@ func (f Frontmatter) RecordsEvents() bool { return f.Events == nil || *f.Events 
 
 // IsConsumer reports whether the routine declared itself a memory consumer.
 func (f Frontmatter) IsConsumer() bool { return f.Consumes == "memory" }
+
+// EffectiveURL applies the framework default for external records that want
+// a canonical link back to the routine's source or project.
+func (f Frontmatter) EffectiveURL() string {
+	if f.URL != "" {
+		return f.URL
+	}
+	return DefaultURL
+}
 
 // Routine is one parsed routine file: identity, declared scope, prompt.
 type Routine struct {
@@ -90,6 +105,12 @@ func Parse(path string) (*Routine, error) {
 	var fm Frontmatter
 	if err := dec.Decode(&fm); err != nil && err != io.EOF {
 		return nil, fmt.Errorf("frontmatter: %w", err)
+	}
+	if fm.URL != "" {
+		u, err := url.Parse(fm.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+			return nil, fmt.Errorf("frontmatter: url %q must be an absolute http(s) URL without credentials", fm.URL)
+		}
 	}
 	body := ""
 	if bodyStart := end + len("\n---\n"); bodyStart <= len(rest) {

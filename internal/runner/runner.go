@@ -374,11 +374,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	}
 
 	// Clean environment: constructed, never inherited.
-	env := []string{
-		"TZ=" + agent.Timezone,
-		"OPENROUTINES_RUN_ID=" + meta.RunID,
-		"OPENROUTINES_ATTEMPT_ID=" + meta.AttemptID,
-	}
+	env := frameworkEnv(agent.Timezone, r, meta)
 	if meta.ScheduledFor != "" {
 		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor)
 	}
@@ -433,6 +429,15 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		env:       env,
 		ocArgs:    ocArgs,
 	}, nil
+}
+
+func frameworkEnv(timezone string, r *routine.Routine, meta Meta) []string {
+	return []string{
+		"TZ=" + timezone,
+		"OPENROUTINES_RUN_ID=" + meta.RunID,
+		"OPENROUTINES_ATTEMPT_ID=" + meta.AttemptID,
+		"OPENROUTINES_URL=" + r.FM.EffectiveURL(),
+	}
 }
 
 // Run spawns the staged attempt's model process and waits it out. Derived

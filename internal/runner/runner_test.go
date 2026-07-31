@@ -59,6 +59,18 @@ func TestTimeoutIsCappedAtTheAgentCeiling(t *testing.T) {
 	}
 }
 
+func TestFrameworkEnvIncludesEffectiveRoutineURL(t *testing.T) {
+	meta := Meta{RunID: "run_t", AttemptID: "attempt_01"}
+	r := &routine.Routine{FM: routine.Frontmatter{}}
+	if got := strings.Join(frameworkEnv("America/New_York", r, meta), "\n"); !strings.Contains(got, "OPENROUTINES_URL=https://openroutines.dev") {
+		t.Fatalf("default framework env missing URL:\n%s", got)
+	}
+	r.FM.URL = "https://example.com/agent"
+	if got := strings.Join(frameworkEnv("America/New_York", r, meta), "\n"); !strings.Contains(got, "OPENROUTINES_URL=https://example.com/agent") {
+		t.Fatalf("declared framework env missing URL:\n%s", got)
+	}
+}
+
 func TestRunDefinitionAllowsActing(t *testing.T) {
 	def := genDef(t, Meta{RunID: "run_t"})
 	if strings.Contains(def, "bash: deny") {

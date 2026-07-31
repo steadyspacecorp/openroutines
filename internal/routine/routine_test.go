@@ -18,7 +18,7 @@ func writeTemp(t *testing.T, content string) string {
 }
 
 func TestParse(t *testing.T) {
-	r, err := Parse(writeTemp(t, "---\nschedule: \"0 9 * * 1\"\nskills: [a]\n---\nDo the thing.\n"))
+	r, err := Parse(writeTemp(t, "---\nschedule: \"0 9 * * 1\"\nurl: https://example.com/agent\nskills: [a]\n---\nDo the thing.\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,6 +27,26 @@ func TestParse(t *testing.T) {
 	}
 	if !r.FM.IsActive() || !r.FM.RecordsEvents() {
 		t.Fatal("defaults should be active=true events=true")
+	}
+	if got := r.FM.EffectiveURL(); got != "https://example.com/agent" {
+		t.Fatalf("effective URL = %q, want declared URL", got)
+	}
+}
+
+func TestFrontmatterURLDefaultsAndRejectsInvalidValues(t *testing.T) {
+	r, err := Parse(writeTemp(t, "---\nschedule: \"0 9 * * *\"\n---\nBody.\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.FM.EffectiveURL(); got != DefaultURL {
+		t.Fatalf("effective URL = %q, want %q", got, DefaultURL)
+	}
+
+	for _, bad := range []string{"example.com/agent", "ftp://example.com/agent", "https://user:pass@example.com/agent"} {
+		_, err := Parse(writeTemp(t, "---\nschedule: \"0 9 * * *\"\nurl: "+bad+"\n---\nBody.\n"))
+		if err == nil || !strings.Contains(err.Error(), "absolute http(s) URL") {
+			t.Errorf("url %q: expected validation error, got %v", bad, err)
+		}
 	}
 }
 
