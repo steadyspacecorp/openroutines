@@ -43,6 +43,32 @@ func TestScrubRegistrationRacesLogging(t *testing.T) {
 	}
 }
 
+func TestAttemptIdentityIsNotReusedWhenCleanupFails(t *testing.T) {
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	s := &Supervisor{
+		Log:   log.New(io.Discard, "", 0),
+		slots: make(chan uint32, 1),
+		fatal: make(chan error, 1),
+		reap: func(uid uint32) error {
+			return fmt.Errorf("pid escaped uid %d", uid)
+		},
+	}
+	if s.releaseIdentity(20000) {
+		t.Fatal("cleanup failure returned the identity to the pool")
+	}
+	if len(s.slots) != 0 {
+		t.Fatal("poisoned identity is available for reuse")
+	}
+	select {
+	case err := <-s.fatal:
+		if !strings.Contains(err.Error(), "refusing to reuse identity") {
+			t.Fatalf("fatal error = %v", err)
+		}
+	default:
+		t.Fatal("cleanup failure did not stop supervision")
+	}
+}
+
 // fakeOpencode is a stand-in for the real binary: it reads fake-mode from
 // its own directory (the workspace is allow-list built and carries no test
 // scaffolding) to decide whether to succeed (writing memory) or fail. The

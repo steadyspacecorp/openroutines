@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
@@ -109,6 +110,30 @@ func cmdSandboxSpawnProbe(_ []string) int {
 	if err != nil {
 		return fail(fmt.Errorf("sandbox-spawn-probe: %w: %s", err, strings.TrimSpace(string(out))))
 	}
+	hold := exec.Command(sandbox.HelperPath, "sandbox-hold")
+	hold.SysProcAttr = &syscall.SysProcAttr{
+		Setsid: true,
+		Credential: &syscall.Credential{
+			Uid: uint32(uid64),
+			Gid: uint32(uid64),
+		},
+	}
+	if err := hold.Start(); err != nil {
+		return fail(fmt.Errorf("sandbox-spawn-probe: start cleanup target: %w", err))
+	}
+	if err := sandbox.ReapIdentity(uint32(uid64)); err != nil {
+		_ = hold.Process.Kill()
+		_ = hold.Wait()
+		return fail(fmt.Errorf("sandbox-spawn-probe: cleanup: %w", err))
+	}
+	if err := hold.Wait(); err == nil {
+		return fail(fmt.Errorf("sandbox-spawn-probe: cleanup target survived"))
+	}
 	fmt.Print(string(out))
+	return 0
+}
+
+func cmdSandboxHold(_ []string) int {
+	time.Sleep(time.Minute)
 	return 0
 }

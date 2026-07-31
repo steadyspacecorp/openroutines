@@ -94,6 +94,8 @@ type Supervisor struct {
 	inFlightMu sync.Mutex
 	inFlight   map[string]bool
 	waitLogged map[string]bool // pool-full wait already announced (tick only)
+	fatal      chan error      // fail-closed production invariant violation
+	reap       func(uint32) error
 
 	syncBlocked   bool // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool // blocker already raised for the current sync problem
@@ -156,6 +158,8 @@ func New(dir string) (*Supervisor, error) {
 		slots:      slots,
 		inFlight:   map[string]bool{},
 		waitLogged: map[string]bool{},
+		fatal:      make(chan error, 1),
+		reap:       sandbox.ReapIdentity,
 		lastPolled: map[string]time.Time{},
 		pollFailed: map[string]bool{},
 	}, nil
@@ -232,10 +236,12 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return err
 	}
 
+	runCtx, cancelRuns := context.WithCancel(ctx)
+	defer cancelRuns()
 	ticker := time.NewTicker(TickInterval)
 	defer ticker.Stop()
 	for {
-		s.Tick(ctx, time.Now())
+		s.Tick(runCtx, time.Now())
 		select {
 		case <-ctx.Done():
 			// Cancellation has reached every in-flight run; wait for their
@@ -245,6 +251,11 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			s.runs.Wait()
 			s.shutdown()
 			return nil
+		case err := <-s.fatal:
+			cancelRuns()
+			s.runs.Wait()
+			s.shutdown()
+			return err
 		case <-ticker.C:
 		}
 	}
@@ -302,11 +313,29 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		go func(d dispatch, uid uint32, release func()) {
 			defer s.runs.Done()
 			defer release()
-			defer func() { s.slots <- uid }()
 			defer s.setRunning(d.r.Name, false)
 			s.execute(ctx, d.r, d.st, now, uid)
+			if !s.releaseIdentity(uid) {
+				return
+			}
 		}(d, attemptUID, release)
 	}
+}
+
+func (s *Supervisor) releaseIdentity(uid uint32) bool {
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+		if err := s.reap(uid); err != nil {
+			fatal := fmt.Errorf("attempt uid %d cleanup failed -- refusing to reuse identity: %w", uid, err)
+			s.errorf("%v", fatal)
+			select {
+			case s.fatal <- fatal:
+			default:
+			}
+			return false // poisoned: never return this identity to the pool
+		}
+	}
+	s.slots <- uid
+	return true
 }
 
 // dispatch is one due routine and the scheduling state its attempt owns
@@ -902,6 +931,28 @@ func (s *Supervisor) verifySandbox() error {
 		}
 		out, probeErr := probe.Output()
 		if probeErr == nil {
+			// Prove the other half of reusable identities: an escaped process
+			// in its own session can be found and killed by UID.
+			hold := exec.Command(sandbox.HelperPath, "sandbox-hold")
+			hold.Env = []string{sandbox.EnvAttemptUID + "=" + strconv.Itoa(attemptUIDBase)}
+			hold.SysProcAttr = &syscall.SysProcAttr{
+				Setsid: true,
+				Credential: &syscall.Credential{
+					Uid: attemptUIDBase,
+					Gid: attemptUIDBase,
+				},
+			}
+			if err := hold.Start(); err != nil {
+				return fmt.Errorf("attempt uid cleanup probe start: %w", err)
+			}
+			if err := s.reap(attemptUIDBase); err != nil {
+				_ = hold.Process.Kill()
+				_ = hold.Wait()
+				return fmt.Errorf("attempt uid cleanup probe: %w", err)
+			}
+			if err := hold.Wait(); err == nil {
+				return fmt.Errorf("attempt uid cleanup probe: escaped process was not killed")
+			}
 			s.infof("filesystem sandbox: %s active for model processes", strings.TrimSpace(string(out)))
 			return nil
 		}

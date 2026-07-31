@@ -19,3 +19,6 @@ func ProtectProcess() error { return nil }
 func DropIdentity(_ uint32) error {
 	return fmt.Errorf("attempt uid isolation is unavailable on this platform")
 }
+
+// ReapIdentity is unnecessary outside the Linux production container.
+func ReapIdentity(_ uint32) error { return nil }

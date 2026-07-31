@@ -53,8 +53,8 @@ RUN mkdir -p /usr/local/lib/openroutines \
     && chmod 0755 /usr/local/lib/openroutines/sandbox-exec
 RUN chown root:agent /usr/local/bin/openroutines \
     && chmod 0750 /usr/local/bin/openroutines \
-    && setcap cap_setuid,cap_setgid=ep /usr/local/bin/openroutines \
-    && getcap /usr/local/bin/openroutines | grep -Eq 'cap_setgid,cap_setuid=ep|cap_setuid,cap_setgid=ep'
+    && setcap cap_setuid,cap_setgid,cap_kill=ep /usr/local/bin/openroutines \
+    && getcap /usr/local/bin/openroutines | grep -q '=ep'
 
 COPY --chown=agent . /agent
 RUN chmod 0700 /agent \
