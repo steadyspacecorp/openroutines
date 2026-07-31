@@ -132,7 +132,7 @@ func newGitCmd(dir string, args []string) *gitCmd {
 	// stalled transport holding the output pipe this call is reading.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return killGitGroup(cmd.Process.Pid) }
-	// The group is signalled and killed, but a descendant that left it may
+	// The group is signaled and killed, but a descendant that left it may
 	// still hold the output pipe; stop reading it rather than waiting on EOF
 	// forever.
 	cmd.WaitDelay = gitDrainDeadline

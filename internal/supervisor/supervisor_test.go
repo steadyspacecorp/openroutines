@@ -460,7 +460,7 @@ func TestScheduleHoldsAgentWallClockAcrossDST(t *testing.T) {
 // A model process that exits cleanly can leave a descendant behind, and that
 // descendant goes on writing to staging while the supervisor validates and
 // imports it. Every attempt therefore ends with its process group, not only
-// the ones that time out or are cancelled.
+// the ones that time out or are canceled.
 func TestDetachedDescendantDoesNotSurviveACleanRun(t *testing.T) {
 	dir := fixture(t, "detach")
 	s := newSupervisor(t, dir)
@@ -1078,10 +1078,10 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	if st.Pending == nil || st.Pending.Attempts != 0 {
-		t.Fatalf("a cancelled attempt should be handed back for the lease holder to retry: %+v", st.Pending)
+		t.Fatalf("a canceled attempt should be handed back for the lease holder to retry: %+v", st.Pending)
 	}
 	if got := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")); strings.Contains(got, "ran run_") {
-		t.Fatalf("a cancelled run's staged memory must not be imported: %q", got)
+		t.Fatalf("a canceled run's staged memory must not be imported: %q", got)
 	}
 }
 

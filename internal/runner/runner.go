@@ -226,7 +226,7 @@ func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 
 // Execute performs one attempt and returns its result plus the staged memory
 // for the caller to import or discard. The caller must Cleanup() the staging.
-// Cancelling ctx kills the attempt's process group (shutdown semantics).
+// Canceling ctx kills the attempt's process group (shutdown semantics).
 func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Routine, meta Meta) (*ExecResult, *Staging, error) {
 	sr, err := Stage(dir, agent, r, meta, nopLocker{})
 	if err != nil {
@@ -1159,7 +1159,7 @@ func variablesLine(agent *config.Agent) string {
 // pipeDrainDeadline bounds how long waiting on the run's output pipes may
 // outlast the process itself. A grandchild that left the process group --
 // a tool that daemonized into its own session -- keeps the inherited pipe
-// open after the run is signalled and killed, and the wait for EOF would
+// open after the run is signaled and killed, and the wait for EOF would
 // otherwise never end: the supervisor would hang on a run it had already
 // terminated. On expiry the pipes are closed and what can be reaped is
 // reaped; the orphan lives on, but it no longer holds the tick loop.
@@ -1190,7 +1190,7 @@ func killClient(cmd *exec.Cmd, grace time.Duration, done chan error) {
 
 // signalTarget is the run's own process group, or the process alone when the
 // spawn path did not make it a group leader. Every spawn path that gets
-// signalled sets Setpgid today; the guard is there because signalling -pid
+// signaled sets Setpgid today; the guard is there because signaling -pid
 // without it reaches the supervisor's own group and kills the supervisor.
 func signalTarget(cmd *exec.Cmd) int {
 	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {

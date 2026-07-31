@@ -203,7 +203,7 @@ func (s *Supervisor) errorf(format string, v ...any) {
 }
 
 // Run is the supervise loop: startup, then one Tick per minute until ctx is
-// cancelled, then shutdown (final commit and push, lease release).
+// canceled, then shutdown (final commit and push, lease release).
 func (s *Supervisor) Run(ctx context.Context) error {
 	// The supervisor's environment may carry the master and deploy keys.
 	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
@@ -718,7 +718,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		if ctx.Err() != nil {
 			s.infof("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
 		} else {
-			s.warnf("%s: %s cancelled -- lease lost mid-run; whoever holds the lease retries it", r.Name, p.RunID)
+			s.warnf("%s: %s canceled -- lease lost mid-run; whoever holds the lease retries it", r.Name, p.RunID)
 		}
 		return // no push: shutdown's final commit carries the record, and a lease loser must not push
 	case settlement.Outcome == runner.Completed:
@@ -1080,7 +1080,7 @@ func (s *Supervisor) renewLeaseLocked() bool {
 // ticks first renews for everyone. A renewal that fails inside the TTL of
 // the last accepted heartbeat is tolerated -- origin blips pass, and until
 // the TTL expires this instance is still provably the only writer. Past the
-// TTL, or the moment a live foreign lease appears, the run is cancelled: an
+// TTL, or the moment a live foreign lease appears, the run is canceled: an
 // instance that cannot prove it is the only writer must not let a model
 // process keep acting under identities that a replacement is about to
 // re-run.
@@ -1102,7 +1102,7 @@ func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.Cance
 					continue
 				}
 				if s.foreignLeaseLive() || s.leaseExpired() {
-					s.errorf("lease lost mid-run -- cancelling the attempt")
+					s.errorf("lease lost mid-run -- canceling the attempt")
 					cancelRun()
 					return
 				}

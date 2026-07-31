@@ -20,6 +20,8 @@ linters:
         - (io.Closer).Close
         - (*os.File).Close
         - os.RemoveAll
+    misspell:
+      locale: US
     govet:
       enable-all: true
       disable:
