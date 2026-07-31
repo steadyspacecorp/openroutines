@@ -1192,7 +1192,7 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 		IsConsumer:    r.FM.IsConsumer(),
 		Inbox:         memory.InboxFileName,
 		Marker:        memory.ConsumeMarker,
-		Variables:     variablesLine(agent),
+		Variables:     variablesLine(agent, r),
 	}); err != nil {
 		return "", err
 	}
@@ -1207,13 +1207,18 @@ func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string)
 	return renderDefinition(agent, r, servers, Meta{RunID: "run_check", AttemptID: "attempt_00"})
 }
 
-// variablesLine renders the agent's variable names for the standing
-// instruction ("$PRODUCT_REPO, $DOCS_URL"), so the model knows they exist
-// without probing the environment.
-func variablesLine(agent *config.Agent) string {
-	names := slices.Sorted(maps.Keys(agent.Variables))
-	for i, n := range names {
-		names[i] = "$" + strings.ToUpper(n)
+// variablesLine renders the variable names this run actually receives for
+// the standing instruction ("$PRODUCT_REPO, $DOCS_URL"), so the model knows
+// they exist without probing the environment. Shadowed variables are
+// omitted: the credential wins in the environment, so advertising the name
+// would describe a value the run does not hold.
+func variablesLine(agent *config.Agent, r *routine.Routine) string {
+	model, _ := EffectiveModel(agent, r)
+	var names []string
+	for _, v := range runenv.New(agent, r, model).Variables {
+		if v.ShadowedBy == "" {
+			names = append(names, "$"+v.Env)
+		}
 	}
 	return strings.Join(names, ", ")
 }

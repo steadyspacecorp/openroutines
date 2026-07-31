@@ -362,6 +362,29 @@ func TestStageRefusesFatalEnvPlan(t *testing.T) {
 	}
 }
 
+// A variable shadowed by a credential's run surface must not be advertised
+// as configuration: the credential wins in the environment, so listing the
+// name told the model $GITHUB_TOKEN was a config value while it held a live
+// installation token.
+func TestInstructionOmitsShadowedVariables(t *testing.T) {
+	agent := &config.Agent{
+		Name: "a", Description: "d",
+		Variables:   map[string]string{"github_token": "ghp-placeholder", "docs_url": "https://docs.example.com"},
+		Credentials: map[string]creds.Spec{"gh_app": {Type: "github_app", AppID: "1"}},
+	}
+	r := &routine.Routine{Name: "sample", FM: routine.Frontmatter{Credentials: []string{"gh_app"}}}
+	def, err := RenderDefinition(agent, r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(def, "$GITHUB_TOKEN") {
+		t.Fatalf("shadowed variable advertised as configuration:\n%s", def)
+	}
+	if !strings.Contains(def, "$DOCS_URL") {
+		t.Fatalf("unshadowed variable should still be listed:\n%s", def)
+	}
+}
+
 // events: false is enforced at import, not just instructed: a staged change
 // to events.md is discarded (worktree copy wins) while the rest imports.
 func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
