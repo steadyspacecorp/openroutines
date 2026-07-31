@@ -98,6 +98,16 @@ case "$mode" in
      mkdir -p memory/ledgers
      echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
      echo "slept" ;;
+  blocked) # A run that only ends when something kills it. Staged memory is
+     # written up front, so a test asserting that a killed run's memory was
+     # not imported is testing an import that had something to import. The
+     # sleep outlives the routine's timeout: a kill that never arrives ends
+     # the attempt as a timeout, which settles differently from a cancel,
+     # rather than as a run that completed on its own.
+     mkdir -p memory/ledgers
+     echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
+     echo "$OPENROUTINES_RUN_ID" >> "$d/started"
+     sleep 60 ;;
   detach) sleep 60 </dev/null >/dev/null 2>&1 &
      echo $! > "$d/detached.pid"
      echo "detached" ;;
@@ -172,6 +182,53 @@ func newSupervisor(t *testing.T, dir string) *Supervisor {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// usurpLease takes the lease at origin under another instance's name and then
+// keeps heartbeating it, CAS-looping against the holder's own renewals. The
+// heartbeat is the point: a lease written once expires a TTL later, and an
+// expired foreign lease is one the holder may correctly reclaim -- which put
+// every assertion downstream of it on a TTL-length clock. Holding the lease
+// for as long as the test needs it removes that deadline. The returned stop
+// joins the heartbeat goroutine.
+func usurpLease(t *testing.T, s *Supervisor) (stop func()) {
+	t.Helper()
+	take := func() error {
+		lease, err := s.mem.ReadLease()
+		if err != nil {
+			return err
+		}
+		if lease == nil {
+			return fmt.Errorf("no lease to usurp")
+		}
+		_, err = s.mem.WriteLease("usurper", time.Now(), lease.SHA)
+		return err
+	}
+	var err error
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if err = take(); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("could not usurp the lease: %v", err)
+		}
+	}
+	quit, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-quit:
+				return
+			case <-time.After(s.leaseTTL / 4):
+				_ = take() // a renewal the holder wins is re-taken next tick
+			}
+		}
+	}()
+	return func() {
+		close(quit)
+		<-done
+	}
 }
 
 func loadState(t *testing.T, s *Supervisor) *schedule.State {
@@ -1032,7 +1089,10 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 // cannot prove it is the only writer must not let a model process keep
 // acting under identities a replacement is about to re-run.
 func TestLostLeaseCancelsTheRun(t *testing.T) {
-	dir := fixture(t, "slow")
+	// The run blocks until it is killed rather than running for a fixed span:
+	// cancellation is what has to end this attempt, so the run must not have
+	// a finish line of its own to reach first.
+	dir := fixture(t, "blocked")
 	base := t.TempDir()
 	bare := filepath.Join(base, "origin.git")
 	runCmd(t, base, "git", "init", "-q", "-b", "main", "--bare", bare)
@@ -1057,21 +1117,20 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 		}
 	}
 
-	// Usurp the lease at origin, CAS-looping against the holder's renewals.
 	// The next heartbeat finds a live foreign lease and must cancel the run.
-	for deadline := time.Now().Add(10 * time.Second); ; {
-		lease, err := holder.mem.ReadLease()
-		if err != nil || lease == nil {
-			t.Fatalf("reading the lease to usurp it: %v", err)
-		}
-		if _, err := holder.mem.WriteLease("usurper", time.Now(), lease.SHA); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("could not usurp the lease")
-		}
-	}
+	usurped := time.Now()
+	stopUsurper := usurpLease(t, holder)
+	defer stopUsurper()
 	<-done
+
+	// Cancellation has to stop the model process, not just mark the attempt:
+	// a run left to expire on its own timeout would hand the attempt back
+	// too, having spent the 30s still acting under identities the lease
+	// holder is about to re-run. Real cancellation lands in well under a
+	// second.
+	if took := time.Since(usurped); took > 15*time.Second {
+		t.Fatalf("the run was left to reach its own timeout (%s), not canceled", took.Round(time.Second))
+	}
 
 	st, err := schedule.Load(holder.stateDir(), "every-minute")
 	if err != nil {
