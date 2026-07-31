@@ -5,7 +5,7 @@ SHELL := bash
 MAKEFLAGS += --warn-undefined-variables
 .DELETE_ON_ERROR:
 
-.PHONY: build lint fix tidy test test-race smoke check check-vuln check-tidy verify release clean
+.PHONY: build lint fix tidy test test-race smoke check check-vuln check-tidy check-secrets verify release clean
 
 # Build
 build:
@@ -48,9 +48,19 @@ check-tidy:
 	diff -u go.mod.tidybak go.mod && diff -u go.sum.tidybak go.sum \
 	  || { echo "go.mod/go.sum are not tidy; run: make tidy" >&2; exit 1; }
 
+# The same scan CI's gitleaks action runs, at the version .tool-versions pins
+# for both -- the action otherwise defaults to a gitleaks of its own choosing,
+# and a rule added between the two versions would make them disagree. Kept out
+# of `check` so CI, which reaches gitleaks through the action, doesn't scan
+# twice and build this from source to do it.
+GITLEAKS_VERSION := $(shell awk '/^gitleaks /{print $$2}' .tool-versions)
+
+check-secrets:
+	go run github.com/zricethezav/gitleaks/v8@v$(GITLEAKS_VERSION) dir --no-banner .
+
 # Everything CI runs, in one target. No `build`: test-race compiles every
 # package, so a separate build step would only repeat it.
-verify: lint check test-race smoke
+verify: lint check check-secrets test-race smoke
 
 # Release & cleanup
 release:

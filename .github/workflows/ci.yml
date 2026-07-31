@@ -7,11 +7,23 @@ on:
   # The release workflow reuses this as its pre-release gate.
   workflow_call:
 
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      # Full history: gitleaks scans the commit range, not just the tree.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v7
         with:
@@ -22,14 +34,25 @@ jobs:
         with:
           version-file: .tool-versions
 
-      - name: build
-        run: go build ./...
+      # Without this the action picks a gitleaks version of its own, which
+      # drifts from the one `make check-secrets` runs locally.
+      - name: gitleaks version
+        run: awk '/^gitleaks /{print "GITLEAKS_VERSION="$2}' .tool-versions >> "$GITHUB_ENV"
+
+      - name: secrets
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      - name: check
+        run: make check
 
       - name: test
-        run: go test ./...
+        run: make test-race
 
       - name: smoke
-        run: bin/smoke
+        run: make smoke
 
   # Same pattern as the org's other repos: the rtCamp default card into the
   # CI channel. Skips silently until SLACK_CI_WEBHOOK is set in repo secrets.
