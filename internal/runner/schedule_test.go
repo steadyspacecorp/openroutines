@@ -14,6 +14,7 @@ func scheduleFixture() []*routine.Routine {
 	return []*routine.Routine{
 		{Name: "steady-check-in", FM: routine.Frontmatter{Schedule: "0 7,8 * * 1-5", Events: boolPtr(false), Consumes: "memory"}},
 		{Name: "steady-inbox", FM: routine.Frontmatter{Schedule: "45 8-17/3 * * 1-5", Events: boolPtr(false)}},
+		{Name: "announcements", FM: routine.Frontmatter{Schedule: "30 8 * * 2", Forecast: boolPtr(false)}},
 		{Name: "doc-drift", FM: routine.Frontmatter{Schedule: "0 9 * * 1-5"}},
 		{Name: "roadmap-groomer", FM: routine.Frontmatter{Schedule: "0 17 * * 2"}},
 		{Name: "a11y-sweep", FM: routine.Frontmatter{Schedule: "30 9 * * 3"}},
@@ -33,15 +34,22 @@ func TestRenderScheduleWindowSplit(t *testing.T) {
 		"now: Tue 2026-07-28 07:00 (UTC)",
 		// The 08:00 retry slot is skipped; the window closes Wednesday.
 		"window: now → Wed 2026-07-29 07:00 (steady-check-in's next fire on its next fire-day)",
-		"eventless: steady-inbox next Tue 2026-07-28 08:45",
+		"fact: announcements next Tue 2026-07-28 08:30",
+		"fact: steady-inbox next Tue 2026-07-28 08:45",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
 	}
+	if !all[2].FM.RecordsEvents() {
+		t.Fatal("forecast: false must not disable event recording")
+	}
 
 	in := section(got, "in-window", "out (after window)")
 	out := section(got, "out (after window)", "")
+	if strings.Contains(in, "announcements") || strings.Contains(out, "announcements") {
+		t.Fatalf("forecast: false routine must stay out of forecast tables:\n%s", got)
+	}
 	for name, wantIn := range map[string]bool{
 		"doc-drift":       true,  // Tue 09:00, later today
 		"roadmap-groomer": true,  // Tue 17:00, before Wed 07:00
@@ -103,7 +111,8 @@ func TestRenderScheduleUsesAgentTimezoneNotArgumentZone(t *testing.T) {
 	for _, want := range []string{
 		"now: Tue 2026-07-28 07:00 (America/New_York)",
 		"window: now → Wed 2026-07-29 07:00 (steady-check-in's next fire on its next fire-day)",
-		"eventless: steady-inbox next Tue 2026-07-28 08:45",
+		"fact: announcements next Tue 2026-07-28 08:30",
+		"fact: steady-inbox next Tue 2026-07-28 08:45",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)

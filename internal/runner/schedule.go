@@ -30,10 +30,10 @@ const timeLayout = "Mon 2006-01-02 15:04"
 
 // scheduleRow is one routine's computed slice of the forward schedule.
 type scheduleRow struct {
-	name     string
-	spec     string
-	fires    []time.Time
-	eventful bool // records events: work the schedule forecasts
+	name         string
+	spec         string
+	fires        []time.Time
+	forecastable bool
 }
 
 // prepareSchedule renders the agent's forward schedule into the workspace.
@@ -50,9 +50,9 @@ func prepareSchedule(dir, workspace string, r *routine.Routine, tz string, now t
 }
 
 // renderSchedule formats the forward schedule a run receives: every active
-// routine's next fires, split eventless (reporting -- fire times are facts,
-// not forecast work) from eventful, and -- when the running routine is
-// scheduled -- the window through its next fire-day with the eventful
+// routine's next fires, split facts (fire times that are not forecast work)
+// from forecastable work, and -- when the running routine is scheduled --
+// the window through its next fire-day with the forecastable
 // routines partitioned in-window/out. The running routine's window computes
 // even when it is inactive: a manually-run routine still has a schedule to
 // stand in. Everything is computed and displayed in loc, the agent's
@@ -79,10 +79,10 @@ func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time
 			continue
 		}
 		rows = append(rows, scheduleRow{
-			name:     r.Name,
-			spec:     r.FM.Schedule,
-			fires:    schedule.NextFires(spec, now, until, scheduleFireCount),
-			eventful: r.FM.RecordsEvents(),
+			name:         r.Name,
+			spec:         r.FM.Schedule,
+			fires:        schedule.NextFires(spec, now, until, scheduleFireCount),
+			forecastable: r.FM.Forecasts(),
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return firstFire(rows[i]).Before(firstFire(rows[j])) })
@@ -93,22 +93,22 @@ func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time
 		fmt.Fprintf(&b, "window: now → %s (%s's next fire on its next fire-day)\n",
 			windowEnd.Format(timeLayout), self.Name)
 	}
-	var eventful []scheduleRow
+	var forecastable []scheduleRow
 	for _, row := range rows {
-		if row.eventful {
-			eventful = append(eventful, row)
+		if row.forecastable {
+			forecastable = append(forecastable, row)
 			continue
 		}
-		fmt.Fprintf(&b, "eventless: %s next %s\n", row.name, formatFires(row.fires))
+		fmt.Fprintf(&b, "fact: %s next %s\n", row.name, formatFires(row.fires))
 	}
 	b.WriteString("\n")
 
 	if windowEnd.IsZero() {
-		writeTable(&b, "routine", eventful)
+		writeTable(&b, "routine", forecastable)
 		return b.String()
 	}
 	var in, out []scheduleRow
-	for _, row := range eventful {
+	for _, row := range forecastable {
 		if len(row.fires) > 0 && row.fires[0].Before(windowEnd) {
 			in = append(in, row)
 		} else {

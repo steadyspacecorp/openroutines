@@ -42,6 +42,7 @@ type Frontmatter struct {
 	Model       string        `yaml:"model,omitempty"`
 	Effort      string        `yaml:"effort,omitempty"` // provider-specific reasoning effort (opencode --variant)
 	Events      *bool         `yaml:"events,omitempty"`
+	Forecast    *bool         `yaml:"forecast,omitempty"`
 	Consumes    string        `yaml:"consumes,omitempty"`  // "memory": this routine consumes the memory change feed
 	Webfetch    bool          `yaml:"webfetch,omitempty"`  // grants the webfetch tool; external content is an injection vector, so off by default
 	Websearch   bool          `yaml:"websearch,omitempty"` // grants the websearch tool (and enables its search backend)
@@ -53,6 +54,12 @@ func (f Frontmatter) IsActive() bool { return f.Active == nil || *f.Active }
 
 // RecordsEvents applies the default: runs record events unless opted out.
 func (f Frontmatter) RecordsEvents() bool { return f.Events == nil || *f.Events }
+
+// Forecasts applies the default and the events implication: a routine that
+// does not record work cannot present its scheduled fire as forecast work.
+func (f Frontmatter) Forecasts() bool {
+	return f.RecordsEvents() && (f.Forecast == nil || *f.Forecast)
+}
 
 // IsConsumer reports whether the routine declared itself a memory consumer.
 func (f Frontmatter) IsConsumer() bool { return f.Consumes == "memory" }

@@ -25,11 +25,32 @@ func TestParse(t *testing.T) {
 	if r.FM.Schedule != "0 9 * * 1" || r.Body != "Do the thing." {
 		t.Fatalf("unexpected parse: %+v body=%q", r.FM, r.Body)
 	}
-	if !r.FM.IsActive() || !r.FM.RecordsEvents() {
-		t.Fatal("defaults should be active=true events=true")
+	if !r.FM.IsActive() || !r.FM.RecordsEvents() || !r.FM.Forecasts() {
+		t.Fatal("defaults should be active=true events=true forecast=true")
 	}
 	if got := r.FM.EffectiveURL(); got != "https://example.com/agent" {
 		t.Fatalf("effective URL = %q, want declared URL", got)
+	}
+}
+
+func TestFrontmatterForecastDefaultsAndEventsFalseImpliesFalse(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name string
+		fm   Frontmatter
+		want bool
+	}{
+		{name: "default", fm: Frontmatter{}, want: true},
+		{name: "explicit true", fm: Frontmatter{Forecast: &on}, want: true},
+		{name: "explicit false", fm: Frontmatter{Forecast: &off}, want: false},
+		{name: "events false", fm: Frontmatter{Events: &off}, want: false},
+		{name: "events false overrides explicit true", fm: Frontmatter{Events: &off, Forecast: &on}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.fm.Forecasts(); got != tc.want {
+				t.Fatalf("Forecasts() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
