@@ -51,7 +51,7 @@ func cmdUsage(args []string) int {
 	if len(positional) != 0 {
 		return fail(fmt.Errorf("%s", usageUsage))
 	}
-	asJSON := flags["--json"] == "true"
+	_, asJSON := flags["--json"]
 
 	rows, records := aggregateUsage(".")
 

@@ -30,7 +30,7 @@ func cmdSync(args []string) int {
 	if len(positional) != 0 {
 		return fail(fmt.Errorf("%s", syncUsage))
 	}
-	push := flags["--push"] == "true"
+	_, push := flags["--push"]
 
 	// A fresh clone has no memory worktree at all -- the exact checkout most
 	// likely to be reaching for sync. Materialize it the way the supervisor

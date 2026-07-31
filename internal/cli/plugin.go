@@ -60,7 +60,7 @@ func pluginAdd(args []string) int {
 	}
 	source := rest[0]
 	subPath := flags["--path"]
-	yes := flags["--yes"] == "true"
+	_, yes := flags["--yes"]
 
 	root, provenance, cleanup, err := plugin.Fetch(source, subPath, "")
 	if err != nil {
@@ -236,7 +236,7 @@ func pluginUpdate(args []string) int {
 		return fail(fmt.Errorf("%s", pluginUpdateUsage))
 	}
 	name := rest[0]
-	yes := flags["--yes"] == "true"
+	_, yes := flags["--yes"]
 	upd, err := plugin.PrepareUpdate(".", name)
 	if err != nil {
 		return fail(err)

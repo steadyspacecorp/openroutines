@@ -42,7 +42,9 @@ func parseFlags(args []string, known map[string]flagSpec) (positional []string, 
 			i++
 			flags[a] = args[i]
 		} else {
-			flags[a] = "true"
+			// A bare switch's fact is its presence -- read it with
+			// `_, ok := flags["--yes"]`, never by comparing the value.
+			flags[a] = ""
 		}
 	}
 	return positional, flags, false, nil
