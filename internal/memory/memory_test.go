@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
 func TestValidateAcceptsPlainFiles(t *testing.T) {
@@ -374,8 +376,14 @@ func TestSupervisorEntriesRedactSecrets(t *testing.T) {
 	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"    // gitleaks:allow -- synthetic fixture
 	const deployKeyLine = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAt" // gitleaks:allow -- synthetic fixture
 	t.Setenv("OPENROUTINES_MASTER_KEY", masterKey)
-	t.Setenv("OPENROUTINES_DEPLOY_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\n"+deployKeyLine+"\n-----END OPENSSH PRIVATE KEY-----") // gitleaks:allow -- synthetic fixture
 	dir := deliveryFixture(t)
+	// Materializing a secret is what registers it: loading the key and
+	// reading the deploy key are the only ways their values enter the
+	// process, so they are the only ways the values can leak.
+	if _, err := creds.LoadKey(dir); err != nil {
+		t.Fatal(err)
+	}
+	registerDeployKey("-----BEGIN OPENSSH PRIVATE KEY-----\n" + deployKeyLine + "\n-----END OPENSSH PRIVATE KEY-----") // gitleaks:allow -- synthetic fixture
 
 	if err := At(dir).AppendEvent("2026-07-29 supervisor: push failed with key " + deployKeyLine + " and master key " + masterKey); err != nil {
 		t.Fatal(err)
@@ -383,7 +391,10 @@ func TestSupervisorEntriesRedactSecrets(t *testing.T) {
 	if err := At(dir).AppendHumanTask("task-20260729-1", "investigate: run failed with master key "+masterKey+" (source: supervisor; added 2026-07-29)"); err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"events.md", "tasks.md"} {
+	if err := At(dir).AppendRunRecord(`{"run_id":"run_x","hint":"push failed with key ` + deployKeyLine + ` and master key ` + masterKey + `"}`); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"events.md", "tasks.md", "runs.jsonl"} {
 		raw, err := os.ReadFile(filepath.Join(At(dir).Worktree(), file))
 		if err != nil {
 			t.Fatal(err)

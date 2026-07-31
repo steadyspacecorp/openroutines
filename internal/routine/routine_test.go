@@ -1,11 +1,16 @@
 package routine
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/logging"
 )
 
 func writeTemp(t *testing.T, content string) string {
@@ -236,5 +241,21 @@ func TestBrokenFileClaimsItsNameAgainstAHealthyOne(t *testing.T) {
 	}
 	if !strings.Contains(errs[0].Error(), filepath.Join("plugins", "demo", "routines", "daily.md")) {
 		t.Errorf("the error must name the broken file, not just the routine: %v", errs[0])
+	}
+}
+
+// Log binds the routine's identity to the process logger: concurrent runs
+// share one stdout, so every line carries routine= (and whatever the caller
+// adds, like run_id) without the call site repeating it.
+func TestLogBindsRoutineIdentity(t *testing.T) {
+	var buf bytes.Buffer
+	logging.Setup(&buf, slog.LevelInfo, time.UTC)
+	(&Routine{Name: "check-in"}).Log().With("run_id", "run_abc").Error("attempt failed -- will retry", "detail", "exit status 1")
+
+	got := strings.TrimSpace(buf.String())
+	for _, want := range []string{`level=ERROR`, `msg="attempt failed -- will retry"`, "routine=check-in", "run_id=run_abc", `detail="exit status 1"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -72,6 +73,13 @@ type Routine struct {
 	Path string
 	FM   Frontmatter
 	Body string // the prompt
+}
+
+// Log returns the process logger with this routine's identity bound: runs
+// execute concurrently and share one stdout, so routine= is the field an
+// operator filters on.
+func (r *Routine) Log() *slog.Logger {
+	return slog.With("routine", r.Name)
 }
 
 // Parse reads one routine file. The file must begin with a "---" frontmatter

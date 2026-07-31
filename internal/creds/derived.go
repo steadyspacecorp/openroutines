@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // Spec declares how a stored credential is materialized into a run (see
@@ -24,13 +26,13 @@ type Spec struct {
 
 // Derived is short-lived material minted from a stored root secret: the
 // exact environment to inject into a run, the bearer value (when the type
-// produces one) available to trusted supervisor callers, values the log
-// scrubber must redact, and cleanup that disposes of anything revocable.
-// Cleanup is best-effort and safe to call once after the material's use.
+// produces one) available to trusted supervisor callers, and cleanup that
+// disposes of anything revocable. Derive registers the bearer with the
+// scrub registry; neither providers nor callers handle redaction. Cleanup
+// is best-effort and safe to call once after the material's use.
 type Derived struct {
 	Env     map[string]string
 	Bearer  string
-	Scrub   map[string]string
 	Cleanup func()
 }
 
@@ -122,14 +124,23 @@ func ValidateStored(s Spec, stored string) error {
 
 // Derive materializes one typed credential. Providers are built into the
 // framework -- agent repositories cannot supply derivation code, which would
-// otherwise be a privileged plugin boundary on the trusted side.
+// otherwise be a privileged plugin boundary on the trusted side. The minted
+// bearer registers with the scrub registry here, at the one door every
+// provider's material leaves through -- a provider cannot forget to.
 func Derive(name string, s Spec, stored string) (*Derived, error) {
+	var d *Derived
+	var err error
 	switch s.Type {
 	case "github_app":
-		return deriveGitHubApp(s, stored, githubAPIBase)
+		d, err = deriveGitHubApp(s, stored, githubAPIBase)
 	case "oauth2_client":
-		return deriveOAuth2Client(name, s, stored)
+		d, err = deriveOAuth2Client(s, stored)
 	default:
 		return nil, fmt.Errorf("credential %q: unknown derived type %q", name, s.Type)
 	}
+	if err != nil {
+		return nil, err
+	}
+	scrub.Register(map[string]string{s.Type + " bearer (" + name + ")": d.Bearer})
+	return d, nil
 }

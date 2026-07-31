@@ -99,15 +99,6 @@ func TestDeriveGitHubApp(t *testing.T) {
 			t.Fatalf("env %s = %q, want %q", k, d.Env[k], want)
 		}
 	}
-	scrubbed := false
-	for _, v := range d.Scrub {
-		if v == "test-installation-token" {
-			scrubbed = true
-		}
-	}
-	if !scrubbed {
-		t.Fatal("installation token missing from the scrub set")
-	}
 	if d.Bearer != "test-installation-token" {
 		t.Fatalf("bearer = %q, want installation token", d.Bearer)
 	}

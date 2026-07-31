@@ -53,7 +53,26 @@ A few properties fall out of the design (see [docs/design.md](design.md) for the
 
 ## Log level
 
-The log is rendered, not raw: a routine's own output prints whole; each tool call becomes a one-line summary with its result and suppressed-output size; failed tools also show the last 2KB of their diagnostic output. Every line is prefixed with its routine's name (runs execute concurrently and share one stdout), and injected secrets are scrubbed before anything is truncated or suppressed. Set `log_level` in `openroutines.yml` to change how much survives -- omitted means `info`:
+The log is rendered, not raw: a routine's own output prints whole; each tool call becomes a one-line summary with its result and suppressed-output size; failed tools also show the last 2KB of their diagnostic output. Everything is attributed to its routine (runs execute concurrently and share one stdout), and injected secrets are scrubbed before anything is truncated or suppressed.
+
+Two shapes share the stream. The supervisor's own lines are [logfmt](https://brandur.org/logfmt) -- every part of the record is a `key=value` pair, so a line can be filtered by field instead of matched by shape:
+
+```
+time=2026-07-31T14:52:07.450-04:00 level=INFO msg="attempt starting" routine=check-in run_id=run_abc attempt=attempt_01
+time=2026-07-31T14:52:31.902-04:00 level=ERROR msg="attempt failed -- will retry" routine=check-in run_id=run_abc detail="exit status 1"
+```
+
+Filter by `level=ERROR`, by `routine=`, or by `run_id=` to follow one logical run across its retries.
+
+Run output is the model process's own bytes, so it stays raw behind a `name | ` prefix:
+
+```
+check-in | Checked 3 open tasks; nothing is blocked.
+```
+
+Timestamps are RFC3339 in the agent's timezone, so a log line and a cron expression can be compared without arithmetic. Your platform will usually add its own ingest timestamp alongside; the one in the line is when the event actually happened.
+
+Set `log_level` in `openroutines.yml` to change how much survives -- omitted means `info`:
 
 - `debug` -- the full model-process transcript plus opencode's own diagnostics. For chasing a specific problem, not for running unattended.
 - `info` -- the default: routine output, one-line tool summaries (diagnostic tails only for failed tools), and supervisor lifecycle lines (run started, completed, registered).

@@ -7,8 +7,9 @@ import (
 )
 
 func TestRedactsSecretsAcrossWrites(t *testing.T) {
+	Register(map[string]string{"api_token": "s3cr3t-value"})
 	var out bytes.Buffer
-	w := NewWriter(&out, map[string]string{"api_token": "s3cr3t-value"})
+	w := NewWriter(&out)
 	w.Write([]byte("token is s3cr3t-"))
 	w.Write([]byte("value ok\npartial tail"))
 	w.Flush()
@@ -28,7 +29,7 @@ func TestRedactsSecretsAcrossWrites(t *testing.T) {
 // it flushes through redaction in chunks.
 func TestBufferCapOnNewlineFreeOutput(t *testing.T) {
 	var out bytes.Buffer
-	w := NewWriter(&out, map[string]string{"tok": "s3cr3t-value"})
+	w := NewWriter(&out)
 	chunk := bytes.Repeat([]byte("x"), 256<<10)
 	for i := 0; i < 8; i++ {
 		w.Write(chunk)
@@ -42,11 +43,8 @@ func TestBufferCapOnNewlineFreeOutput(t *testing.T) {
 }
 
 func TestEmptySecretNeverRedacts(t *testing.T) {
-	var out bytes.Buffer
-	w := NewWriter(&out, map[string]string{"empty": ""})
-	w.Write([]byte("hello\n"))
-	w.Flush()
-	if out.String() != "hello\n" {
-		t.Fatalf("unexpected rewrite: %q", out.String())
+	Register(map[string]string{"empty": ""})
+	if got := Redacted("hello"); got != "hello" {
+		t.Fatalf("unexpected rewrite: %q", got)
 	}
 }

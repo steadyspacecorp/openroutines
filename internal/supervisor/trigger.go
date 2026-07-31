@@ -29,9 +29,10 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 	if last, ok := s.lastPolled[r.Name]; ok && now.Before(last.Add(interval)) {
 		return false
 	}
+	log := r.Log()
 	prior, err := trigger.Load(s.stateDir(), r.Name)
 	if err != nil {
-		s.errorf("%s: %v", r.Name, err)
+		log.Error("loading trigger state failed", "error", err)
 		return false
 	}
 
@@ -43,17 +44,17 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 		// First observation establishes the baseline and never fires,
 		// mirroring how a new consumer starts at the current commit.
 		if err := res.Next.Save(s.stateDir()); err != nil {
-			s.errorf("%s: %v", r.Name, err)
+			log.Error("saving trigger state failed", "error", err)
 			return false
 		}
-		s.infof("%s: trigger baseline established", r.Name)
+		log.Info("trigger baseline established")
 		return false
 	}
 	if !res.Changed {
 		return false
 	}
 	if err := res.Next.Save(s.stateDir()); err != nil {
-		s.errorf("%s: %v", r.Name, err)
+		log.Error("saving trigger state failed", "error", err)
 		return false
 	}
 	return true
@@ -72,7 +73,7 @@ func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 		return
 	}
 	if err := res.Next.Save(s.stateDir()); err != nil {
-		s.errorf("%s: %v", r.Name, err)
+		r.Log().Error("saving trigger state failed", "error", err)
 	}
 }
 
@@ -80,6 +81,7 @@ func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 // deduplicating error logs (log on transition, not every tick).
 func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.State, now time.Time) (trigger.Result, bool) {
 	s.lastPolled[r.Name] = now
+	log := r.Log()
 	credential := ""
 	cleanup := func() {}
 	if spec.Credential != "" {
@@ -89,7 +91,7 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 		if !slices.Contains(r.FM.Credentials, spec.Credential) {
 			if !s.pollFailed[r.Name] {
 				s.pollFailed[r.Name] = true
-				s.Log.Printf("%s: trigger credential %q is not listed in the routine's credentials", r.Name, spec.Credential)
+				log.Warn("trigger credential is not listed in the routine's credentials", "credential", spec.Credential)
 			}
 			return trigger.Result{}, false
 		}
@@ -97,25 +99,24 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 		if err != nil {
 			if !s.pollFailed[r.Name] {
 				s.pollFailed[r.Name] = true
-				s.warnf("%s: trigger credential %q: %v", r.Name, spec.Credential, err)
+				log.Warn("trigger credential failed", "credential", spec.Credential, "error", err)
 			}
 			return trigger.Result{}, false
 		}
 		credential = derived.Bearer
 		cleanup = derived.Cleanup
-		s.registerScrub(derived.Scrub)
 	}
 	defer cleanup()
 	res, err := trigger.Poll(trigger.Client, spec, credential, r.Name, prior)
 	if err != nil {
 		if !s.pollFailed[r.Name] {
 			s.pollFailed[r.Name] = true
-			s.warnf("%s: trigger poll: %v", r.Name, err)
+			log.Warn("trigger poll failed", "error", err)
 		}
 		return trigger.Result{}, false
 	}
 	if s.pollFailed[r.Name] {
-		s.warnf("%s: trigger poll recovered", r.Name)
+		log.Warn("trigger poll recovered")
 		delete(s.pollFailed, r.Name)
 	}
 	return res, true
@@ -125,8 +126,7 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 // credentials retain their verbatim bearer behavior. Typed credentials are
 // derived by the trusted supervisor, and only the type's explicit bearer
 // surface leaves this function -- never its stored root secret. The caller
-// must run Cleanup immediately after the poll and register Scrub with the
-// supervisor's own log scrubber.
+// must run Cleanup immediately after the poll.
 func (s *Supervisor) triggerCredential(name string) (*creds.Derived, error) {
 	agent, err := config.Load(s.Dir)
 	if err != nil {
@@ -146,11 +146,7 @@ func (s *Supervisor) triggerCredential(name string) (*creds.Derived, error) {
 	}
 	spec, typed := agent.Credentials[name]
 	if !typed {
-		return &creds.Derived{
-			Bearer:  value,
-			Scrub:   map[string]string{name: value},
-			Cleanup: func() {},
-		}, nil
+		return &creds.Derived{Bearer: value, Cleanup: func() {}}, nil
 	}
 	derived, err := creds.Derive(name, spec, value)
 	if err != nil {
