@@ -138,6 +138,10 @@ type Staging struct {
 	// ConsumerThrough is the memory commit the delivery inbox was prepared
 	// against -- set only for consumer routines, fixed before the run starts.
 	ConsumerThrough string
+	// ConsumerFirstRun is true when no durable cursor existed at preparation.
+	// A successful empty bootstrap establishes that cursor without asking the
+	// routine to claim it delivered anything.
+	ConsumerFirstRun bool
 }
 
 // Cleanup discards the whole run workspace, staging and base included.
@@ -343,11 +347,12 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 			return err
 		}
 		if r.FM.IsConsumer() {
-			through, err := prepareInbox(dir, workspace, r.Name)
+			through, firstRun, err := prepareInbox(dir, workspace, r.Name)
 			if err != nil {
 				return fmt.Errorf("delivery inbox: %w", err)
 			}
 			staging.ConsumerThrough = through
+			staging.ConsumerFirstRun = firstRun
 		}
 		if err := prepareSchedule(dir, workspace, r, agent.Timezone, time.Now()); err != nil {
 			return fmt.Errorf("forward schedule: %w", err)
@@ -777,37 +782,40 @@ func importMemory(dir string, r *routine.Routine, staging *Staging) (discarded b
 // the workspace, and returns the fixed `through` commit. A consumer with no
 // cursor starts at the current state: nothing to replay, first consume
 // initializes the cursor.
-func prepareInbox(dir, workspace, consumer string) (string, error) {
+func prepareInbox(dir, workspace, consumer string) (string, bool, error) {
 	mem := memory.At(dir)
 	through, err := mem.Head()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	cursor, err := mem.LoadCursor(consumer)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
+	firstRun := cursor == nil
 	from := ""
 	var changes []memory.CommitChange
 	if cursor != nil {
 		from = cursor.ConsumedThrough
 		if changes, err = mem.Changes(from, through); err != nil {
 			if errors.Is(err, memory.ErrCursorUnreachable) {
-				return "", fmt.Errorf("%w: %w -- repair or delete %s on the memory branch", ErrFatal, err, memory.CursorFile(consumer))
+				return "", false, fmt.Errorf("%w: %w -- repair or delete %s on the memory branch", ErrFatal, err, memory.CursorFile(consumer))
 			}
-			return "", err
+			return "", false, err
 		}
 	}
 	inbox := memory.RenderInbox(consumer, from, through, changes)
-	return through, os.WriteFile(filepath.Join(workspace, memory.InboxFileName), []byte(inbox), 0o644)
+	return through, firstRun, os.WriteFile(filepath.Join(workspace, memory.InboxFileName), []byte(inbox), 0o644)
 }
 
 // advanceConsumer moves a consumer routine's cursor through the inbox it just
 // consumed. Runs after a successful import, before the completion commit, so
-// consumption and results land in the same commit. No marker, no advance:
-// completing a run does not imply consuming its inbox.
+// consumption and results land in the same commit. The one exception to the
+// marker rule is a successful first run: its inbox is empty by construction,
+// so completion establishes the starting cursor and prevents every later run
+// from being mistaken for another first run.
 func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID string) {
-	if !r.FM.IsConsumer() || staging.ConsumerThrough == "" || !staging.Consumed() {
+	if !r.FM.IsConsumer() || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
 		return
 	}
 	_ = memory.At(dir).SaveCursor(r.Name, memory.Cursor{
