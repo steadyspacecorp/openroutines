@@ -120,6 +120,11 @@ func (a *Agent) RunSlots() int {
 	return 1
 }
 
+// MaxConcurrency bounds the reserved production UID pool. Each concurrent
+// attempt needs a distinct identity; a finite ceiling keeps that security
+// boundary explicit in the image and configuration.
+const MaxConcurrency = 32
+
 // Retention returns the configured memory retention string ("" = default).
 func (a *Agent) Retention() string {
 	if a.Memory == nil {
@@ -204,6 +209,8 @@ func (a *Agent) Problems() []string {
 	}
 	if a.Concurrency < 0 {
 		out = append(out, fmt.Sprintf("concurrency %d must be at least 1", a.Concurrency))
+	} else if a.Concurrency > MaxConcurrency {
+		out = append(out, fmt.Sprintf("concurrency %d exceeds the maximum of %d", a.Concurrency, MaxConcurrency))
 	}
 	if _, err := memory.ParseRetention(a.Retention()); err != nil {
 		out = append(out, fmt.Sprintf("memory.retention: %v", err))

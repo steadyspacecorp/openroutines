@@ -8,11 +8,37 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
 	"golang.org/x/sys/unix"
 )
+
+// DropIdentity moves the shim permanently to the attempt identity. The
+// openroutines binary carries only CAP_SETUID/CAP_SETGID; the capless
+// opencode exec that follows cannot regain the supervisor identity.
+func DropIdentity(uid uint32) error {
+	if uid == 0 {
+		return fmt.Errorf("attempt uid is required")
+	}
+	if os.Geteuid() == int(uid) && os.Getegid() == int(uid) {
+		return nil // the trusted parent applied Credential before this exec
+	}
+	if err := unix.Setgroups(nil); err != nil {
+		return fmt.Errorf("clear supplementary groups: %w", err)
+	}
+	if err := unix.Setresgid(int(uid), int(uid), int(uid)); err != nil {
+		return fmt.Errorf("set attempt gid: %w", err)
+	}
+	if err := unix.Setresuid(int(uid), int(uid), int(uid)); err != nil {
+		return fmt.Errorf("set attempt uid: %w", err)
+	}
+	if os.Geteuid() != int(uid) || os.Getegid() != int(uid) {
+		return fmt.Errorf("identity transition did not take effect (uid=%d gid=%d)", os.Geteuid(), os.Getegid())
+	}
+	return nil
+}
 
 // Apply restricts this process (and all its descendants) to read access on
 // ro paths and read-write on rw paths. Returns a description of the ABI

@@ -51,14 +51,16 @@ var commands = map[string]func([]string) int{
 	"credentials":   cmdCredentials,
 	"credential":    cmdCredentials,
 	"update":        cmdUpdate,
-	"sandbox-exec":  cmdSandboxExec,
-	"sandbox-probe": cmdSandboxProbe,
+	"sandbox-exec":        cmdSandboxExec,
+	"sandbox-probe":       cmdSandboxProbe,
+	"sandbox-spawn-probe": cmdSandboxSpawnProbe,
 }
 
 var repoOptional = map[string]bool{
-	"scaffold":      true,
-	"sandbox-exec":  true,
-	"sandbox-probe": true,
+	"scaffold":            true,
+	"sandbox-exec":        true,
+	"sandbox-probe":       true,
+	"sandbox-spawn-probe": true,
 }
 
 // Run dispatches a CLI invocation and returns the process exit code.

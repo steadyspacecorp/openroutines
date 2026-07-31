@@ -64,6 +64,15 @@ func GenerateKey() string {
 func LoadKey(dir string) ([]byte, error) {
 	keyHex := ""
 	if path := os.Getenv(EnvMasterKeyFile); path != "" {
+		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+			info, err := os.Stat(path)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", EnvMasterKeyFile, err)
+			}
+			if info.Mode().Perm()&0o077 != 0 {
+				return nil, fmt.Errorf("%s must not be readable by group or other users in production (mode %04o)", EnvMasterKeyFile, info.Mode().Perm())
+			}
+		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", EnvMasterKeyFile, err)

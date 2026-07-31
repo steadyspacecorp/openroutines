@@ -22,8 +22,10 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
@@ -38,8 +40,9 @@ import (
 
 // Scheduling constants: the tick cadence and the per-run attempt cap.
 const (
-	TickInterval = time.Minute
-	MaxAttempts  = 5
+	TickInterval   = time.Minute
+	MaxAttempts    = 5
+	attemptUIDBase = 20000
 )
 
 // Schedulable reports whether a tick will act on a routine at all. Exported
@@ -86,7 +89,7 @@ type Supervisor struct {
 	// Bounded parallelism: slots caps concurrent attempts, inFlight keeps a
 	// routine's next dispatch off state its executing attempt still owns,
 	// runs lets shutdown wait for every settlement.
-	slots      chan struct{}
+	slots      chan uint32
 	runs       sync.WaitGroup
 	inFlightMu sync.Mutex
 	inFlight   map[string]bool
@@ -135,6 +138,10 @@ func New(dir string) (*Supervisor, error) {
 	}
 	secrets := scrub.NewSet(memory.SupervisorSecrets(dir))
 	mem := memory.At(dir)
+	slots := make(chan uint32, agent.RunSlots())
+	for i := range agent.RunSlots() {
+		slots <- uint32(attemptUIDBase + i)
+	}
 	return &Supervisor{
 		Dir:        dir,
 		InstanceID: memory.InstanceID(),
@@ -146,7 +153,7 @@ func New(dir string) (*Supervisor, error) {
 		retention:  retention,
 		noOrigin:   !mem.HasOrigin(),
 		secrets:    secrets,
-		slots:      make(chan struct{}, agent.RunSlots()),
+		slots:      slots,
 		inFlight:   map[string]bool{},
 		waitLogged: map[string]bool{},
 		lastPolled: map[string]time.Time{},
@@ -266,9 +273,20 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return // shutting down: stop launching, nothing is reserved yet
 		}
+		release, lockErr := runner.LockRoutine(s.Dir, d.r.Name)
+		if lockErr != nil {
+			if errors.Is(lockErr, runner.ErrRoutineLocked) {
+				s.warnf("%s: attempt already in flight elsewhere (lock held) -- skipping this tick", d.r.Name)
+			} else {
+				s.errorf("%s: routine lock: %v", d.r.Name, lockErr)
+			}
+			continue
+		}
+		var attemptUID uint32
 		select {
-		case s.slots <- struct{}{}:
+		case attemptUID = <-s.slots:
 		default:
+			release()
 			// warn, not info: an agent whose due work is parked behind a
 			// full pool looks idle from outside, and an operator running at
 			// warn level deserves to know why nothing is happening.
@@ -281,12 +299,13 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		delete(s.waitLogged, d.r.Name)
 		s.setRunning(d.r.Name, true)
 		s.runs.Add(1)
-		go func(d dispatch) {
+		go func(d dispatch, uid uint32, release func()) {
 			defer s.runs.Done()
-			defer func() { <-s.slots }()
+			defer release()
+			defer func() { s.slots <- uid }()
 			defer s.setRunning(d.r.Name, false)
-			s.execute(ctx, d.r, d.st, now)
-		}(d)
+			s.execute(ctx, d.r, d.st, now, uid)
+		}(d, attemptUID, release)
 	}
 }
 
@@ -533,22 +552,7 @@ func (s *Supervisor) abandon(name string, st *schedule.State, detail string, now
 }
 
 // execute runs one attempt of a pending logical run and settles the outcome.
-func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time) {
-	// The per-routine kernel lock covers the whole attempt, snapshot through
-	// settlement. Held means a manual `routines run` is mid-flight in this
-	// checkout: skip and log, per design decision "Overlap" -- the pending run
-	// retries on a later tick.
-	release, lockErr := runner.LockRoutine(s.Dir, r.Name)
-	if lockErr != nil {
-		if errors.Is(lockErr, runner.ErrRoutineLocked) {
-			s.warnf("%s: attempt already in flight elsewhere (lock held) -- skipping this tick", r.Name)
-		} else {
-			s.errorf("%s: routine lock: %v", r.Name, lockErr)
-		}
-		return
-	}
-	defer release()
-
+func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) {
 	agent, err := config.Load(s.Dir)
 	if err != nil {
 		s.errorf("%s: %v", r.Name, err)
@@ -587,26 +591,29 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		AttemptID:      fmt.Sprintf("attempt_%02d", p.Attempts),
 		ScheduledFor:   p.ScheduledFor.Format(time.RFC3339),
 		CoveredThrough: p.CoveredThrough.Format(time.RFC3339),
+		AttemptUID:     attemptUID,
+	}
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	if !s.noOrigin {
+		// Ownership proof begins once the reservation is durable and remains
+		// live through staging, execution, settlement, and push.
+		stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun)
+		defer stopHeartbeat()
 	}
 	staged, err := runner.Stage(s.Dir, agent, r, meta, &s.memMu)
+	if err == nil && !s.noOrigin && !s.renewLease() {
+		staged.Discard()
+		s.warnf("%s: %s not started -- lease lost after staging; the current holder will retry it", r.Name, p.RunID)
+		return
+	}
 
 	s.infof("%s: %s %s starting (scheduled %s)", r.Name, p.RunID, meta.AttemptID, meta.ScheduledFor)
 
-	// The lease is heartbeated while the attempt runs, not only before it:
-	// run length and lease TTL are decoupled, so a run may last hours without
-	// inviting a second instance to judge this one dead. The heartbeat stops
-	// -- joined, not just signalled -- before this attempt settles.
-	runCtx, cancelRun := context.WithCancel(ctx)
-	defer cancelRun()
 	var res *runner.ExecResult
 	var staging *runner.Staging
 	if err == nil {
-		stopHeartbeat := func() {}
-		if !s.noOrigin {
-			stopHeartbeat = s.keepLeaseAlive(runCtx, cancelRun)
-		}
 		res, staging, err = staged.Run(runCtx)
-		stopHeartbeat()
 	}
 	detail := ""
 	fatal := false
@@ -627,6 +634,14 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	// reservations and settlements and the tick's own bookkeeping.
 	s.memMu.Lock()
 	defer s.memMu.Unlock()
+	if !s.noOrigin && !s.renewLease() {
+		giveBack()
+		if err := st.Save(s.stateDir()); err != nil {
+			s.errorf("%s: %v", r.Name, err)
+		}
+		s.warnf("%s: %s settlement discarded -- lease lost before import; the current holder will retry it", r.Name, p.RunID)
+		return
+	}
 
 	// The settlement commit carries this attempt's scheduling consequences:
 	// success clears pending and advances the watermark; the final failed
@@ -657,8 +672,17 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	if settlement.Discarded {
 		s.infof("%s: discarded staged events.md change (events: false)", r.Name)
 	}
-	for _, f := range settlement.Conflicted {
-		s.warnf("%s: %s and a concurrent run edited the same lines in %s -- both versions kept; curate the file if they disagree", r.Name, p.RunID, f)
+	for i, conflict := range settlement.Conflicted {
+		_ = s.mem.AppendHumanTask(fmt.Sprintf("task-%s-memory-conflict-%d", p.RunID, i+1),
+			fmt.Sprintf("Resolve concurrent memory edit from routine %s run %s: canonical %s was left unchanged; competing version saved at %s", r.Name, p.RunID, conflict.Path, conflict.Quarantine))
+		s.warnf("%s: %s concurrent edit to %s quarantined at %s -- canonical memory left unchanged", r.Name, p.RunID, conflict.Path, conflict.Quarantine)
+	}
+	conflictCommitOK := true
+	if len(settlement.Conflicted) > 0 {
+		if _, err := s.mem.Commit(fmt.Sprintf("Record %s memory conflicts", p.RunID)); err != nil {
+			conflictCommitOK = false
+			s.errorf("%s: %s conflict task commit: %v", r.Name, p.RunID, err)
+		}
 	}
 	switch {
 	case settlement.Outcome == runner.Canceled:
@@ -674,6 +698,9 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		// abandon() already said so.
 	default:
 		s.errorf("%s: %s attempt failed (%s) -- will retry", r.Name, p.RunID, settlement.Detail)
+	}
+	if !conflictCommitOK {
+		return // keep completion and remediation together on the next successful push
 	}
 	s.pushBestEffort()
 }
@@ -861,15 +888,18 @@ func (s *Supervisor) warnKeyDelivery() {
 func (s *Supervisor) verifySandbox() error {
 	switch {
 	case os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
-		self, err := os.Executable()
-		if err != nil {
-			return err
-		}
 		// Constructed, like every other child: an inherited environment
 		// would republish the supervisor's keys in the probe's own
 		// /proc/<pid>/environ. TMPDIR is the scratch scope it confines.
-		probe := exec.Command(self, "sandbox-probe")
-		probe.Env = []string{"TMPDIR=" + os.Getenv("TMPDIR")}
+		probe := exec.Command(sandbox.HelperPath, "sandbox-probe")
+		probe.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{
+			Uid: attemptUIDBase,
+			Gid: attemptUIDBase,
+		}}
+		probe.Env = []string{
+			"TMPDIR=" + os.Getenv("TMPDIR"),
+			sandbox.EnvAttemptUID + "=" + strconv.Itoa(attemptUIDBase),
+		}
 		out, probeErr := probe.Output()
 		if probeErr == nil {
 			s.infof("filesystem sandbox: %s active for model processes", strings.TrimSpace(string(out)))

@@ -105,6 +105,10 @@ func TestConcurrencyConfig(t *testing.T) {
 	if got := a.RunSlots(); got != 1 {
 		t.Fatalf("negative concurrency must fall back to serial, got %d", got)
 	}
+	a.Concurrency = MaxConcurrency + 1
+	if p := a.Problems(); len(p) != 1 || !strings.Contains(p[0], "maximum") {
+		t.Fatalf("excessive concurrency: want one maximum problem, got %v", p)
+	}
 }
 
 // The configuration file resolves newest spelling first: .yml, then the

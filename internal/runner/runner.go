@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -58,6 +59,7 @@ type Meta struct {
 	AttemptID      string
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
+	AttemptUID     uint32 // production-only identity reserved by the supervisor
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -165,9 +167,9 @@ type Result struct {
 	Outcome    Outcome
 	ExitCode   int
 	Duration   time.Duration
-	Commit     string   // memory commit hash, when one was made
-	Hint       string   // classified failure cause, when one was recognized
-	Conflicted []string // memory files where a concurrent run's edits were union-merged in
+	Commit     string            // memory commit hash, when one was made
+	Hint       string            // classified failure cause, when one was recognized
+	Conflicted []memory.Conflict // semantic edits preserved outside the canonical file
 }
 
 const runIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -258,6 +260,14 @@ type StagedRun struct {
 	ocArgs    []string
 }
 
+// Discard releases a staged attempt that will not be spawned (for example,
+// because its supervisor lost the lease after staging). It is idempotent with
+// the same best-effort cleanup used after a run.
+func (sr *StagedRun) Discard() {
+	sr.secrets.release()
+	sr.staging.Cleanup()
+}
+
 // Stage prepares one attempt without spawning anything. mu is the caller's
 // memory lock, held only around the section that reads the memory worktree
 // and supervisor-owned state -- credential resolution can spend seconds on
@@ -265,6 +275,9 @@ type StagedRun struct {
 // not hold up every other attempt's settlement. On error, everything Stage
 // acquired -- derived credentials, the workspace -- is already released.
 func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (*StagedRun, error) {
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && meta.AttemptUID == 0 {
+		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
+	}
 	model, err := EffectiveModel(agent, r)
 	if err != nil {
 		return nil, err
@@ -350,6 +363,15 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	if err := os.MkdirAll(runTmp, 0o755); err != nil {
 		return nil, err
 	}
+	attemptHome := filepath.Join(workspace, attemptHomeName)
+	if meta.AttemptUID != 0 && os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+		if err := prepareWorkspaceAccess(workspace); err != nil {
+			return nil, fmt.Errorf("preparing read-only attempt workspace: %w", err)
+		}
+		if err := prepareAttemptOwnership(meta.AttemptUID, staging.MemoryDir, runTmp, attemptHome); err != nil {
+			return nil, fmt.Errorf("preparing attempt uid %d: %w", meta.AttemptUID, err)
+		}
+	}
 
 	// Clean environment: constructed, never inherited.
 	env := []string{
@@ -420,6 +442,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 	r, meta, staging := sr.r, sr.meta, sr.staging
 	workspace, runTmp, env, ocArgs := sr.workspace, sr.runTmp, sr.env, sr.ocArgs
+	attemptHome := filepath.Join(workspace, attemptHomeName)
 	model, timeout, level, secrets := sr.model, sr.timeout, sr.level, sr.secrets
 	defer secrets.release()
 	ok := false
@@ -449,14 +472,9 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 			// a shared writable opencode home let one routine persist state --
 			// plugins included -- into a later routine's session. Provider
 			// auth arrives by env var, so opencode needs no durable home.
-			self, err := os.Executable()
-			if err != nil {
-				return nil, nil, err
-			}
-			attemptHome := filepath.Join(workspace, attemptHomeName)
 			ocExec = hostOpencodeExec(workspace)
 			ro, rw := sandbox.Paths(workspace, staging.MemoryDir, runTmp, home, attemptHome)
-			cmd = exec.Command(self, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
+			cmd = exec.Command(sandbox.HelperPath, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
 			cmd.Env = append(env,
 				"PATH="+os.Getenv("PATH"),
 				"HOME="+attemptHome,
@@ -466,6 +484,7 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 				"TMPDIR="+runTmp,
 				sandbox.EnvRO+"="+sandbox.JoinPaths(ro),
 				sandbox.EnvRW+"="+sandbox.JoinPaths(rw),
+				sandbox.EnvAttemptUID+"="+strconv.FormatUint(uint64(meta.AttemptUID), 10),
 				sandbox.EnvUnsafeOverride+"="+os.Getenv(sandbox.EnvUnsafeOverride),
 			)
 		} else {
@@ -481,6 +500,12 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 		}
 		cmd.Dir = workspace
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+			cmd.SysProcAttr.Credential = &syscall.Credential{
+				Uid: meta.AttemptUID,
+				Gid: meta.AttemptUID,
+			}
+		}
 	} else {
 		if _, err := exec.LookPath("docker"); err != nil {
 			return nil, nil, fmt.Errorf("docker is required to run routines -- the model process executes in a container (see README prerequisites); contributors with opencode installed locally can set OPENROUTINES_NATIVE=1")
@@ -664,7 +689,7 @@ type Settlement struct {
 	// Conflicted names files where this run and a concurrently settled run
 	// edited the same lines: the import kept both sides (union merge), and
 	// somebody should be able to see that it happened.
-	Conflicted []string
+	Conflicted []memory.Conflict
 }
 
 // Settle makes one attempt's end durable in memory -- the single settlement
@@ -730,7 +755,7 @@ func parseAttempt(attemptID string) int {
 // tree. A routine with events: false cannot record events: a staged change
 // to events.md is discarded -- the worktree copy wins, the rest of the tree
 // imports normally. Reports whether such a change was discarded.
-func importMemory(dir string, r *routine.Routine, staging *Staging) (discarded bool, conflicted []string, err error) {
+func importMemory(dir string, r *routine.Routine, staging *Staging) (discarded bool, conflicted []memory.Conflict, err error) {
 	mem := memory.At(dir)
 	if !r.FM.RecordsEvents() {
 		if discarded, err = memory.RestoreFile(staging.MemoryDir, staging.BaseDir, "events.md"); err != nil {
