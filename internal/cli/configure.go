@@ -29,7 +29,7 @@ func cmdConfigure(args []string) int {
 	if len(positional) != 0 {
 		return fail(fmt.Errorf("%s", configureUsage))
 	}
-	yes := flags["--yes"] == "true"
+	_, yes := flags["--yes"]
 
 	dir := "."
 	agent, err := config.Load(dir)

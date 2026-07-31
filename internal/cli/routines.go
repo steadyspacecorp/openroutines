@@ -125,7 +125,8 @@ func parseRoutineRunArgs(args []string) (string, bool, bool, error) {
 	if len(positional) != 1 {
 		return "", false, false, fmt.Errorf("%s", routinesRunUsage)
 	}
-	return positional[0], flags["--no-memory"] == "true", false, nil
+	_, noMemory := flags["--no-memory"]
+	return positional[0], noMemory, false, nil
 }
 
 func routinesNew(args []string) int {
