@@ -103,7 +103,7 @@ func TestLandlockConfinement(t *testing.T) {
 		"LT_HOME_ATTEMPT="+attemptHome,
 		"LT_SEEDED="+seeded,
 		"LT_DEPLOY_KEY="+deployKey,
-		"LT_AUTH_STORE="+authStore,
+		"LT_AUTH_STORE="+authStore, // gitleaks:allow -- synthetic fixture
 		"LT_SHM_PLANTED="+planted,
 		fmt.Sprintf("LT_PARENT_PID=%d", os.Getpid()),
 	)

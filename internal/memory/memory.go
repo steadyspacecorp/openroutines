@@ -739,7 +739,7 @@ func (m *Memory) AppendHumanTask(taskID, description string) error {
 	for end > section+1 && strings.TrimSpace(lines[end-1]) == "" {
 		end--
 	}
-	out := append(lines[:end:end], append([]string{entry}, lines[end:]...)...)
+	out := slices.Insert(lines, end, entry)
 	return os.WriteFile(p, []byte(strings.Join(out, "\n")), 0o644)
 }
 

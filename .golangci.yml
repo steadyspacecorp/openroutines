@@ -5,9 +5,13 @@ version: "2"
 linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused
   enable:
+    - errorlint
+    - gocritic
     - misspell
+    - nolintlint
     - revive
     - unconvert
+    - unparam
   settings:
     errcheck:
       # Close on read paths and RemoveAll cleanup are ignore-by-design;
@@ -16,6 +20,14 @@ linters:
         - (io.Closer).Close
         - (*os.File).Close
         - os.RemoveAll
+    govet:
+      enable-all: true
+      disable:
+        # fieldalignment: struct-packing micro-optimization, not worth the churn.
+        - fieldalignment
+        # shadow: flags the idiomatic `if err := f(); err != nil` guard
+        # whenever an outer err exists.
+        - shadow
   exclusions:
     rules:
       # Test scaffolding writes fixtures without ceremony; the assertions
@@ -23,6 +35,14 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+      # Test helpers often take parameters that happen to be uniform.
+      - path: _test\.go
+        linters:
+          - unparam
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
 
 formatters:
   enable:

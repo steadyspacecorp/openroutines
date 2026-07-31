@@ -18,7 +18,7 @@ func TestDeriveOAuth2Client(t *testing.T) {
 		gotID = r.PostForm.Get("client_id")
 		gotSecret = r.PostForm.Get("client_secret")
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"token_type":"bearer","access_token":"minted-bearer-123","expires_in":172800}`))
+		_, _ = w.Write([]byte(`{"token_type":"bearer","access_token":"minted-bearer-123","expires_in":172800}`)) // gitleaks:allow -- synthetic fixture
 	}))
 	defer server.Close()
 

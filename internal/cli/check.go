@@ -197,11 +197,12 @@ func cmdCheck(args []string) int {
 			errs = append(errs, "forecast: true contradicts events: false -- a routine that does not record work cannot forecast it")
 		}
 		for _, c := range r.FM.Credentials {
-			if !creds.NamePattern.MatchString(c) {
+			switch {
+			case !creds.NamePattern.MatchString(c):
 				errs = append(errs, fmt.Sprintf("credential name %q must be lowercase snake_case", c))
-			} else if strings.HasPrefix(c, creds.ReservedPrefix) {
+			case strings.HasPrefix(c, creds.ReservedPrefix):
 				errs = append(errs, fmt.Sprintf("credential name %q collides with the reserved %s_* prefix", c, strings.ToUpper(creds.ReservedPrefix)))
-			} else if creds.ReservedEnvName(c) {
+			case creds.ReservedEnvName(c):
 				errs = append(errs, fmt.Sprintf("credential name %q would shadow the %s environment variable in the run", c, strings.ToUpper(c)))
 			}
 		}

@@ -84,13 +84,13 @@ func cmdScaffold(args []string) int {
 	// initial commit -- so configure's changes land as a reviewable diff
 	// and git log works from minute one.
 	if out, err := exec.Command("git", "init", "--quiet", "--initial-branch=main", target).CombinedOutput(); err != nil {
-		return fail(fmt.Errorf("git init: %v: %s", err, out))
+		return fail(fmt.Errorf("git init: %w: %s", err, out))
 	}
 	git := func(args ...string) error {
 		cmd := exec.Command("git", append([]string{"-C", target}, args...)...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, out)
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
 		}
 		return nil
 	}

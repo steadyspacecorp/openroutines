@@ -371,10 +371,10 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 // a git or provider error is a durable, published record -- redaction belongs
 // at the append seam, not at whichever call site remembered it.
 func TestSupervisorEntriesRedactSecrets(t *testing.T) {
-	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
-	const deployKeyLine = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAt"
+	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"    // gitleaks:allow -- synthetic fixture
+	const deployKeyLine = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAt" // gitleaks:allow -- synthetic fixture
 	t.Setenv("OPENROUTINES_MASTER_KEY", masterKey)
-	t.Setenv("OPENROUTINES_DEPLOY_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\n"+deployKeyLine+"\n-----END OPENSSH PRIVATE KEY-----")
+	t.Setenv("OPENROUTINES_DEPLOY_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\n"+deployKeyLine+"\n-----END OPENSSH PRIVATE KEY-----") // gitleaks:allow -- synthetic fixture
 	dir := deliveryFixture(t)
 
 	if err := At(dir).AppendEvent("2026-07-29 supervisor: push failed with key " + deployKeyLine + " and master key " + masterKey); err != nil {
@@ -401,7 +401,7 @@ func TestSupervisorEntriesRedactSecrets(t *testing.T) {
 }
 
 func TestGitChildEnvExcludesSupervisorSecrets(t *testing.T) {
-	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899" // gitleaks:allow -- synthetic fixture
 	t.Setenv("OPENROUTINES_MASTER_KEY", masterKey)
 	t.Setenv("OPENROUTINES_DEPLOY_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----")
 	t.Setenv("HOME", t.TempDir())

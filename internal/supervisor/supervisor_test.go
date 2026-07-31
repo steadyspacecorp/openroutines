@@ -1358,7 +1358,7 @@ func TestLogLevelGatesSupervisorLines(t *testing.T) {
 			t.Fatalf("%s line missing at warn level: %q", want, buf.String())
 		}
 	}
-	if s := (&Supervisor{Log: log.New(&buf, "", 0)}); s.level != config.LogDebug {
+	if s := (&Supervisor{}); s.level != config.LogDebug {
 		t.Fatal("a bare struct must suppress nothing")
 	}
 }

@@ -6,12 +6,12 @@ Security reports: see [SECURITY.md](SECURITY.md).
 
 ## Working on the framework
 
-The CLI, supervisor, and embedded agent template all live in this repo. You'll need Go 1.25+ (install it however you like; if you use [mise](https://mise.jdx.dev), the pinned toolchain in `mise.toml` is picked up automatically). Build and test with the standard commands:
+The CLI, supervisor, and embedded agent template all live in this repo. You'll need Go 1.26.5 and [golangci-lint](https://golangci-lint.run) (install them however you like; `.tool-versions` records the versions CI uses). The Makefile holds every task entry point:
 
 ```bash
-go build ./...
-go vet ./...
-go test ./...
+make build      # the openroutines binary, into bin/
+make test       # go test ./...
+make verify     # everything CI runs
 ```
 
-Before handing work back, also run `golangci-lint run` and `bin/smoke` (builds the CLI, scaffolds a throwaway agent, and asserts `check` passes on a good agent and fails on a broken one) -- CI runs exactly these. [AGENTS.md](AGENTS.md) has the full conventions: vocabulary, style, and the design-first workflow.
+Before handing work back, run `make verify`: lint, `govulncheck`, a go.mod tidiness check, a gitleaks secret scan, the race-enabled test suite, and `bin/smoke` -- which builds the CLI, scaffolds a throwaway agent, and asserts `check` passes on a good agent and fails on a broken one. CI runs the same set. If you add a test fixture that reads like a credential, mark it with a trailing `// gitleaks:allow` comment saying why it isn't one. [AGENTS.md](AGENTS.md) has the full conventions: vocabulary, style, and the design-first workflow.

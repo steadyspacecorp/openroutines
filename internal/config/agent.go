@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -145,7 +146,7 @@ func Load(dir string) (*Agent, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	var a Agent
-	if err := dec.Decode(&a); err != nil && err != io.EOF {
+	if err := dec.Decode(&a); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
 	}
 	return &a, nil

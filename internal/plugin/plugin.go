@@ -330,7 +330,7 @@ func parseManifestFile(path string) (*Manifest, string, error) {
 	var m Manifest
 	dec := yaml.NewDecoder(bytes.NewReader([]byte(rest[:end])))
 	dec.KnownFields(true)
-	if err := dec.Decode(&m); err != nil && err != io.EOF {
+	if err := dec.Decode(&m); err != nil && !errors.Is(err, io.EOF) {
 		return nil, "", fmt.Errorf("%s: %w", FileName, err)
 	}
 	return &m, strings.TrimSpace(rest[end+len("\n---\n"):]), nil
