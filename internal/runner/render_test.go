@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -132,5 +133,32 @@ func TestRendererShowsToolErrors(t *testing.T) {
 	out := renderEvents(t, nil, raw)
 	if !strings.Contains(out, "connection refused") || !strings.Contains(out, "error") {
 		t.Fatalf("tool failure should render its error:\n%s", out)
+	}
+}
+
+// Concurrent runs share one stdout, so every log line carries its routine's
+// name -- and a line split across writes is held and emitted whole, never as
+// an unattributed fragment.
+func TestPrefixWriterAttributesWholeLines(t *testing.T) {
+	var out bytes.Buffer
+	w := newPrefixWriter(&out, "check-in")
+	if _, err := w.Write([]byte("first li")); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a partial line escaped before its newline: %q", out.String())
+	}
+	if _, err := w.Write([]byte("ne\nsecond line\ntail")); err != nil {
+		t.Fatal(err)
+	}
+	w.Flush()
+	want := "check-in | first line\ncheck-in | second line\ncheck-in | tail\n"
+	if out.String() != want {
+		t.Fatalf("prefixed output = %q, want %q", out.String(), want)
+	}
+	before := out.Len()
+	w.Flush() // nothing held: idle
+	if out.Len() != before {
+		t.Fatal("an empty flush wrote something")
 	}
 }

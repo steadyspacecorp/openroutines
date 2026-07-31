@@ -318,7 +318,9 @@ func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 		}
 		os.WriteFile(filepath.Join(wt, "events.md"), []byte("base\n"), 0o644)
 		os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("none\n"), 0o644)
-		staging := &Staging{MemoryDir: t.TempDir()}
+		staging := &Staging{MemoryDir: t.TempDir(), BaseDir: t.TempDir()}
+		os.WriteFile(filepath.Join(staging.BaseDir, "events.md"), []byte("base\n"), 0o644)
+		os.WriteFile(filepath.Join(staging.BaseDir, "tasks.md"), []byte("none\n"), 0o644)
 		os.WriteFile(filepath.Join(staging.MemoryDir, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
 		os.WriteFile(filepath.Join(staging.MemoryDir, "tasks.md"), []byte("- [ ] real work\n"), 0o644)
 		return dir, staging
@@ -327,7 +329,7 @@ func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 	off := false
 	dir, staging := setup(t)
 	r := &routine.Routine{Name: "quiet", FM: routine.Frontmatter{Events: &off}}
-	discarded, err := importMemory(dir, r, staging)
+	discarded, _, err := importMemory(dir, r, staging)
 	if err != nil || !discarded {
 		t.Fatalf("discarded=%v err=%v, want true nil", discarded, err)
 	}
@@ -341,7 +343,7 @@ func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 
 	dir, staging = setup(t)
 	r = &routine.Routine{Name: "loud", FM: routine.Frontmatter{}}
-	discarded, err = importMemory(dir, r, staging)
+	discarded, _, err = importMemory(dir, r, staging)
 	if err != nil || discarded {
 		t.Fatalf("discarded=%v err=%v, want false nil", discarded, err)
 	}
@@ -470,7 +472,7 @@ func TestConsumeMarkerLivesInStagedMemory(t *testing.T) {
 	}
 	// It is a receipt for the runtime, not memory content: import drops it.
 	r := &routine.Routine{Name: "report", FM: routine.Frontmatter{Consumes: "memory"}}
-	if _, err := importMemory(dir, r, staging); err != nil {
+	if _, _, err := importMemory(dir, r, staging); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(wt, memory.ConsumeMarker)); !os.IsNotExist(err) {

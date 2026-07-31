@@ -6,7 +6,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
@@ -42,11 +45,19 @@ func cmdSandboxExec(args []string) int {
 	case err == nil:
 		fmt.Fprintf(os.Stderr, "[sandbox: %s]\n", desc)
 	case os.Getenv(sandbox.EnvUnsafeOverride) == "1":
-		fmt.Fprintf(os.Stderr, "[sandbox: DISABLED by %s -- model process is unconfined]\n", sandbox.EnvUnsafeOverride)
+		fmt.Fprintf(os.Stderr, "[sandbox: landlock disabled by %s; uid isolation remains active]\n", sandbox.EnvUnsafeOverride)
 	case runtime.GOOS != "linux":
 		fmt.Fprintf(os.Stderr, "[sandbox: unavailable on %s -- native mode is a dev opt-in, proceeding unconfined]\n", runtime.GOOS)
 	default:
-		return fail(fmt.Errorf("sandbox required but could not be applied (%v) -- refusing to run the model process; set %s=1 to override deliberately", err, sandbox.EnvUnsafeOverride))
+		fmt.Fprintf(os.Stderr, "[sandbox: landlock unavailable (%v); uid isolation remains active]\n", err)
+	}
+
+	uid64, parseErr := strconv.ParseUint(os.Getenv(sandbox.EnvAttemptUID), 10, 32)
+	if parseErr != nil || uid64 == 0 {
+		return fail(fmt.Errorf("sandbox-exec: invalid attempt uid %q", os.Getenv(sandbox.EnvAttemptUID)))
+	}
+	if err := sandbox.DropIdentity(uint32(uid64)); err != nil {
+		return fail(fmt.Errorf("sandbox-exec: uid isolation failed: %w", err))
 	}
 
 	bin, err := exec.LookPath(args[0])
@@ -64,11 +75,65 @@ func cmdSandboxExec(args []string) int {
 // and reports whether confinement is available. Used by supervise at boot
 // (fail closed before the first run, not during it).
 func cmdSandboxProbe(_ []string) int {
-	desc, err := sandbox.Apply([]string{os.TempDir()}, nil)
-	if err != nil {
+	uid64, err := strconv.ParseUint(os.Getenv(sandbox.EnvAttemptUID), 10, 32)
+	if err != nil || uid64 == 0 {
+		fmt.Fprintln(os.Stderr, "attempt uid is required")
+		return 1
+	}
+	desc := "uid isolation"
+	if landlock, landlockErr := sandbox.Apply([]string{os.TempDir()}, nil); landlockErr == nil {
+		desc += " + " + landlock
+	}
+	if err := sandbox.DropIdentity(uint32(uid64)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	fmt.Println(desc)
+	return 0
+}
+
+func cmdSandboxSpawnProbe(_ []string) int {
+	uid64, err := strconv.ParseUint(os.Getenv(sandbox.EnvAttemptUID), 10, 32)
+	if err != nil || uid64 == 0 {
+		return fail(fmt.Errorf("sandbox-spawn-probe: attempt uid is required"))
+	}
+	cmd := exec.Command(sandbox.HelperPath, "sandbox-probe")
+	cmd.Env = []string{
+		"TMPDIR=" + os.Getenv("TMPDIR"),
+		sandbox.EnvAttemptUID + "=" + strconv.FormatUint(uid64, 10),
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{
+		Uid: uint32(uid64),
+		Gid: uint32(uid64),
+	}}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fail(fmt.Errorf("sandbox-spawn-probe: %w: %s", err, strings.TrimSpace(string(out))))
+	}
+	hold := exec.Command(sandbox.HelperPath, "sandbox-hold")
+	hold.SysProcAttr = &syscall.SysProcAttr{
+		Setsid: true,
+		Credential: &syscall.Credential{
+			Uid: uint32(uid64),
+			Gid: uint32(uid64),
+		},
+	}
+	if err := hold.Start(); err != nil {
+		return fail(fmt.Errorf("sandbox-spawn-probe: start cleanup target: %w", err))
+	}
+	if err := sandbox.ReapIdentity(uint32(uid64)); err != nil {
+		_ = hold.Process.Kill()
+		_ = hold.Wait()
+		return fail(fmt.Errorf("sandbox-spawn-probe: cleanup: %w", err))
+	}
+	if err := hold.Wait(); err == nil {
+		return fail(fmt.Errorf("sandbox-spawn-probe: cleanup target survived"))
+	}
+	fmt.Print(string(out))
+	return 0
+}
+
+func cmdSandboxHold(_ []string) int {
+	time.Sleep(time.Minute)
 	return 0
 }

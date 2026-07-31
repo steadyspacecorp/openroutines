@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -39,7 +40,16 @@ func nativeMode() bool {
 // pinned opencode). Layer caching makes every build after the first fast --
 // but the first build downloads a Debian base and opencode, so say so: a
 // silent multi-minute wait reads as a hang and gets Ctrl-C'd.
+// imageBuildMu keeps concurrent attempts from racing `docker build` on the
+// same tag: the first does the real build, the rest hit its cache. The
+// build always runs -- it is how a Dockerfile edit takes effect -- but two
+// first-boot builds at once would download everything twice and print the
+// notice twice.
+var imageBuildMu sync.Mutex
+
 func ensureRuntimeImage(agentDir, tag string) error {
+	imageBuildMu.Lock()
+	defer imageBuildMu.Unlock()
 	if err := exec.Command("docker", "image", "inspect", tag).Run(); err != nil {
 		fmt.Printf("building the local runtime image (first build downloads a Debian base and opencode -- this can take a few minutes)...\n")
 	}

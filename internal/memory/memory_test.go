@@ -74,7 +74,7 @@ func TestStagedCopyNeverFollowsSymlinks(t *testing.T) {
 	if err := os.Symlink(secret, filepath.Join(staging, "events.md")); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	if err := copyStaged(staging, wt); err == nil {
+	if _, err := copyStaged(staging, t.TempDir(), wt); err == nil {
 		t.Error("expected the copy to refuse a symlinked staged file")
 	}
 	if raw, _ := os.ReadFile(filepath.Join(wt, "events.md")); strings.Contains(string(raw), "SECRET") {
@@ -91,7 +91,7 @@ func TestStagedCopyRefusesHardLinks(t *testing.T) {
 	if err := os.Link(outside, filepath.Join(staging, "events.md")); err != nil {
 		t.Skip("hard links unavailable")
 	}
-	if err := copyStaged(staging, wt); err == nil || !strings.Contains(err.Error(), "hard link") {
+	if _, err := copyStaged(staging, t.TempDir(), wt); err == nil || !strings.Contains(err.Error(), "hard link") {
 		t.Errorf("expected hard-link rejection, got %v", err)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(wt, "events.md")); strings.Contains(string(raw), "SECRET") {
@@ -107,7 +107,7 @@ func TestStagedCopyRefusesPathsValidateWouldReject(t *testing.T) {
 		staging, wt := t.TempDir(), t.TempDir()
 		os.MkdirAll(filepath.Dir(filepath.Join(staging, rel)), 0o755)
 		os.WriteFile(filepath.Join(staging, rel), []byte("x\n"), 0o644)
-		if err := copyStaged(staging, wt); err == nil {
+		if _, err := copyStaged(staging, t.TempDir(), wt); err == nil {
 			t.Errorf("%s: expected the copy to refuse it", rel)
 		}
 		if _, err := os.Stat(filepath.Join(wt, rel)); !os.IsNotExist(err) {
@@ -121,7 +121,7 @@ func TestStagedCopyRefusesPathsValidateWouldReject(t *testing.T) {
 func TestStagedCopyRefusesOversizedFile(t *testing.T) {
 	staging, wt := t.TempDir(), t.TempDir()
 	os.WriteFile(filepath.Join(staging, "events.md"), make([]byte, maxFile+1), 0o644)
-	if err := copyStaged(staging, wt); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, err := copyStaged(staging, t.TempDir(), wt); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("expected an oversize rejection, got %v", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestStagedCopyRejectionLeavesTheWorktreeUntouched(t *testing.T) {
 	if err := os.Symlink(filepath.Join(t.TempDir(), "secret.txt"), filepath.Join(staging, "zz.md")); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	if err := copyStaged(staging, wt); err == nil {
+	if _, err := copyStaged(staging, t.TempDir(), wt); err == nil {
 		t.Fatal("expected the copy to refuse the symlink")
 	}
 	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "committed\n" {
@@ -153,17 +153,15 @@ func TestStagedCopyRejectionLeavesTheWorktreeUntouched(t *testing.T) {
 // copy's confinement: a staged path swapped for a symlink must not redirect
 // the write out of the staging tree.
 func TestRestoreFileNeverWritesOutsideStaging(t *testing.T) {
-	repo := t.TempDir()
-	wt := At(repo).Worktree()
-	os.MkdirAll(wt, 0o755)
-	os.WriteFile(filepath.Join(wt, "events.md"), []byte("worktree events\n"), 0o644)
+	base := t.TempDir()
+	os.WriteFile(filepath.Join(base, "events.md"), []byte("base events\n"), 0o644)
 	staging := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	os.WriteFile(outside, []byte("do not touch\n"), 0o644)
 	if err := os.Symlink(outside, filepath.Join(staging, "events.md")); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	if _, err := At(repo).RestoreFile(staging, "events.md"); err == nil {
+	if _, err := RestoreFile(staging, base, "events.md"); err == nil {
 		t.Error("expected RestoreFile to refuse a symlinked staged path")
 	}
 	if got, _ := os.ReadFile(outside); string(got) != "do not touch\n" {
@@ -193,7 +191,7 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 	// A human edit, uncommitted: refuse.
 	wt := At(repo).Worktree()
 	os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("- [ ] mid-edit\n"), 0o644)
-	if err := At(repo).Import(staging); err == nil || !strings.Contains(err.Error(), "uncommitted") {
+	if _, err := At(repo).Import(staging, t.TempDir()); err == nil || !strings.Contains(err.Error(), "uncommitted") {
 		t.Fatalf("expected dirty-worktree refusal, got %v", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(wt, "tasks.md")); string(got) != "- [ ] mid-edit\n" {
@@ -204,7 +202,7 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 	if _, err := At(repo).Commit("human curation"); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(repo).Import(staging); err != nil {
+	if _, err := At(repo).Import(staging, t.TempDir()); err != nil {
 		t.Fatalf("clean worktree should import: %v", err)
 	}
 
@@ -217,37 +215,36 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 	os.MkdirAll(filepath.Join(wt, "state"), 0o755)
 	os.WriteFile(filepath.Join(wt, "state", "r.json"), []byte("{}"), 0o644)
 	os.WriteFile(filepath.Join(staging, "events.md"), []byte("- staged fact\n- another\n"), 0o644)
-	if err := At(repo).Import(staging); err != nil {
+	if _, err := At(repo).Import(staging, t.TempDir()); err != nil {
 		t.Fatalf("supervisor-owned dirt must not block import: %v", err)
 	}
 }
 
 func TestRestoreFileDiscardsStagedChange(t *testing.T) {
-	repo := t.TempDir()
-	wt := At(repo).Worktree()
-	os.MkdirAll(wt, 0o755)
-	os.WriteFile(filepath.Join(wt, "events.md"), []byte("base\n"), 0o644)
+	base := t.TempDir()
+	os.WriteFile(filepath.Join(base, "events.md"), []byte("base\n"), 0o644)
 	staging := t.TempDir()
 
-	// A staged edit is undone: the worktree copy wins.
+	// A staged edit is undone: the base copy wins, so the import's
+	// unchanged-versus-base rule then skips the file.
 	os.WriteFile(filepath.Join(staging, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
-	changed, err := At(repo).RestoreFile(staging, "events.md")
+	changed, err := RestoreFile(staging, base, "events.md")
 	if err != nil || !changed {
 		t.Fatalf("edited file: changed=%v err=%v, want true nil", changed, err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(staging, "events.md")); string(got) != "base\n" {
-		t.Fatalf("staged events.md = %q, want worktree copy restored", got)
+		t.Fatalf("staged events.md = %q, want base copy restored", got)
 	}
 
 	// An untouched file reports no change.
-	changed, err = At(repo).RestoreFile(staging, "events.md")
+	changed, err = RestoreFile(staging, base, "events.md")
 	if err != nil || changed {
 		t.Fatalf("untouched file: changed=%v err=%v, want false nil", changed, err)
 	}
 
 	// A staged deletion is undone too -- import would otherwise delete it.
 	os.Remove(filepath.Join(staging, "events.md"))
-	changed, err = At(repo).RestoreFile(staging, "events.md")
+	changed, err = RestoreFile(staging, base, "events.md")
 	if err != nil || !changed {
 		t.Fatalf("deleted file: changed=%v err=%v, want true nil", changed, err)
 	}
@@ -255,9 +252,9 @@ func TestRestoreFileDiscardsStagedChange(t *testing.T) {
 		t.Fatal("staged events.md not restored after deletion")
 	}
 
-	// A file the worktree never had must not be created through staging.
+	// A file the snapshot never had must not be created through staging.
 	os.WriteFile(filepath.Join(staging, "novel.md"), []byte("x\n"), 0o644)
-	changed, err = At(repo).RestoreFile(staging, "novel.md")
+	changed, err = RestoreFile(staging, base, "novel.md")
 	if err != nil || !changed {
 		t.Fatalf("created file: changed=%v err=%v, want true nil", changed, err)
 	}
@@ -516,5 +513,79 @@ func TestOriginRewriteRequiresADeployKey(t *testing.T) {
 
 	if got := resolvedOrigin(t, dir); got != "https://github.com/acme/agent.git" {
 		t.Errorf("origin rewritten without a deploy key to authenticate it: %q", got)
+	}
+}
+
+// The import is a three-way merge against the run's base snapshot; these are
+// the decisions it can make, tested directly because the wrong one is silent
+// (design decision "Overlap: kernel locks, skip-don't-queue").
+func TestImportThreeWayMerge(t *testing.T) {
+	repo := t.TempDir()
+	wt := At(repo).Worktree()
+	os.MkdirAll(wt, 0o755)
+	staging, base := t.TempDir(), t.TempDir()
+	write := func(dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// stale.md: untouched by the run while a concurrent settlement moved the
+	// worktree -- the stale staged copy must not regress it.
+	write(base, "stale.md", "v1\n")
+	write(staging, "stale.md", "v1\n")
+	write(wt, "stale.md", "v1\n- concurrent\n")
+	// mine.md: only this run changed it -- the staged copy lands whole.
+	write(base, "mine.md", "a\n")
+	write(staging, "mine.md", "a\nb\n")
+	write(wt, "mine.md", "a\n")
+	// both.md: both runs appended -- the verified append merge keeps both.
+	write(base, "both.md", "x\n")
+	write(staging, "both.md", "x\ntheirs\n")
+	write(wt, "both.md", "x\nours\n")
+	// semantic.md: both runs rewrote the same fact -- canonical stays valid
+	// and the competing version is quarantined for human resolution.
+	write(base, "semantic.md", "status: idle\n")
+	write(staging, "semantic.md", "status: away\n")
+	write(wt, "semantic.md", "status: shipping\n")
+	// gone.md: the run deleted it and nothing moved underneath -- deleted.
+	write(base, "gone.md", "old\n")
+	write(wt, "gone.md", "old\n")
+	// contested.md: the run deleted it but a concurrent settlement wrote to
+	// it -- the deletion loses.
+	write(base, "contested.md", "old\n")
+	write(wt, "contested.md", "old\n- news\n")
+
+	conflicted, err := At(repo).Import(staging, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := func(name string) string {
+		raw, _ := os.ReadFile(filepath.Join(wt, name))
+		return string(raw)
+	}
+	if got("stale.md") != "v1\n- concurrent\n" {
+		t.Errorf("stale.md regressed to the staged copy: %q", got("stale.md"))
+	}
+	if got("mine.md") != "a\nb\n" {
+		t.Errorf("mine.md = %q, want the staged change", got("mine.md"))
+	}
+	if b := got("both.md"); !strings.Contains(b, "ours") || !strings.Contains(b, "theirs") {
+		t.Errorf("both.md = %q, want both sides kept", b)
+	}
+	if len(conflicted) != 1 || conflicted[0].Path != "semantic.md" {
+		t.Errorf("conflicted = %v, want semantic.md quarantined", conflicted)
+	} else if raw, err := os.ReadFile(filepath.Join(wt, conflicted[0].Quarantine)); err != nil || string(raw) != "status: away\n" {
+		t.Errorf("quarantine = %q, %v; want competing semantic edit", raw, err)
+	}
+	if got("semantic.md") != "status: shipping\n" {
+		t.Errorf("semantic.md = %q, want last valid canonical version", got("semantic.md"))
+	}
+	if _, err := os.Stat(filepath.Join(wt, "gone.md")); !os.IsNotExist(err) {
+		t.Error("gone.md should be deleted: the worktree still matched the base")
+	}
+	if got("contested.md") != "old\n- news\n" {
+		t.Errorf("contested.md = %q, want the concurrent write kept over the deletion", got("contested.md"))
 	}
 }

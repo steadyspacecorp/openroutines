@@ -14,6 +14,12 @@ import (
 // Linux is an explicit development opt-in.
 var ErrUnsupported = errors.New("landlock is unavailable on this platform")
 
+// HelperPath is the capless production re-exec target. The supervisor binary
+// is executable only by the agent identity because it carries UID-switching
+// capabilities; attempts may execute this copy, but it carries no capability
+// with which to change identity.
+const HelperPath = "/usr/local/lib/openroutines/sandbox-exec"
+
 // EnvUnsafeOverride deliberately disables the fail-closed sandbox policy.
 // The name is ugly on purpose.
 const EnvUnsafeOverride = "OPENROUTINES_UNSAFE_NO_SANDBOX"
@@ -21,8 +27,9 @@ const EnvUnsafeOverride = "OPENROUTINES_UNSAFE_NO_SANDBOX"
 // Env vars carrying rule paths from the runner to sandbox-exec
 // (os.PathListSeparator-joined).
 const (
-	EnvRO = "OPENROUTINES_SANDBOX_RO"
-	EnvRW = "OPENROUTINES_SANDBOX_RW"
+	EnvRO         = "OPENROUTINES_SANDBOX_RO"
+	EnvRW         = "OPENROUTINES_SANDBOX_RW"
+	EnvAttemptUID = "OPENROUTINES_ATTEMPT_UID"
 )
 
 // Paths computes the rule sets for one attempt: read on the workspace, the

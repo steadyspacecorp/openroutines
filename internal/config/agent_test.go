@@ -70,6 +70,47 @@ func TestMaxTimeoutCeiling(t *testing.T) {
 	}
 }
 
+// concurrency is the run-slot count: unset and 0 both mean serial (an
+// existing agent must not gain parallelism on upgrade -- the scaffold
+// template is what opts new agents in), and a negative value is a problem.
+func TestConcurrencyConfig(t *testing.T) {
+	a := Agent{
+		Name:        "a",
+		Description: "d",
+		Owner:       Owner{Email: "o@example.com"},
+		Timezone:    "UTC",
+		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
+	}
+	if got := a.RunSlots(); got != 1 {
+		t.Fatalf("unset concurrency = %d, want serial", got)
+	}
+	a.Concurrency = 0
+	if got := a.RunSlots(); got != 1 {
+		t.Fatalf("concurrency 0 = %d, want serial", got)
+	}
+	if p := a.Problems(); len(p) != 0 {
+		t.Fatalf("zero concurrency flagged: %v", p)
+	}
+	a.Concurrency = 4
+	if p := a.Problems(); len(p) != 0 {
+		t.Fatalf("valid concurrency flagged: %v", p)
+	}
+	if got := a.RunSlots(); got != 4 {
+		t.Fatalf("concurrency 4 read as %d", got)
+	}
+	a.Concurrency = -1
+	if p := a.Problems(); len(p) != 1 || !strings.Contains(p[0], "concurrency") {
+		t.Fatalf("negative concurrency: want one problem, got %v", p)
+	}
+	if got := a.RunSlots(); got != 1 {
+		t.Fatalf("negative concurrency must fall back to serial, got %d", got)
+	}
+	a.Concurrency = MaxConcurrency + 1
+	if p := a.Problems(); len(p) != 1 || !strings.Contains(p[0], "maximum") {
+		t.Fatalf("excessive concurrency: want one maximum problem, got %v", p)
+	}
+}
+
 // The configuration file resolves newest spelling first: .yml, then the
 // legacy .yaml, then the original agent.yaml -- all read, so a pinned
 // agent renames on its own schedule (#50).

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -17,7 +18,56 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
+
+// A trigger poll registers bearer material from the tick goroutine while run
+// goroutines log through writers that read the same scrub set -- with a
+// plain map that is a fatal concurrent map read/write, not just a race.
+func TestScrubRegistrationRacesLogging(t *testing.T) {
+	secrets := scrub.NewSet(map[string]string{"master key": "seed-value"})
+	s := &Supervisor{Log: log.New(scrub.NewSetWriter(io.Discard, secrets), "", 0), secrets: secrets}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 500 {
+			s.registerScrub(map[string]string{"poll_token": fmt.Sprintf("bearer-%d", i)})
+		}
+	}()
+	for i := range 500 {
+		s.errorf("run line %d carrying seed-value", i)
+	}
+	<-done
+	if got := scrub.Redact("bearer-499 and seed-value", s.secrets.Snapshot()); strings.Contains(got, "bearer-499") || strings.Contains(got, "seed-value") {
+		t.Fatalf("registered and seeded values must both redact, got %q", got)
+	}
+}
+
+func TestAttemptIdentityIsNotReusedWhenCleanupFails(t *testing.T) {
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	s := &Supervisor{
+		Log:   log.New(io.Discard, "", 0),
+		slots: make(chan uint32, 1),
+		fatal: make(chan error, 1),
+		reap: func(uid uint32) error {
+			return fmt.Errorf("pid escaped uid %d", uid)
+		},
+	}
+	if s.releaseIdentity(20000) {
+		t.Fatal("cleanup failure returned the identity to the pool")
+	}
+	if len(s.slots) != 0 {
+		t.Fatal("poisoned identity is available for reuse")
+	}
+	select {
+	case err := <-s.fatal:
+		if !strings.Contains(err.Error(), "refusing to reuse identity") {
+			t.Fatalf("fatal error = %v", err)
+		}
+	default:
+		t.Fatal("cleanup failure did not stop supervision")
+	}
+}
 
 // fakeOpencode is a stand-in for the real binary: it reads fake-mode from
 // its own directory (the workspace is allow-list built and carries no test
@@ -133,6 +183,28 @@ func loadState(t *testing.T, s *Supervisor) *schedule.State {
 	return st
 }
 
+// optInConcurrency writes concurrency into a fixture's config, the way an
+// operator would: parallelism is opt-in, and these tests are the opt-in path.
+func optInConcurrency(t *testing.T, dir string, n int) {
+	t.Helper()
+	path := filepath.Join(dir, "openroutines.yml")
+	cfg, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(cfg, fmt.Appendf(nil, "concurrency: %d\n", n)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// tickWait runs one scheduling pass and waits for every attempt it launched
+// to settle -- the synchronous shape the scheduling tests want, and exactly
+// what a serial Tick used to do.
+func (s *Supervisor) tickWait(ctx context.Context, now time.Time) {
+	s.Tick(ctx, now)
+	s.runs.Wait()
+}
+
 func readFile(_ *testing.T, path string) string {
 	raw, _ := os.ReadFile(path)
 	return string(raw)
@@ -201,7 +273,7 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 
 	// First sight: registers, does not run.
-	s.Tick(ctx, t0)
+	s.tickWait(ctx, t0)
 	st := loadState(t, s)
 	if st == nil || st.Pending != nil {
 		t.Fatalf("expected registered state with no pending, got %+v", st)
@@ -211,7 +283,7 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	}
 
 	// One minute later: one occurrence due -> runs, imports, advances.
-	s.Tick(ctx, t0.Add(61*time.Second))
+	s.tickWait(ctx, t0.Add(61*time.Second))
 	st = loadState(t, s)
 	if st.Pending != nil {
 		t.Fatalf("pending should be cleared after success: %+v", st.Pending)
@@ -239,8 +311,8 @@ func TestSessionThatEndedMidTurnIsNotCompleted(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
-	s.Tick(ctx, t0.Add(61*time.Second))
+	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
 	if strings.Contains(records, `"outcome":"completed"`) {
@@ -276,8 +348,8 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
-	s.Tick(ctx, t0.Add(61*time.Second))
+	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	st := loadState(t, s)
 	if st.Pending != nil {
@@ -308,7 +380,7 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 
 	os.WriteFile(filepath.Join(dir, "routines", "typo.md"), []byte(
 		"---\nschedule: \"0 9 * * *\"\nactive: false\n---\nFixed.\n"), 0o644)
-	s.Tick(ctx, t0.Add(122*time.Second))
+	s.tickWait(ctx, t0.Add(122*time.Second))
 	if events := readFile(t, filepath.Join(dir, "memory", "events.md")); !strings.Contains(events, "routine typo loads again") {
 		t.Errorf("the repair should be recorded too: %q", events)
 	}
@@ -329,7 +401,7 @@ func TestShadowedRoutineNameIsNotScheduled(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 
 	for i := 0; i <= 40; i++ {
-		s.Tick(ctx, t0.Add(time.Duration(i)*7*time.Minute))
+		s.tickWait(ctx, t0.Add(time.Duration(i)*7*time.Minute))
 	}
 
 	if st := loadState(t, s); st != nil {
@@ -367,8 +439,8 @@ func TestScheduleHoldsAgentWallClockAcrossDST(t *testing.T) {
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 
-	s.Tick(ctx, time.Date(2026, 10, 31, 12, 0, 0, 0, ny)) // register, EDT
-	s.Tick(ctx, time.Date(2026, 11, 2, 12, 0, 0, 0, ny))  // after fall-back, EST
+	s.tickWait(ctx, time.Date(2026, 10, 31, 12, 0, 0, 0, ny)) // register, EDT
+	s.tickWait(ctx, time.Date(2026, 11, 2, 12, 0, 0, 0, ny))  // after fall-back, EST
 
 	st, err := schedule.Load(s.stateDir(), "daily")
 	if err != nil {
@@ -395,8 +467,8 @@ func TestDetachedDescendantDoesNotSurviveACleanRun(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
-	s.Tick(ctx, t0.Add(61*time.Second))
+	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	var pid int
 	if _, err := fmt.Sscan(readFile(t, filepath.Join(fakeBinDir(), "detached.pid")), &pid); err != nil || pid == 0 {
@@ -420,9 +492,9 @@ func TestCatchupCollapsesMissedFirings(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
+	s.tickWait(ctx, t0) // register
 	// Ten minutes of downtime: ten missed firings must collapse into ONE run.
-	s.Tick(ctx, t0.Add(10*time.Minute))
+	s.tickWait(ctx, t0.Add(10*time.Minute))
 	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
 	if got := strings.Count(ledger, "ran run_"); got != 1 {
 		t.Fatalf("expected exactly 1 collapsed catch-up run, got %d: %q", got, ledger)
@@ -439,9 +511,9 @@ func TestRetrySameRunIDThenAbandon(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
+	s.tickWait(ctx, t0) // register
 	now := t0.Add(time.Minute)
-	s.Tick(ctx, now) // attempt 1 fails
+	s.tickWait(ctx, now) // attempt 1 fails
 	st := loadState(t, s)
 	if st.Pending == nil || st.Pending.Attempts != 1 {
 		t.Fatalf("expected pending with 1 attempt, got %+v", st.Pending)
@@ -455,7 +527,7 @@ func TestRetrySameRunIDThenAbandon(t *testing.T) {
 			break
 		}
 		now = schedule.NextRetryAt(st.Pending).Add(time.Second)
-		s.Tick(ctx, now)
+		s.tickWait(ctx, now)
 	}
 	st = loadState(t, s)
 	if st.Pending != nil {
@@ -484,10 +556,10 @@ func TestBackoffHoldsBetweenAttempts(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)
-	s.Tick(ctx, t0.Add(time.Minute)) // attempt 1
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(time.Minute)) // attempt 1
 	// Immediately after, a tick must NOT retry (backoff).
-	s.Tick(ctx, t0.Add(time.Minute).Add(10*time.Second))
+	s.tickWait(ctx, t0.Add(time.Minute).Add(10*time.Second))
 	st := loadState(t, s)
 	if st.Pending.Attempts != 1 {
 		t.Fatalf("backoff violated: %d attempts", st.Pending.Attempts)
@@ -500,14 +572,14 @@ func driveToAbandonment(t *testing.T, s *Supervisor, from time.Time) time.Time {
 	t.Helper()
 	ctx := context.Background()
 	now := from.Add(time.Minute)
-	s.Tick(ctx, now) // mint pending + attempt 1
+	s.tickWait(ctx, now) // mint pending + attempt 1
 	for {
 		st := loadState(t, s)
 		if st.Pending == nil {
 			return now
 		}
 		now = schedule.NextRetryAt(st.Pending).Add(time.Second)
-		s.Tick(ctx, now)
+		s.tickWait(ctx, now)
 	}
 }
 
@@ -516,7 +588,7 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	s.Tick(ctx, t0) // register
+	s.tickWait(ctx, t0) // register
 
 	now := t0
 	for range 3 {
@@ -527,7 +599,7 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 		t.Fatalf("breaker should be tripped after 3 abandonments: %+v", st)
 	}
 	// While cooling down: ticks mint no new pending runs.
-	s.Tick(ctx, now.Add(2*time.Minute))
+	s.tickWait(ctx, now.Add(2*time.Minute))
 	if st = loadState(t, s); st.Pending != nil {
 		t.Fatalf("no runs should start during cool-down: %+v", st.Pending)
 	}
@@ -540,7 +612,7 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(binDir, "fake-mode"), []byte("ok\n"), 0o644)
 	after := st.CooldownUntil.Add(time.Minute)
-	s.Tick(ctx, after)
+	s.tickWait(ctx, after)
 	if st = loadState(t, s); st.Pending != nil || st.ConsecutiveAbandons != 0 || st.CoolingDown(after) {
 		t.Fatalf("success should reset the breaker: %+v", st)
 	}
@@ -560,8 +632,8 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)                     // register
-	s.Tick(ctx, t0.Add(61*time.Second)) // run 1: first-run inbox, consume
+	s.tickWait(ctx, t0)                     // register
+	s.tickWait(ctx, t0.Add(61*time.Second)) // run 1: first-run inbox, consume
 	inbox := readFile(t, filepath.Join(dir, "memory", "inbox-copy.md"))
 	if !strings.Contains(inbox, "first run") || !strings.Contains(inbox, "No pending changes") {
 		t.Fatalf("first inbox should be empty-at-current-state: %q", inbox)
@@ -571,7 +643,7 @@ func TestConsumerCursorAdvances(t *testing.T) {
 		t.Fatalf("cursor should exist after consume: %+v, %v", c1, err)
 	}
 
-	s.Tick(ctx, t0.Add(121*time.Second)) // run 2: feed carries run 1's commit
+	s.tickWait(ctx, t0.Add(121*time.Second)) // run 2: feed carries run 1's commit
 	inbox = readFile(t, filepath.Join(dir, "memory", "inbox-copy.md"))
 	if !strings.Contains(inbox, "Run every-minute") {
 		t.Fatalf("second inbox should carry run 1's completion commit: %q", inbox)
@@ -594,14 +666,14 @@ func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
+	s.tickWait(ctx, t0) // register
 	if err := memory.At(dir).SaveCursor("every-minute", memory.Cursor{
 		ConsumedThrough: "0123456789abcdef0123456789abcdef01234567",
 		ByRun:           "run_gone",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s.Tick(ctx, t0.Add(61*time.Second))
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	st := loadState(t, s)
 	if st.Pending != nil {
@@ -637,8 +709,8 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)                     // register
-	s.Tick(ctx, t0.Add(61*time.Second)) // one run completes, memory pushed
+	s.tickWait(ctx, t0)                     // register
+	s.tickWait(ctx, t0.Add(61*time.Second)) // one run completes, memory pushed
 	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
 	if got := strings.Count(ledger, "ran run_"); got != 1 {
 		t.Fatalf("expected 1 run before the rewrite, got %d: %q", got, ledger)
@@ -652,7 +724,7 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 
 	// Every subsequent tick refuses to dispatch.
 	for i := 0; i < 3; i++ {
-		s.Tick(ctx, t0.Add(time.Duration(2+i)*time.Minute))
+		s.tickWait(ctx, t0.Add(time.Duration(2+i)*time.Minute))
 	}
 	ledger = readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
 	if got := strings.Count(ledger, "ran run_"); got != 1 {
@@ -675,8 +747,8 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)                     // register
-	s.Tick(ctx, t0.Add(61*time.Second)) // one run completes, memory pushed
+	s.tickWait(ctx, t0)                     // register
+	s.tickWait(ctx, t0.Add(61*time.Second)) // one run completes, memory pushed
 
 	// Rewrite the memory branch on origin out from under the supervisor.
 	discarded := gitOut(t, bare, "rev-parse", "refs/heads/memory")
@@ -686,7 +758,7 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	runCmd(t, c, "git", "push", "-q", "--force", "origin", "memory")
 	rewritten := gitOut(t, bare, "rev-parse", "refs/heads/memory")
 
-	s.Tick(ctx, t0.Add(2*time.Minute))
+	s.tickWait(ctx, t0.Add(2*time.Minute))
 	if !s.syncBlocked {
 		t.Fatal("precondition: the supervisor should be sync-blocked after a rewrite")
 	}
@@ -711,7 +783,7 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	// The documented repair: a human accepts the new history by moving the
 	// accepted ref. Sync recovers, and the stranded blocker lands on the branch.
 	runCmd(t, bare, "git", "update-ref", "refs/openroutines/accepted", rewritten)
-	s.Tick(ctx, t0.Add(3*time.Minute))
+	s.tickWait(ctx, t0.Add(3*time.Minute))
 	if s.syncBlocked {
 		t.Fatal("sync should have recovered once the new history was accepted")
 	}
@@ -734,11 +806,11 @@ func TestStrandedRefFromAnotherContainerSurvives(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register, memory branch on origin
+	s.tickWait(ctx, t0) // register, memory branch on origin
 	earlier := gitOut(t, bare, "rev-parse", "refs/heads/memory")
 	runCmd(t, bare, "git", "update-ref", "refs/openroutines/blocked", earlier)
 
-	s.Tick(ctx, t0.Add(61*time.Second)) // a run completes and pushes memory
+	s.tickWait(ctx, t0.Add(61*time.Second)) // a run completes and pushes memory
 
 	if got := gitOut(t, bare, "rev-parse", "refs/openroutines/blocked"); got != earlier {
 		t.Fatalf("a successor's push must leave someone else's stranded ref alone: %.8s -> %s", earlier, got)
@@ -757,19 +829,19 @@ func TestUnreachableOriginRecordsADurableBlocker(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register, origin healthy
+	s.tickWait(ctx, t0) // register, origin healthy
 
 	gone := bare + ".gone"
 	if err := os.Rename(bare, gone); err != nil {
 		t.Fatal(err)
 	}
-	s.Tick(ctx, t0.Add(61*time.Second))
-	s.Tick(ctx, t0.Add(122*time.Second))
+	s.tickWait(ctx, t0.Add(61*time.Second))
+	s.tickWait(ctx, t0.Add(122*time.Second))
 	if err := os.Rename(gone, bare); err != nil {
 		t.Fatal(err)
 	}
 
-	s.Tick(ctx, t0.Add(183*time.Second))
+	s.tickWait(ctx, t0.Add(183*time.Second))
 
 	tasks := gitOut(t, bare, "cat-file", "-p", "refs/heads/memory:tasks.md")
 	if !strings.Contains(tasks, "origin unreachable") {
@@ -783,13 +855,12 @@ func TestUnreachableOriginRecordsADurableBlocker(t *testing.T) {
 	}
 }
 
-// Two instances, one origin. A tick has no bounded wall time -- every due
-// routine executes serially to completion -- so a lease heartbeated only at
-// the top of the tick goes stale while the holder is still working, and a
-// second instance booting into that window (a rolling deploy's overlap) reads
-// an expired lease and starts dispatching the very runs the first is running.
-// The heartbeat has to keep up with the work.
-func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
+// Two instances, one origin, three due routines against two run slots. Runs
+// execute in parallel while the pool has room, a full pool skips to the next
+// tick instead of queueing, and through all of it only the lease holder may
+// dispatch -- a second instance booting into the window (a rolling deploy's
+// overlap) reads a live lease and launches nothing.
+func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	dir := fixture(t, "slow")
 	base := t.TempDir()
 	bare := filepath.Join(base, "origin.git")
@@ -803,8 +874,8 @@ func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
 	}
 	run(base, "git", "init", "-q", "-b", "main", "--bare", bare)
 
-	// Three routines due in the same tick: the tick takes several times one
-	// run's wall time, which is exactly the gap a per-tick heartbeat leaves.
+	// Three routines due in the same tick against the default two slots: two
+	// launch at once, the third waits for a later tick.
 	writeRoutines := func(dir string) {
 		for _, name := range []string{"every-minute", "second", "third"} {
 			os.WriteFile(filepath.Join(dir, "routines", name+".md"), []byte(
@@ -814,15 +885,12 @@ func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
 	writeRoutines(dir)
 	run(dir, "git", "remote", "add", "origin", bare)
 
+	optInConcurrency(t, dir, 2)
 	holder := newSupervisor(t, dir)
-	// Scaled down, with room on both sides: runs sleep 3s, so a per-tick
-	// heartbeat is 7.5s old at the assertion below (expired) while a per-run
-	// one is 1.5s old (live) -- neither margin is close enough that a slow
-	// git push flips the verdict.
 	holder.leaseTTL = 6 * time.Second
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	holder.Tick(ctx, t0) // register
+	holder.tickWait(ctx, t0) // register
 
 	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	started := filepath.Join(binDir, "started")
@@ -840,9 +908,9 @@ func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		holder.Tick(ctx, t0.Add(61*time.Second))
+		holder.tickWait(ctx, t0.Add(61*time.Second))
 	}()
-	waitForRuns(1) // intent is pushed: the second instance can adopt memory from origin
+	waitForRuns(2) // both slots filled; intents are pushed, so the second instance can adopt from origin
 
 	other := t.TempDir()
 	os.MkdirAll(filepath.Join(other, "routines"), 0o755)
@@ -854,25 +922,54 @@ func TestLeaseStaysLiveThroughALongTick(t *testing.T) {
 	second.InstanceID = "second-instance"
 	second.leaseTTL = holder.leaseTTL
 
-	waitForRuns(3)                      // the holder is deep into its tick
-	time.Sleep(1500 * time.Millisecond) // older than a per-tick heartbeat could survive
-
 	acquireCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 	if err := second.acquireLease(acquireCtx); err == nil {
-		t.Fatal("second instance took a live lease while the first was mid-tick")
+		t.Fatal("second instance took a live lease while the first had runs in flight")
 	}
 	// The second instance's memory is the holder's, adopted from origin, so
-	// the ledger cannot say who ran what: count launches instead. Three
-	// routines are due, and only the lease holder may run them.
-	second.Tick(ctx, t0.Add(61*time.Second))
-	if got := strings.Count(readFile(t, started), "run_"); got != 3 {
-		t.Fatalf("second instance dispatched behind the lease holder: %d runs launched, want 3", got)
+	// the ledger cannot say who ran what: count launches instead. Only the
+	// lease holder may dispatch.
+	second.tickWait(ctx, t0.Add(61*time.Second))
+	if got := strings.Count(readFile(t, started), "run_"); got != 2 {
+		t.Fatalf("second instance dispatched behind the lease holder: %d runs launched, want 2", got)
 	}
 
-	<-done
+	<-done // the first wave settled; the third routine's pending run waited, unlaunched
+	if got := strings.Count(readFile(t, started), "run_"); got != 2 {
+		t.Fatalf("a full pool must skip to the next tick, not queue: %d runs launched, want 2", got)
+	}
+	// Same tick minute again: nothing new mints, only the waiting pending run
+	// dispatches into the now-free pool.
+	holder.tickWait(ctx, t0.Add(61*time.Second))
 	if got := strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_"); got != 3 {
-		t.Fatalf("lease holder should have run all 3 routines, got %d", got)
+		t.Fatalf("lease holder should have run all 3 routines across two ticks, got %d", got)
+	}
+}
+
+// Two due routines with two slots run at the same time, not back to back --
+// and their settlements into the same shared memory file compose instead of
+// the later import clobbering the earlier one's lines.
+func TestRunsExecuteInParallel(t *testing.T) {
+	dir := fixture(t, "slow")
+	if err := os.WriteFile(filepath.Join(dir, "routines", "second.md"), []byte(
+		"---\nschedule: \"* * * * *\"\n---\nDo the other fake thing.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	optInConcurrency(t, dir, 2)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+	s.tickWait(ctx, t0) // register
+
+	start := time.Now()
+	s.tickWait(ctx, t0.Add(61*time.Second))
+	if elapsed := time.Since(start); elapsed >= 5500*time.Millisecond {
+		// Each run sleeps 3s: serial is 6s+, parallel is one sleep plus overhead.
+		t.Fatalf("two 3s runs took %s -- they did not overlap", elapsed)
+	}
+	if got := strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_"); got != 2 {
+		t.Fatalf("concurrent settlements into one ledger file should compose, got %d entries", got)
 	}
 }
 
@@ -894,14 +991,14 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 	holder.leaseTTL = 1500 * time.Millisecond
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	holder.Tick(ctx, t0) // register
+	holder.tickWait(ctx, t0) // register
 
 	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	started := filepath.Join(binDir, "started")
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		holder.Tick(ctx, t0.Add(61*time.Second))
+		holder.tickWait(ctx, t0.Add(61*time.Second))
 	}()
 	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(readFile(t, started), "run_"); time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
@@ -945,14 +1042,14 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 	holder.leaseTTL = 1500 * time.Millisecond
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	holder.Tick(ctx, t0) // register
+	holder.tickWait(ctx, t0) // register
 
 	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	started := filepath.Join(binDir, "started")
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		holder.Tick(ctx, t0.Add(61*time.Second))
+		holder.tickWait(ctx, t0.Add(61*time.Second))
 	}()
 	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(readFile(t, started), "run_"); time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
@@ -1000,8 +1097,8 @@ func TestAttemptIsDurableBeforeTheModelStarts(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)                     // register
-	s.Tick(ctx, t0.Add(61*time.Second)) // mint the run, attempt 1
+	s.tickWait(ctx, t0)                     // register
+	s.tickWait(ctx, t0.Add(61*time.Second)) // mint the run, attempt 1
 
 	seen := replacementState(t, "every-minute")
 	if seen == nil || seen.Pending == nil {
@@ -1023,13 +1120,17 @@ func TestOnlyTheRunningAttemptIsReserved(t *testing.T) {
 		"---\nschedule: \"* * * * *\"\n---\nDo the other fake thing.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Serial (the unset default): with room for both, both reservations
+	// would be genuinely concurrent and genuinely owed. The property under
+	// test is that the reservation belongs to the executor -- a routine
+	// waiting for a slot has spent nothing.
 	withOrigin(t, dir)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0)                     // register both
-	s.Tick(ctx, t0.Add(61*time.Second)) // mint both, dispatch serially
+	s.tickWait(ctx, t0)                     // register both
+	s.tickWait(ctx, t0.Add(61*time.Second)) // mint both, dispatch serially
 
 	// The snapshot is the first routine's spawn: both runs exist durably, but
 	// only the one that started has spent an attempt.
@@ -1055,7 +1156,7 @@ func TestSpentAttemptsAbandonWithoutSettlement(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
+	s.tickWait(ctx, t0) // register
 	// What a run that killed the supervisor MaxAttempts times leaves behind.
 	scheduled := t0.Add(time.Minute)
 	st := loadState(t, s)
@@ -1067,7 +1168,7 @@ func TestSpentAttemptsAbandonWithoutSettlement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s.Tick(ctx, t0.Add(time.Hour))
+	s.tickWait(ctx, t0.Add(time.Hour))
 
 	if st = loadState(t, s); st.Pending != nil {
 		t.Fatalf("a run with no attempts left must be abandoned, still pending: %+v", st.Pending)
@@ -1096,7 +1197,7 @@ func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
+	s.tickWait(ctx, t0) // register
 
 	// The aftermath of a failed intent commit: pending state on disk only.
 	st := loadState(t, s)
@@ -1108,7 +1209,7 @@ func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
 		t.Fatal("precondition: the pending record should be uncommitted")
 	}
 
-	s.Tick(ctx, t0.Add(time.Minute)) // dispatches the orphaned pending run
+	s.tickWait(ctx, t0.Add(time.Minute)) // dispatches the orphaned pending run
 
 	seen := replacementState(t, "every-minute")
 	if seen == nil || seen.Pending == nil || seen.Pending.RunID != "run_orphaned" {
@@ -1126,7 +1227,7 @@ func TestFailedIntentCommitHoldsRunsAndRecordsATask(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
+	s.tickWait(ctx, t0) // register
 
 	cmd := exec.Command("git", "rev-parse", "--absolute-git-dir")
 	cmd.Dir = filepath.Join(dir, "memory")
@@ -1138,7 +1239,7 @@ func TestFailedIntentCommitHoldsRunsAndRecordsATask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s.Tick(ctx, t0.Add(61*time.Second))
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("an intent that cannot be committed must not dispatch, got %d runs", got)
@@ -1161,12 +1262,12 @@ func TestOrphanHoldingTheOutputPipeDoesNotParkTheTick(t *testing.T) {
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	s.Tick(ctx, t0) // register
+	s.tickWait(ctx, t0) // register
 
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
-		s.Tick(ctx, t0.Add(61*time.Second))
+		s.tickWait(ctx, t0.Add(61*time.Second))
 	}()
 	select {
 	case <-returned:
@@ -1185,8 +1286,8 @@ func TestRunRecordCarriesUsage(t *testing.T) {
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	s.Tick(ctx, t0)
-	s.Tick(ctx, t0.Add(time.Minute))
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(time.Minute))
 	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
 	last := ""
 	for _, l := range strings.Split(strings.TrimSpace(records), "\n") {

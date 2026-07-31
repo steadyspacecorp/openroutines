@@ -6,6 +6,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -373,6 +374,29 @@ func topSegment(rel string) string {
 	return strings.Split(rel, string(filepath.Separator))[0]
 }
 
+// CloneTree copies a snapshot tree verbatim: one Snapshot read of the
+// worktree becomes both the run's staged working copy and the import's
+// pristine base, so the two can never diverge.
+func CloneTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		dest := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		return copyFile(path, dest)
+	})
+}
+
 // stagedPathPolicy rejects a staged path that may not enter the worktree
 // whatever it holds: git control files, supervisor-owned bookkeeping, absurd
 // depth. Validate applies it for an early, whole-tree failure; the import
@@ -432,11 +456,19 @@ func Validate(stagingDir string) error {
 	})
 }
 
-// Import applies the staged tree to the worktree: copy every staged file in,
-// delete worktree files that no longer exist in staging. Caller commits.
-func (m *Memory) Import(stagingDir string) error {
+// Import applies the staged tree to the worktree as a three-way merge
+// against the base snapshot the run started from. A file the run left
+// untouched imports nothing -- concurrent runs settle between a run's
+// snapshot and its import, and a stale copy must never regress what they
+// wrote. A file only the run changed copies in whole. When both sides retain
+// the complete base and append, both suffixes compose. Any other concurrent
+// edit preserves the current canonical file and quarantines the staged
+// competitor for human resolution. A deletion applies only where the
+// worktree still matches the base -- erasing lines another run just wrote is
+// worse than keeping a file its deleter no longer wants. Caller commits.
+func (m *Memory) Import(stagingDir, baseDir string) (conflicted []Conflict, err error) {
 	if err := Validate(stagingDir); err != nil {
-		return err
+		return nil, err
 	}
 	wt := m.Worktree()
 	// Refuse to import over uncommitted human curation: Import overwrites and
@@ -455,15 +487,19 @@ func (m *Memory) Import(stagingDir string) error {
 			}
 			path := fields[len(fields)-1]
 			if !supervisorOwned[topSegment(path)] {
-				return fmt.Errorf("memory worktree has uncommitted changes (%s) -- refusing to import over them; commit or discard (git -C %s ...) and re-run", path, Dir)
+				return nil, fmt.Errorf("memory worktree has uncommitted changes (%s) -- refusing to import over them; commit or discard (git -C %s ...) and re-run", path, Dir)
 			}
 		}
 	}
-	if err := copyStaged(stagingDir, wt); err != nil {
-		return err
+	conflicted, err = copyStaged(stagingDir, baseDir, wt)
+	if err != nil {
+		return nil, err
 	}
-	// Remove worktree files the routine deleted in staging.
-	return filepath.WalkDir(wt, func(path string, d fs.DirEntry, err error) error {
+	// Remove worktree files the routine deleted in staging -- but only where
+	// the base agrees the file existed when the run saw it and the worktree
+	// hasn't moved since: a file another run created or changed in the
+	// meantime is theirs to keep.
+	return conflicted, filepath.WalkDir(wt, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -480,20 +516,29 @@ func (m *Memory) Import(stagingDir string) error {
 		if d.IsDir() {
 			return nil
 		}
-		if _, err := os.Stat(filepath.Join(stagingDir, rel)); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(stagingDir, rel)); !os.IsNotExist(err) {
+			return nil
+		}
+		base, berr := os.ReadFile(filepath.Join(baseDir, rel))
+		if berr != nil {
+			return nil // the run never saw this file; it cannot delete it
+		}
+		if cur, cerr := os.ReadFile(path); cerr == nil && bytes.Equal(cur, base) {
 			return os.Remove(path)
 		}
 		return nil
 	})
 }
 
-// RestoreFile puts the worktree's copy of one memory file back into the
-// staged tree, undoing whatever the run staged there. The enforcement half
-// of `events: false` (design decision "Memory records events, tasks, and
-// context"): the instruction tells the routine not to write the file, this
-// makes sure. Reports whether a staged change was discarded.
-func (m *Memory) RestoreFile(stagingDir, name string) (bool, error) {
-	want, werr := os.ReadFile(filepath.Join(m.Worktree(), name))
+// RestoreFile puts the base-snapshot copy of one memory file back into the
+// staged tree, undoing whatever the run staged there -- restored to base,
+// not to the live worktree, so the import's unchanged-versus-base rule then
+// skips the file entirely. The enforcement half of `events: false` (design
+// decision "Memory records events, tasks, and context"): the instruction
+// tells the routine not to write the file, this makes sure. Reports whether
+// a staged change was discarded.
+func RestoreFile(stagingDir, baseDir, name string) (bool, error) {
+	want, werr := os.ReadFile(filepath.Join(baseDir, name))
 	if werr != nil && !os.IsNotExist(werr) {
 		return false, werr
 	}
@@ -512,7 +557,7 @@ func (m *Memory) RestoreFile(stagingDir, name string) (bool, error) {
 		return false, serr
 	}
 	if os.IsNotExist(werr) {
-		// The worktree has no such file: the run must not create it either.
+		// The snapshot had no such file: the run must not create it either.
 		if serr != nil {
 			return false, nil
 		}
@@ -830,6 +875,13 @@ func (m *Memory) Status() WorktreeStatus {
 	return st
 }
 
+// Conflict records a semantic concurrent edit and the durable path where the
+// competing staged version was preserved.
+type Conflict struct {
+	Path       string
+	Quarantine string
+}
+
 // copyStaged brings every staged file into the worktree. Validate has walked
 // the tree by now, but staging is not quiescent: a descendant of the model
 // process can outlive the run and rewrite what the walk approved. So the copy
@@ -843,15 +895,15 @@ func (m *Memory) Status() WorktreeStatus {
 // passed. A rejection still fails the run, and Settle commits the failure
 // record -- so a half-copied worktree would commit part of a rejected run's
 // memory, which is the atomicity staging exists to provide.
-func copyStaged(stagingDir, wt string) error {
+func copyStaged(stagingDir, baseDir, wt string) (conflicted []Conflict, err error) {
 	root, err := os.OpenRoot(stagingDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = root.Close() }()
 	scratch, err := os.MkdirTemp(filepath.Dir(wt), ".openroutines-import-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
 
@@ -880,23 +932,89 @@ func copyStaged(stagingDir, wt string) error {
 		files = append(files, rel)
 		return copyStagedFile(root, rel, filepath.Join(scratch, rel))
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	for _, rel := range dirs {
 		if err := os.MkdirAll(filepath.Join(wt, rel), 0o755); err != nil {
-			return err
+			return nil, err
 		}
 	}
+	// The three-way decision, made on trusted bytes: the scratch copy is
+	// supervisor-owned by now, the base never entered the run's reach, and
+	// the worktree is ours. Every file's final bytes are resolved into the
+	// scratch tree first -- the merge can fail (git merge-file refuses
+	// NUL-bearing content), and a failure discovered mid-promotion would
+	// leave a half-imported worktree for the settlement to commit as the
+	// run's memory. The rename-only pass below is what keeps the promise
+	// above: promoted only once the whole staged tree has passed.
+	var promote []string
+	var quarantines []string
 	for _, rel := range files {
+		staged, err := os.ReadFile(filepath.Join(scratch, rel))
+		if err != nil {
+			return nil, err
+		}
+		base, berr := os.ReadFile(filepath.Join(baseDir, rel))
+		if berr != nil && !os.IsNotExist(berr) {
+			return nil, berr
+		}
+		if berr == nil && bytes.Equal(staged, base) {
+			continue // untouched by the run: never regress what settled since
+		}
+		cur, cerr := os.ReadFile(filepath.Join(wt, rel))
+		if cerr != nil && !os.IsNotExist(cerr) {
+			return nil, cerr
+		}
+		if !os.IsNotExist(cerr) && !bytes.Equal(cur, base) && !bytes.Equal(cur, staged) {
+			// The worktree moved while the run held its snapshot: a
+			// concurrently settled run changed the same file.
+			if merged, ok := appendMerge(cur, base, staged); ok {
+				if err := os.WriteFile(filepath.Join(scratch, rel), merged, 0o644); err != nil {
+					return nil, err
+				}
+			} else {
+				sum := sha256.Sum256(staged)
+				quarantine := filepath.Join("state", "conflicts", fmt.Sprintf("%x", sum[:8]), rel)
+				source := filepath.Join(scratch, rel)
+				target := filepath.Join(scratch, quarantine)
+				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+					return nil, err
+				}
+				if err := os.Rename(source, target); err != nil {
+					return nil, err
+				}
+				conflicted = append(conflicted, Conflict{Path: rel, Quarantine: quarantine})
+				quarantines = append(quarantines, quarantine)
+				continue // the last valid canonical file stays untouched
+			}
+		}
+		promote = append(promote, rel)
+	}
+	promote = append(promote, quarantines...)
+	for _, rel := range promote {
 		dest := filepath.Join(wt, rel)
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return err
+			return nil, err
 		}
 		if err := os.Rename(filepath.Join(scratch, rel), dest); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return conflicted, nil
+}
+
+// appendMerge composes only the shape we can prove safe: both descendants
+// retain the complete base and add bytes at its end. Semantic edits belong in
+// quarantine, never in an automatic union.
+func appendMerge(ours, base, theirs []byte) ([]byte, bool) {
+	if !bytes.HasPrefix(ours, base) || !bytes.HasPrefix(theirs, base) {
+		return nil, false
+	}
+	merged := make([]byte, 0, len(ours)+len(theirs)-len(base))
+	merged = append(merged, base...)
+	merged = append(merged, ours[len(base):]...)
+	merged = append(merged, theirs[len(base):]...)
+	return merged, true
 }
 
 // copyStagedFile copies one staged file into the scratch tree, bounded by the

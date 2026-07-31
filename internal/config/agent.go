@@ -63,6 +63,13 @@ type Defaults struct {
 // tokens for a day before anyone notices.
 const DefaultMaxTimeout = 6 * time.Hour
 
+// ScaffoldConcurrency is the run-slot count the scaffold template writes
+// into new agents' openroutines.yml. Deliberately not a fallback the code
+// applies to agents that never wrote the key: every concurrent run is a
+// container plus live model spend, and an upgrade must not silently double
+// either -- an existing agent stays serial until its operator opts in.
+const ScaffoldConcurrency = 2
+
 // Memory holds memory-behavior settings; see design decision "Memory has three
 // shared primitives" for the retention window semantics.
 type Memory struct {
@@ -82,6 +89,7 @@ type Agent struct {
 	Timezone    string                `yaml:"timezone"`
 	Defaults    Defaults              `yaml:"defaults"`
 	MaxTimeout  string                `yaml:"max_timeout,omitempty"`
+	Concurrency int                   `yaml:"concurrency,omitempty"`
 	LogLevel    string                `yaml:"log_level,omitempty"`
 	Memory      *Memory               `yaml:"memory,omitempty"`
 	Variables   map[string]string     `yaml:"variables,omitempty"`
@@ -98,6 +106,24 @@ func (a *Agent) MaxRunTimeout() time.Duration {
 	}
 	return DefaultMaxTimeout
 }
+
+// RunSlots is how many routines may execute at once: concurrency in the
+// configuration file. Unset and 0 both mean serial -- parallelism is an
+// opt-in an agent writes down, and the scaffold template opts new agents in
+// at ScaffoldConcurrency. Problems flags a negative value; New refuses to
+// boot on any problem, so the fallback here is for surfaces that read a
+// broken config anyway (status, check).
+func (a *Agent) RunSlots() int {
+	if a.Concurrency >= 1 {
+		return a.Concurrency
+	}
+	return 1
+}
+
+// MaxConcurrency bounds the reserved production UID pool. Each concurrent
+// attempt needs a distinct identity; a finite ceiling keeps that security
+// boundary explicit in the image and configuration.
+const MaxConcurrency = 32
 
 // Retention returns the configured memory retention string ("" = default).
 func (a *Agent) Retention() string {
@@ -180,6 +206,11 @@ func (a *Agent) Problems() []string {
 		if d, err := time.ParseDuration(a.MaxTimeout); err != nil || d <= 0 {
 			out = append(out, fmt.Sprintf("max_timeout %q is not a valid duration", a.MaxTimeout))
 		}
+	}
+	if a.Concurrency < 0 {
+		out = append(out, fmt.Sprintf("concurrency %d must be at least 1", a.Concurrency))
+	} else if a.Concurrency > MaxConcurrency {
+		out = append(out, fmt.Sprintf("concurrency %d exceeds the maximum of %d", a.Concurrency, MaxConcurrency))
 	}
 	if _, err := memory.ParseRetention(a.Retention()); err != nil {
 		out = append(out, fmt.Sprintf("memory.retention: %v", err))
