@@ -10,6 +10,8 @@ Plenty of tools will run a prompt on a schedule. OpenRoutines helps you run auto
 
 <img alt="an OpenRoutines agent running in Steady" src="docs/assets/openroutines-in-action.webp" />
 
+*Product Pal, an OpenRoutines agent, reporting its intentions, progress, and blockers to its team in Steady.*
+
 ## Why OpenRoutines?
 
 ### 📦 The repo is the agent
