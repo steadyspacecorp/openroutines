@@ -80,22 +80,27 @@ func ConfigureDeployKey() (bool, error) {
 //
 // Left alone: an origin that is already SSH, one carrying credentials of its
 // own, and one on a non-default port, whose SSH port the URL does not say.
-func ConfigureOriginRewrite(repoDir string) {
+//
+// Reports whether a rewrite was applied, so the supervisor can log the
+// protocol switch: a boot that suddenly speaks SSH to a host configured as
+// https is otherwise invisible when SSH egress is what's failing.
+func ConfigureOriginRewrite(repoDir string) bool {
 	if sshCommand == "" {
-		return
+		return false
 	}
 	raw, err := git(repoDir, "remote", "get-url", "origin")
 	if err != nil {
-		return
+		return false
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" || u.Port() != "" || u.User != nil {
-		return
+		return false
 	}
 	if u.Scheme != "https" && u.Scheme != "http" {
-		return
+		return false
 	}
 	originRewrite = []string{
 		"-c", fmt.Sprintf("url.git@%s:.insteadOf=%s://%s/", u.Host, u.Scheme, u.Host),
 	}
+	return true
 }
