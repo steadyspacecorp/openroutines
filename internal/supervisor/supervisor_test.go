@@ -5,8 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,39 +14,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
-	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
-
-// A trigger poll registers bearer material from the tick goroutine while run
-// goroutines log through writers that read the same scrub set -- with a
-// plain map that is a fatal concurrent map read/write, not just a race.
-func TestScrubRegistrationRacesLogging(t *testing.T) {
-	secrets := scrub.NewSet(map[string]string{"master key": "seed-value"})
-	s := &Supervisor{Log: log.New(scrub.NewSetWriter(io.Discard, secrets), "", 0), secrets: secrets}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for i := range 500 {
-			s.registerScrub(map[string]string{"poll_token": fmt.Sprintf("bearer-%d", i)})
-		}
-	}()
-	for i := range 500 {
-		s.errorf("run line %d carrying seed-value", i)
-	}
-	<-done
-	if got := scrub.Redact("bearer-499 and seed-value", s.secrets.Snapshot()); strings.Contains(got, "bearer-499") || strings.Contains(got, "seed-value") {
-		t.Fatalf("registered and seeded values must both redact, got %q", got)
-	}
-}
 
 func TestAttemptIdentityIsNotReusedWhenCleanupFails(t *testing.T) {
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
 	s := &Supervisor{
-		Log:   log.New(io.Discard, "", 0),
 		slots: make(chan uint32, 1),
 		fatal: make(chan error, 1),
 		reap: func(uid uint32) error {
@@ -73,7 +48,6 @@ func TestAttemptIdentityIsNotReusedWhenCleanupFails(t *testing.T) {
 func TestAttemptIdentityIsNotReusedWhenWorkspaceCleanupFails(t *testing.T) {
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
 	s := &Supervisor{
-		Log:   log.New(io.Discard, "", 0),
 		slots: make(chan uint32, 1),
 		fatal: make(chan error, 1),
 		reap:  func(uint32) error { return nil },
@@ -1402,7 +1376,7 @@ func TestBootWarnsOnEnvDeliveredMasterKey(t *testing.T) {
 	dir := fixture(t, "ok")
 	s := newSupervisor(t, dir)
 	var out bytes.Buffer
-	s.Log = log.New(&out, "", 0)
+	logging.Setup(&out, slog.LevelInfo, time.UTC)
 
 	t.Setenv(creds.EnvMasterKey, creds.GenerateKey())
 	s.warnKeyDelivery()
@@ -1432,26 +1406,5 @@ func TestBootWarnsOnEnvDeliveredMasterKey(t *testing.T) {
 	s.warnKeyDelivery()
 	if out.Len() > 0 {
 		t.Errorf("file delivery with no leftover variable is the recommended path: %q", out.String())
-	}
-}
-
-// The log level gates the supervisor's own lines: lifecycle at info,
-// degraded conditions at warn, failures always.
-func TestLogLevelGatesSupervisorLines(t *testing.T) {
-	var buf strings.Builder
-	s := &Supervisor{Log: log.New(&buf, "", 0), level: config.LogWarn}
-	s.infof("lifecycle")
-	s.warnf("degraded")
-	s.errorf("failed")
-	if strings.Contains(buf.String(), "lifecycle") {
-		t.Fatalf("info line should be gated at warn level: %q", buf.String())
-	}
-	for _, want := range []string{"degraded", "failed"} {
-		if !strings.Contains(buf.String(), want) {
-			t.Fatalf("%s line missing at warn level: %q", want, buf.String())
-		}
-	}
-	if s := (&Supervisor{}); s.level != config.LogDebug {
-		t.Fatal("a bare struct must suppress nothing")
 	}
 }

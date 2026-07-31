@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // The grant is a form-encoded POST carrying the stored secret; the run
@@ -37,14 +39,8 @@ func TestDeriveOAuth2Client(t *testing.T) {
 	if d.Bearer != "minted-bearer-123" {
 		t.Fatalf("bearer = %q, want minted access token", d.Bearer)
 	}
-	found := false
-	for _, v := range d.Scrub {
-		if v == "minted-bearer-123" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("minted bearer missing from scrub set: %v", d.Scrub)
+	if got := scrub.Redacted("minted-bearer-123"); strings.Contains(got, "minted-bearer-123") {
+		t.Fatalf("minting must register the bearer for redaction, got %q", got)
 	}
 	d.Cleanup() // no revocation for this type; must still be safe to call
 }

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // EnvDeployKey delivers the SSH private key that lets a deployed agent push
@@ -44,6 +46,7 @@ func ConfigureDeployKey() (bool, error) {
 	if key == "" {
 		return false, nil
 	}
+	registerDeployKey(key)
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false, err
@@ -68,6 +71,20 @@ func ConfigureDeployKey() (bool, error) {
 		keyPath, filepath.Join(sshDir, "known_hosts"),
 	)
 	return true, nil
+}
+
+// registerDeployKey puts the key material in the scrub registry the moment
+// it enters the process. The key is multi-line and redaction is line by
+// line, so each substantial line registers as its own value.
+func registerDeployKey(key string) {
+	values := map[string]string{}
+	for i, line := range strings.Split(key, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) >= 16 && !strings.HasPrefix(line, "-----") {
+			values[fmt.Sprintf("deploy_key_%d", i)] = line
+		}
+	}
+	scrub.Register(values)
 }
 
 // ConfigureOriginRewrite routes an HTTPS origin through SSH, so the deploy

@@ -15,7 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"maps"
 	"os"
 	"os/exec"
@@ -30,12 +30,12 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
-	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // Scheduling constants: the tick cadence and the per-run attempt cap.
@@ -59,8 +59,6 @@ func Schedulable(r *routine.Routine) bool {
 type Supervisor struct {
 	Dir        string
 	InstanceID string
-	Log        *log.Logger
-	level      config.LogLevel
 
 	mem       *memory.Memory
 	noOrigin  bool
@@ -111,10 +109,6 @@ type Supervisor struct {
 	blockedTip   string
 	commitWarned bool              // intent commit failing: dispatch is halted, someone must look
 	loadFailed   map[string]string // routine name -> the load failure already recorded
-	// secrets is the supervisor's own scrub set. A concurrency-safe Set, not
-	// a map: trigger polls register bearer material from the tick goroutine
-	// while run goroutines log through writers that read it.
-	secrets *scrub.Set
 
 	// Trigger bookkeeping that is deliberately not durable: last-poll times
 	// (persisting them would dirty the memory worktree every tick) and
@@ -140,7 +134,10 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	secrets := scrub.NewSet(memory.SupervisorSecrets(dir))
+	// One logger per process, installed here: the supervisor is the process,
+	// and everything it spawns or calls logs through slog's default rather
+	// than being handed one.
+	logging.Setup(os.Stdout, agent.EffectiveLogLevel(), loc)
 	mem := memory.At(dir)
 	memMu, err := runner.OpenMemoryLock(dir)
 	if err != nil {
@@ -153,15 +150,12 @@ func New(dir string) (*Supervisor, error) {
 	return &Supervisor{
 		Dir:        dir,
 		InstanceID: memory.InstanceID(),
-		Log:        log.New(scrub.NewSetWriter(os.Stdout, secrets), "", log.LstdFlags|log.LUTC),
-		level:      agent.EffectiveLogLevel(),
 		mem:        mem,
 		memMu:      memMu,
 		leaseTTL:   memory.LeaseTTL,
 		loc:        loc,
 		retention:  retention,
 		noOrigin:   !mem.HasOrigin(),
-		secrets:    secrets,
 		slots:      slots,
 		inFlight:   map[string]bool{},
 		waitLogged: map[string]bool{},
@@ -172,42 +166,7 @@ func New(dir string) (*Supervisor, error) {
 	}, nil
 }
 
-// registerScrub adds a trigger poll's bearer material to the supervisor's
-// scrub set, under prefixed names so an agent credential name can never
-// collide with the master or deploy key entries. Entries are overwritten by
-// the next poll rather than removed: a bearer that outlives its poll (an
-// oauth2_client token expires on the provider's clock) stays redactable.
-func (s *Supervisor) registerScrub(values map[string]string) {
-	prefixed := make(map[string]string, len(values))
-	for name, v := range values {
-		prefixed["trigger "+name] = v
-	}
-	s.secrets.Add(prefixed)
-}
-
 func (s *Supervisor) stateDir() string { return s.mem.StateDir() }
-
-// infof, warnf, and errorf gate the supervisor's own lines by the agent's
-// log level (design decision "Run output is rendered, bounded, and
-// leveled"): info is lifecycle, warn is degraded-but-running, error is
-// failed runs and held dispatch. Held dispatch resuming reports at error
-// too -- an operator who saw BLOCKED must also see it clear. The zero value
-// is debug, so a bare struct suppresses nothing.
-func (s *Supervisor) infof(format string, v ...any) {
-	if s.level <= config.LogInfo {
-		s.Log.Printf(format, v...)
-	}
-}
-
-func (s *Supervisor) warnf(format string, v ...any) {
-	if s.level <= config.LogWarn {
-		s.Log.Printf(format, v...)
-	}
-}
-
-func (s *Supervisor) errorf(format string, v ...any) {
-	s.Log.Printf(format, v...)
-}
 
 // Run is the supervise loop: startup, then one Tick per minute until ctx is
 // canceled, then shutdown (final commit and push, lease release).
@@ -216,16 +175,16 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
 	// same-UID model processes -- set before any child ever exists.
 	if err := sandbox.ProtectProcess(); err != nil {
-		s.warnf("WARNING: could not mark supervisor non-dumpable: %v", err)
+		slog.Warn("could not mark the supervisor non-dumpable", "error", err)
 	}
 	s.warnKeyDelivery()
 	if configured, err := memory.ConfigureDeployKey(); err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	} else if configured {
 		if memory.ConfigureOriginRewrite(s.Dir) {
-			s.infof("routing the https origin through the deploy key")
+			slog.Info("routing the https origin through the deploy key")
 		}
-		s.infof("deploy key configured for memory sync")
+		slog.Info("deploy key configured for memory sync")
 	}
 	// Under memMu like every other worktree operation: first-boot
 	// materialization racing a manual run's own locked Ensure would have
@@ -238,14 +197,14 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return err
 	}
 	if s.noOrigin {
-		s.warnf("WARNING: no git origin -- memory is not durable and the single-instance lease is disabled (local mode)")
+		slog.Warn("no git origin -- memory is not durable and the single-instance lease is disabled (local mode)")
 	} else {
 		if err := s.acquireLease(ctx); err != nil {
 			return err
 		}
 		defer func() { s.mem.ReleaseLease(s.leaseSHA) }()
 	}
-	s.infof("supervising %s (instance %s, tick %s)", s.Dir, s.InstanceID, TickInterval)
+	slog.Info("supervising", "dir", s.Dir, "instance", s.InstanceID, "tick", TickInterval)
 	if err := s.verifySandbox(); err != nil {
 		return err
 	}
@@ -301,9 +260,9 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		release, lockErr := runner.LockRoutine(s.Dir, d.r.Name)
 		if lockErr != nil {
 			if errors.Is(lockErr, runner.ErrRoutineLocked) {
-				s.warnf("%s: attempt already in flight elsewhere (lock held) -- skipping this tick", d.r.Name)
+				d.r.Log().Warn("attempt already in flight elsewhere (lock held) -- skipping this tick")
 			} else {
-				s.errorf("%s: routine lock: %v", d.r.Name, lockErr)
+				d.r.Log().Error("routine lock failed", "error", lockErr)
 			}
 			continue
 		}
@@ -317,7 +276,8 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			// warn level deserves to know why nothing is happening.
 			if !s.waitLogged[d.r.Name] {
 				s.waitLogged[d.r.Name] = true
-				s.warnf("%s: all %d run slots busy -- %s waits for a free one", d.r.Name, cap(s.slots), d.st.Pending.RunID)
+				d.r.Log().Warn("all run slots busy -- waiting for a free one",
+					"slots", cap(s.slots), "run_id", d.st.Pending.RunID)
 			}
 			continue
 		}
@@ -343,7 +303,7 @@ func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
 	}
 	if err != nil {
 		fatal := fmt.Errorf("attempt uid %d cleanup failed -- refusing to reuse identity: %w", uid, err)
-		s.errorf("%v", fatal)
+		slog.Error("attempt uid cleanup failed -- refusing to reuse identity", "uid", uid, "error", err)
 		select {
 		case s.fatal <- fatal:
 		default:
@@ -394,13 +354,13 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 	if now.Sub(s.lastTrim) >= 24*time.Hour {
 		s.lastTrim = now
 		if changed, err := s.mem.Trim(s.retention, now); err != nil {
-			s.warnf("retention trim: %v", err)
+			slog.Warn("retention trim failed", "error", err)
 		} else if changed {
 			if _, err := s.mem.CommitTrim(s.retention); err != nil {
-				s.warnf("retention trim commit: %v", err)
+				slog.Warn("retention trim commit failed", "error", err)
 			}
 			s.pushBestEffort()
-			s.infof("memory: trimmed record streams to the %s retention window", s.retention)
+			slog.Info("memory: trimmed record streams to the retention window", "retention", s.retention)
 		}
 	}
 
@@ -420,34 +380,35 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 			// settlement over the same record.
 			continue
 		}
+		log := r.Log()
 		var spec *schedule.Spec
 		if r.FM.Schedule != "" {
 			var err error
 			spec, err = schedule.Parse(r.FM.Schedule, s.loc)
 			if err != nil {
-				s.warnf("%s: bad schedule %q: %v", r.Name, r.FM.Schedule, err)
+				log.Warn("bad schedule", "schedule", r.FM.Schedule, "error", err)
 				continue
 			}
 		}
 		if r.FM.Trigger != nil {
 			if err := r.FM.Trigger.Validate(); err != nil {
-				s.warnf("%s: %v", r.Name, err)
+				log.Warn("invalid trigger", "error", err)
 				continue
 			}
 		}
 		st, err := schedule.Load(s.stateDir(), r.Name)
 		if err != nil {
-			s.errorf("%s: %v", r.Name, err)
+			log.Error("loading scheduling state failed", "error", err)
 			continue
 		}
 		if st == nil {
 			// First sight of this routine: it owes nothing from before it existed.
 			st = &schedule.State{Routine: r.Name, Watermark: now}
 			if err := st.Save(s.stateDir()); err != nil {
-				s.errorf("%s: %v", r.Name, err)
+				log.Error("saving scheduling state failed", "error", err)
 				continue
 			}
-			s.infof("%s: registered (watermark %s)", r.Name, now.Format(time.RFC3339))
+			log.Info("registered", "watermark", now)
 			continue
 		}
 		if st.Pending == nil {
@@ -466,7 +427,7 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 					}
 					minted = true
 					if n > 1 {
-						s.infof("%s: %d missed firings collapse into run %s", r.Name, n, st.Pending.RunID)
+						log.Info("missed firings collapse into one run", "firings", n, "run_id", st.Pending.RunID)
 					}
 					// The scheduled run will pull whatever the trigger would
 					// have announced; refresh the baseline so the same news
@@ -485,14 +446,14 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 						CreatedAt:      now,
 					}
 					minted = true
-					s.infof("%s: trigger fired -- run %s", r.Name, st.Pending.RunID)
+					log.Info("trigger fired", "run_id", st.Pending.RunID)
 				}
 			}
 			if !minted {
 				continue
 			}
 			if err := st.Save(s.stateDir()); err != nil {
-				s.errorf("%s: %v", r.Name, err)
+				log.Error("saving scheduling state failed", "error", err)
 				continue
 			}
 		}
@@ -501,9 +462,9 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 			// settled: the supervisor did not survive them. Settlement is
 			// where a run is normally abandoned, but a run that kills its
 			// container never gets there.
-			s.abandon(r.Name, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), now)
+			s.abandon(r, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), now)
 			if err := st.Save(s.stateDir()); err != nil {
-				s.errorf("%s: %v", r.Name, err)
+				log.Error("saving scheduling state failed", "error", err)
 			}
 			continue
 		}
@@ -582,25 +543,31 @@ func reserve(p *schedule.Pending, now time.Time) (giveBack func()) {
 // run that falls over never gets to explain itself, and only a person can
 // act), the watermark advances so the schedule moves on, and the breaker
 // counts the abandonment. The caller saves the state and commits it.
-func (s *Supervisor) abandon(name string, st *schedule.State, detail string, now time.Time) {
+func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail string, now time.Time) {
 	p := st.Pending
 	date := now.UTC().Format("2006-01-02")
 	_ = s.mem.AppendHumanTask("task-"+p.RunID,
-		fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", name, p.RunID, p.Attempts, detail, date))
+		fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, detail, date))
 	st.Watermark = p.CoveredThrough
 	st.Pending = nil
 	if cooldown := st.RecordAbandonment(now); cooldown > 0 {
-		_ = s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, name, st.ConsecutiveAbandons, cooldown))
-		s.errorf("%s: circuit breaker tripped -- cooling down for %s", name, cooldown)
+		_ = s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown))
+		r.Log().Error("circuit breaker tripped", "cooldown", cooldown)
 	}
-	s.errorf("%s: %s abandoned after %d attempts", name, p.RunID, p.Attempts)
+	r.Log().Error("run abandoned", "run_id", p.RunID, "attempts", p.Attempts)
 }
 
 // execute runs one attempt of a pending logical run and settles the outcome.
 func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) (cleanupErr error) {
+	// Every line this attempt emits carries the routine and the logical run
+	// it belongs to: attempts execute concurrently and interleave on one
+	// stdout, so the identity has to travel with the logger rather than be
+	// repeated by each call site.
+	log := r.Log().With("run_id", st.Pending.RunID)
+
 	agent, err := config.Load(s.Dir)
 	if err != nil {
-		s.errorf("%s: %v", r.Name, err)
+		log.Error("loading the agent configuration failed", "error", err)
 		return
 	}
 
@@ -614,13 +581,13 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	giveBack := reserve(p, now)
 	if err := st.Save(s.stateDir()); err != nil {
 		s.memMu.Unlock()
-		s.errorf("%s: %v", r.Name, err)
+		log.Error("saving scheduling state failed", "error", err)
 		return
 	}
 	if !s.commitIntent(fmt.Sprintf("Reserve %s attempt %d (%s)", r.Name, p.Attempts, p.RunID)) {
 		giveBack()
 		if err := st.Save(s.stateDir()); err != nil {
-			s.errorf("%s: %v", r.Name, err)
+			log.Error("saving scheduling state failed", "error", err)
 		}
 		s.memMu.Unlock()
 		return
@@ -652,11 +619,11 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 	if err == nil && !s.noOrigin && !s.renewLease() {
 		cleanupErr = staged.Discard()
-		s.warnf("%s: %s not started -- lease lost after staging; the current holder will retry it", r.Name, p.RunID)
+		log.Warn("not started -- lease lost after staging; the current holder will retry it")
 		return
 	}
 
-	s.infof("%s: %s %s starting (scheduled %s)", r.Name, p.RunID, meta.AttemptID, meta.ScheduledFor)
+	log.Info("attempt starting", "attempt", meta.AttemptID, "scheduled_for", meta.ScheduledFor)
 
 	var res *runner.ExecResult
 	var staging *runner.Staging
@@ -673,7 +640,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		// nothing can repeat past is abandoned on the spot rather than
 		// retried to the budget's end for the same error five times.
 		fatal = errors.Is(err, runner.ErrFatal)
-		s.errorf("%s: %s failed to start: %v", r.Name, p.RunID, err)
+		log.Error("attempt failed to start", "error", err)
 		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
 		detail = err.Error()
 	} else {
@@ -688,9 +655,9 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	if !s.noOrigin && !s.renewLease() {
 		giveBack()
 		if err := st.Save(s.stateDir()); err != nil {
-			s.errorf("%s: %v", r.Name, err)
+			log.Error("saving scheduling state failed", "error", err)
 		}
-		s.warnf("%s: %s settlement discarded -- lease lost before import; the current holder will retry it", r.Name, p.RunID)
+		log.Warn("settlement discarded -- lease lost before import; the current holder will retry it")
 		return
 	}
 
@@ -711,44 +678,45 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 			st.RecordSuccess()
 		case fatal, p.Attempts >= MaxAttempts:
 			abandoned = true
-			s.abandon(r.Name, st, fin.Detail, now)
+			s.abandon(r, st, fin.Detail, now)
 		}
 		if err := st.Save(s.stateDir()); err != nil {
-			s.errorf("%s: %v", r.Name, err)
+			log.Error("saving scheduling state failed", "error", err)
 		}
 	})
 	if serr != nil {
-		s.errorf("%s: %s settle: %v", r.Name, p.RunID, serr)
+		log.Error("settle failed", "error", serr)
 	}
 	if settlement.Discarded {
-		s.infof("%s: discarded staged events.md change (events: false)", r.Name)
+		log.Info("discarded staged events.md change (events: false)")
 	}
 	for i, conflict := range settlement.Conflicted {
 		_ = s.mem.AppendHumanTask(fmt.Sprintf("task-%s-memory-conflict-%d", p.RunID, i+1),
 			fmt.Sprintf("Resolve concurrent memory edit from routine %s run %s: canonical %s was left unchanged; competing version saved at %s", r.Name, p.RunID, conflict.Path, conflict.Quarantine))
-		s.warnf("%s: %s concurrent edit to %s quarantined at %s -- canonical memory left unchanged", r.Name, p.RunID, conflict.Path, conflict.Quarantine)
+		log.Warn("concurrent memory edit quarantined -- canonical memory left unchanged",
+			"path", conflict.Path, "quarantine", conflict.Quarantine)
 	}
 	conflictCommitOK := true
 	if len(settlement.Conflicted) > 0 {
 		if _, err := s.mem.Commit(fmt.Sprintf("Record %s memory conflicts", p.RunID)); err != nil {
 			conflictCommitOK = false
-			s.errorf("%s: %s conflict task commit: %v", r.Name, p.RunID, err)
+			log.Error("conflict task commit failed", "error", err)
 		}
 	}
 	switch {
 	case settlement.Outcome == runner.Canceled:
 		if ctx.Err() != nil {
-			s.infof("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
+			log.Info("interrupted by shutdown -- will retry on next boot")
 		} else {
-			s.warnf("%s: %s canceled -- lease lost mid-run; whoever holds the lease retries it", r.Name, p.RunID)
+			log.Warn("canceled -- lease lost mid-run; whoever holds the lease retries it")
 		}
 		return // no push: shutdown's final commit carries the record, and a lease loser must not push
 	case settlement.Outcome == runner.Completed:
-		s.infof("%s: %s completed in %s", r.Name, p.RunID, res.Duration)
+		log.Info("run completed", "duration", res.Duration)
 	case abandoned:
 		// abandon() already said so.
 	default:
-		s.errorf("%s: %s attempt failed (%s) -- will retry", r.Name, p.RunID, settlement.Detail)
+		log.Error("attempt failed -- will retry", "detail", settlement.Detail)
 	}
 	if !conflictCommitOK {
 		return // keep completion and remediation together on the next successful push
@@ -780,7 +748,7 @@ func (s *Supervisor) syncOnce() {
 		s.recover("sync", "memory sync with origin recovered", &s.syncWarned)
 		s.recover("origin", "origin reachable again -- memory sync resumed", &s.originWarned)
 		if rep.Adopted {
-			s.infof("memory: adopted remote commits")
+			slog.Info("memory: adopted remote commits")
 		}
 	}
 }
@@ -797,7 +765,7 @@ func (s *Supervisor) syncOnce() {
 func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	failing := map[string]string{}
 	for _, e := range errs {
-		s.warnf("routine load error: %v", e)
+		slog.Warn("routine load error", "error", e)
 		var re *routine.Error
 		if !errors.As(e, &re) {
 			continue
@@ -826,13 +794,13 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	date := now.UTC().Format("2006-01-02")
 	for _, line := range news {
 		if err := s.mem.AppendEvent(fmt.Sprintf("%s supervisor: %s", date, line)); err != nil {
-			s.errorf("recording routine load status: %v", err)
+			slog.Error("recording routine load status failed", "error", err)
 			return
 		}
-		s.warnf("%s", line)
+		slog.Warn("routine load status changed", "status", line)
 	}
 	if _, err := s.mem.Commit("Record routine load status"); err != nil {
-		s.errorf("routine load status commit failed: %v", err)
+		slog.Error("routine load status commit failed", "error", err)
 		return
 	}
 	s.pushBestEffort()
@@ -844,10 +812,11 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 // double-record the same fact. The task id is date-scoped so a supervisor
 // restart doesn't re-record it -- AppendHumanTask skips ids already present.
 func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
-	// Sync/push failure text quotes raw git errors, which can carry a
-	// tokened origin URL -- and the message below is committed to memory.
-	msg = scrub.Redact(msg, s.secrets.Snapshot())
-	s.errorf("BLOCKED: %s", msg)
+	// msg can quote raw git errors carrying a tokened origin URL; the log
+	// writer and the memory-append seam both redact from the scrub registry.
+	// BLOCKED and RECOVERED stay literal, greppable markers: the level says
+	// how bad it is, but only these say that dispatch itself is held.
+	slog.Error("BLOCKED", "reason", msg)
 	if !*warned {
 		*warned = true
 		date := time.Now().UTC().Format("2006-01-02")
@@ -870,7 +839,7 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	if err != nil || !changed {
 		return
 	}
-	s.errorf("RECOVERED: %s", msg)
+	slog.Error("RECOVERED", "reason", msg)
 	_, _ = s.mem.Commit("Resolve supervisor blocker")
 	s.pushBestEffort()
 }
@@ -890,7 +859,7 @@ func (s *Supervisor) pushBestEffort() {
 		return
 	}
 	if err := s.mem.Push(); err != nil {
-		s.warnf("memory push failed (will retry): %v", err)
+		slog.Warn("memory push failed (will retry)", "error", err)
 		return
 	}
 	if s.blockedTip != "" {
@@ -910,11 +879,11 @@ func (s *Supervisor) strandBlocked() {
 		return
 	}
 	if err := s.mem.PublishBlocked(); err != nil {
-		s.Log.Printf("publishing blocked memory to origin failed (will retry): %v", err)
+		slog.Error("publishing blocked memory to origin failed (will retry)", "error", err)
 		return
 	}
 	s.blockedTip = tip
-	s.Log.Printf("memory: stranded on %s until sync is repaired", memory.BlockedRef)
+	slog.Error("memory: stranded until sync is repaired", "ref", memory.BlockedRef)
 }
 
 // warnKeyDelivery says out loud, once at boot, that the master key value is
@@ -929,8 +898,8 @@ func (s *Supervisor) warnKeyDelivery() {
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") != "1" || !creds.KeyValueInEnv() {
 		return
 	}
-	s.Log.Printf("WARNING: the master key value is in this process's environment (%s) -- readable wherever that environment is; mount the key as a file, point %s at the path, and unset %s",
-		creds.EnvMasterKey, creds.EnvMasterKeyFile, creds.EnvMasterKey)
+	slog.Warn("the master key value is in this process's environment -- readable wherever that environment is; mount the key as a file, point the file variable at the path, and unset the value variable",
+		"value_env", creds.EnvMasterKey, "file_env", creds.EnvMasterKeyFile)
 }
 
 func verifyAttemptGroups(groups []int, slots int) error {
@@ -1003,7 +972,7 @@ func (s *Supervisor) verifySandbox() error {
 			if err := hold.Wait(); err == nil {
 				return fmt.Errorf("attempt uid cleanup probe: escaped process was not killed")
 			}
-			s.infof("filesystem sandbox: %s active for model processes", strings.TrimSpace(string(out)))
+			slog.Info("filesystem sandbox active for model processes", "mode", strings.TrimSpace(string(out)))
 			return nil
 		}
 		// The probe tolerates Landlock absence, so failure here means the
@@ -1017,9 +986,9 @@ func (s *Supervisor) verifySandbox() error {
 		}
 		return fmt.Errorf("attempt identity probe: %w -- the binary needs cap_setuid and cap_setgid; rebuild the deploy image from the current template Dockerfile", probeErr)
 	case os.Getenv("OPENROUTINES_NATIVE") == "1":
-		s.warnf("WARNING: OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
+		slog.Warn("OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
 	default:
-		s.infof("model processes run in the per-run container")
+		slog.Info("model processes run in the per-run container")
 	}
 	return nil
 }
@@ -1027,9 +996,9 @@ func (s *Supervisor) verifySandbox() error {
 func (s *Supervisor) shutdown() {
 	s.memMu.Lock()
 	defer s.memMu.Unlock()
-	s.infof("shutting down: final memory sync")
+	slog.Info("shutting down: final memory sync")
 	if _, err := s.mem.Commit("Shutdown"); err != nil {
-		s.errorf("shutdown commit: %v", err)
+		slog.Error("shutdown commit failed", "error", err)
 	}
 	s.pushBestEffort()
 }
@@ -1060,10 +1029,10 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 				return nil
 			}
 			// CAS lost: someone else moved first. Loop and re-evaluate.
-			s.infof("lease race lost -- re-evaluating")
+			slog.Info("lease race lost -- re-evaluating")
 			continue
 		}
-		s.warnf("another instance holds the lease (%s, heartbeat %s) -- waiting", lease.Holder, lease.At.Format(time.RFC3339))
+		slog.Warn("another instance holds the lease -- waiting", "holder", lease.Holder, "heartbeat", lease.At)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -1157,7 +1126,7 @@ func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.Cance
 					continue
 				}
 				if s.foreignLeaseLive() || s.leaseExpired() {
-					s.errorf("lease lost mid-run -- canceling the attempt")
+					slog.Error("lease lost mid-run -- canceling the attempt")
 					cancelRun()
 					return
 				}
@@ -1183,7 +1152,7 @@ func (s *Supervisor) foreignLeaseLive() bool {
 func (s *Supervisor) holdLease(sha string, at time.Time) {
 	if s.leaseWarned {
 		s.leaseWarned = false
-		s.errorf("lease heartbeat recovered -- dispatch resumed")
+		slog.Error("lease heartbeat recovered -- dispatch resumed")
 	}
 	s.leaseSHA = sha
 	s.leaseRenewed = at
@@ -1196,7 +1165,7 @@ func (s *Supervisor) holdLease(sha string, at time.Time) {
 func (s *Supervisor) leaseLost(msg string) bool {
 	if !s.leaseWarned {
 		s.leaseWarned = true
-		s.errorf("BLOCKED: %s", msg)
+		slog.Error("BLOCKED", "reason", msg)
 	}
 	return false
 }

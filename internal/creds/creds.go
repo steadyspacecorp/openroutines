@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // Store layout and key-delivery environment variables.
@@ -93,6 +95,9 @@ func LoadKey(dir string) ([]byte, error) {
 	if err != nil || len(key) != 32 {
 		return nil, fmt.Errorf("master key must be 64 hex characters (32 bytes)")
 	}
+	// The key just entered the process; from here on any output that quotes
+	// it is redacted, wherever it leaks from.
+	scrub.Register(map[string]string{"master_key": hex.EncodeToString(key)})
 	return key, nil
 }
 
@@ -169,6 +174,14 @@ func Read(dir string, key []byte) (map[string]string, error) {
 	if err := yaml.Unmarshal(plaintext, &out); err != nil {
 		return nil, fmt.Errorf("credentials content: %w", err)
 	}
+	// The whole store is in memory the moment it is decrypted, so the whole
+	// store registers -- prefixed so an agent credential name can never
+	// collide with the master or deploy key entries.
+	values := make(map[string]string, len(out))
+	for name, v := range out {
+		values["credential "+name] = v
+	}
+	scrub.Register(values)
 	return out, nil
 }
 

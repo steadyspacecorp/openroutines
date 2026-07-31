@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-func renderEvents(t *testing.T, secrets map[string]string, lines ...string) string {
+func renderEvents(t *testing.T, lines ...string) string {
 	t.Helper()
 	var out strings.Builder
-	r := newRenderer(&out, secrets)
+	r := newRenderer(&out)
 	for _, l := range lines {
 		if _, err := r.Write([]byte(l + "\n")); err != nil {
 			t.Fatal(err)
@@ -42,7 +44,7 @@ func toolEvent(t *testing.T, tool, title, output string, exit int) string {
 // tail -- where the diagnostic lands -- instead of dumping the whole result.
 func TestRendererBoundsFailedToolOutput(t *testing.T) {
 	big := strings.Repeat("noise\n", 100_000) + "the part that matters"
-	out := renderEvents(t, nil,
+	out := renderEvents(t,
 		`{"type":"step_start","part":{}}`,
 		`{"type":"text","part":{"type":"text","text":"Checked the failed job."}}`,
 		toolEvent(t, "bash", "gh run view --log-failed", big, 1),
@@ -67,7 +69,7 @@ func TestRendererBoundsFailedToolOutput(t *testing.T) {
 // A successful tool is an audit summary at info, not a copy of everything it
 // read or fetched. The size says detail existed and debug is where to find it.
 func TestRendererSuppressesSuccessfulToolOutput(t *testing.T) {
-	out := renderEvents(t, nil, toolEvent(t, "read", "work/memory/context.md", "private document contents", 0))
+	out := renderEvents(t, toolEvent(t, "read", "work/memory/context.md", "private document contents", 0))
 	if !strings.Contains(out, "[tool read] work/memory/context.md") || !strings.Contains(out, "25B output suppressed") {
 		t.Fatalf("successful tool should retain a useful summary:\n%s", out)
 	}
@@ -81,7 +83,8 @@ func TestRendererSuppressesSuccessfulToolOutput(t *testing.T) {
 func TestRendererScrubsBeforeTruncating(t *testing.T) {
 	secret := "tok-0123456789abcdef0123456789abcdef" // gitleaks:allow -- synthetic fixture
 	output := strings.Repeat("x", toolOutputBytes-10) + secret + strings.Repeat("y", toolOutputBytes)
-	out := renderEvents(t, map[string]string{"api_token": secret}, toolEvent(t, "bash", "echo $API_TOKEN", output, 0))
+	scrub.Register(map[string]string{"api_token": secret})
+	out := renderEvents(t, toolEvent(t, "bash", "echo $API_TOKEN", output, 0))
 	if strings.Contains(out, secret) || strings.Contains(out, secret[:12]) {
 		t.Fatalf("secret (or a truncated half of it) leaked:\n%s", out)
 	}
@@ -94,7 +97,7 @@ func TestRendererScrubsBeforeTruncating(t *testing.T) {
 // plain-text line from a fake or future opencode, an event schema the
 // framework doesn't know. Degrade, never fail the run.
 func TestRendererPassesUnknownLinesThroughBounded(t *testing.T) {
-	out := renderEvents(t, nil,
+	out := renderEvents(t,
 		"plain text from an older opencode",
 		`{"type":"future_event","payload":"`+strings.Repeat("z", 3*passthroughBytes)+`"}`,
 	)
@@ -109,7 +112,7 @@ func TestRendererPassesUnknownLinesThroughBounded(t *testing.T) {
 // Error events keep their payload: the provider-auth hint matches on this
 // text, and it is what an operator reads when a run dies.
 func TestRendererKeepsErrorEvents(t *testing.T) {
-	out := renderEvents(t, nil, `{"type":"error","error":{"name":"APIError","data":{"message":"API key is invalid.","statusCode":401}}}`)
+	out := renderEvents(t, `{"type":"error","error":{"name":"APIError","data":{"message":"API key is invalid.","statusCode":401}}}`)
 	if !authFailurePattern.MatchString(out) {
 		t.Fatalf("rendered error should still classify as an auth failure:\n%s", out)
 	}
@@ -119,7 +122,7 @@ func TestRendererKeepsErrorEvents(t *testing.T) {
 // instead of ballooning memory, and the stream recovers on the next line.
 func TestRendererSuppressesOversizedEvents(t *testing.T) {
 	var out strings.Builder
-	r := newRenderer(&out, nil)
+	r := newRenderer(&out)
 	huge := []byte(toolEvent(t, "bash", "cat warandpeace", strings.Repeat("a", maxEventBytes+(1<<20)), 0) + "\n")
 	// A pipe delivers a line this size in chunks, never one Write.
 	for len(huge) > 0 {
@@ -144,7 +147,7 @@ func TestRendererSuppressesOversizedEvents(t *testing.T) {
 // A failed tool call renders its error text, not silence.
 func TestRendererShowsToolErrors(t *testing.T) {
 	raw := (`{"type":"tool_use","part":{"tool":"webfetch","state":{"status":"error","title":"fetch docs","error":"connect: connection refused"}}}`)
-	out := renderEvents(t, nil, raw)
+	out := renderEvents(t, raw)
 	if !strings.Contains(out, "connection refused") || !strings.Contains(out, "error") {
 		t.Fatalf("tool failure should render its error:\n%s", out)
 	}

@@ -1,7 +1,14 @@
-// Package scrub redacts injected secret values from a byte stream before it
-// reaches logs. Defense in depth: exact-value matching only (see design
-// decision "Credentials", rule 3) -- the primary protection is that undeclared secrets
-// are never in the process at all.
+// Package scrub redacts secret values from text and byte streams before
+// they leave the process. Defense in depth: exact-value matching only (see
+// design decision "Credentials", rule 3) -- the primary protection is that
+// undeclared secrets are never in the process at all.
+//
+// There is one process-wide registry. Code that materializes a secret --
+// loading a key, decrypting the store, minting a token -- calls Register;
+// every consumer (the log writer, the run output stream, memory appends)
+// redacts from the same set. Nothing downstream decides whether its text
+// needs scrubbing, because a value can only leak from a process that
+// materialized it, and materializing is what registers it.
 package scrub
 
 import (
@@ -12,59 +19,54 @@ import (
 	"sync/atomic"
 )
 
-// Set is a concurrency-safe secret collection: readers snapshot the current
-// map through an atomic pointer while writers swap in a rebuilt copy. The
-// supervisor's trigger polls add bearer material mid-flight while run
-// goroutines log through writers that hold the set -- mutating a plain map
-// under those readers is a fatal runtime error, not just a race.
-type Set struct {
-	p atomic.Pointer[map[string]string]
+// process is the registry: a concurrency-safe map where readers snapshot
+// the current state through an atomic pointer while writers swap in a
+// rebuilt copy. Trigger polls register bearer material mid-flight while run
+// goroutines redact through writers that hold the set -- mutating a plain
+// map under those readers is a fatal runtime error, not just a race.
+var process atomic.Pointer[map[string]string]
+
+func init() {
+	process.Store(&map[string]string{})
 }
 
-// NewSet builds a set seeded with initial (copied, never aliased).
-func NewSet(initial map[string]string) *Set {
-	s := &Set{}
-	m := maps.Clone(initial)
-	if m == nil {
-		m = map[string]string{}
-	}
-	s.p.Store(&m)
-	return s
-}
-
-// Snapshot returns the current map. Callers must not mutate it.
-func (s *Set) Snapshot() map[string]string { return *s.p.Load() }
-
-// Add copies the current map, lays values over it, and swaps the result in.
-func (s *Set) Add(values map[string]string) {
+// Register adds secret values to the process registry, keyed by the name
+// that appears in the redaction marker. A re-registered name overwrites
+// rather than accumulates, so repeated materialization of the same
+// credential keeps the registry bounded.
+func Register(values map[string]string) {
 	for {
-		old := s.p.Load()
+		old := process.Load()
 		next := make(map[string]string, len(*old)+len(values))
 		maps.Copy(next, *old)
 		maps.Copy(next, values)
-		if s.p.CompareAndSwap(old, &next) {
+		if process.CompareAndSwap(old, &next) {
 			return
 		}
 	}
 }
 
-// Writer replaces known secret values with [REDACTED:name] line by line.
+// Redacted replaces every registered secret value in s with [REDACTED:name].
+func Redacted(s string) string {
+	for name, value := range *process.Load() {
+		if value == "" {
+			continue
+		}
+		s = strings.ReplaceAll(s, value, "[REDACTED:"+strings.ToUpper(name)+"]")
+	}
+	return s
+}
+
+// Writer redacts registered secret values from a byte stream, line by line,
+// reading the registry as of each write -- a stream outlives registration.
 type Writer struct {
-	dst      io.Writer
-	snapshot func() map[string]string // the secrets as of each write
-	buf      bytes.Buffer
+	dst io.Writer
+	buf bytes.Buffer
 }
 
-// NewWriter wraps dst, redacting secret values line by line. The map must
-// not be mutated once handed over; a source that grows takes NewSetWriter.
-func NewWriter(dst io.Writer, secrets map[string]string) *Writer {
-	return &Writer{dst: dst, snapshot: func() map[string]string { return secrets }}
-}
-
-// NewSetWriter wraps dst, redacting the set's values as of each write --
-// for streams that outlive secret registration.
-func NewSetWriter(dst io.Writer, set *Set) *Writer {
-	return &Writer{dst: dst, snapshot: set.Snapshot}
+// NewWriter wraps dst in registry-backed redaction.
+func NewWriter(dst io.Writer) *Writer {
+	return &Writer{dst: dst}
 }
 
 // maxBuffered caps the partial-line buffer: output with no newlines flushes
@@ -82,7 +84,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 			w.buf.WriteString(line)
 			break
 		}
-		if _, err := io.WriteString(w.dst, Redact(line, w.snapshot())); err != nil {
+		if _, err := io.WriteString(w.dst, Redacted(line)); err != nil {
 			return len(p), err
 		}
 	}
@@ -95,18 +97,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 // Flush writes any buffered partial line, redacted.
 func (w *Writer) Flush() {
 	if w.buf.Len() > 0 {
-		_, _ = io.WriteString(w.dst, Redact(w.buf.String(), w.snapshot()))
+		_, _ = io.WriteString(w.dst, Redacted(w.buf.String()))
 		w.buf.Reset()
 	}
-}
-
-// Redact replaces every known secret value in s with [REDACTED:name].
-func Redact(s string, secrets map[string]string) string {
-	for name, value := range secrets {
-		if value == "" {
-			continue
-		}
-		s = strings.ReplaceAll(s, value, "[REDACTED:"+strings.ToUpper(name)+"]")
-	}
-	return s
 }

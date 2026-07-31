@@ -13,6 +13,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
@@ -596,8 +597,9 @@ func TestResolveCredentialsRaw(t *testing.T) {
 	if s.env["STEADY_TOKEN"] != "sekrit" || s.env["OPENAI_API_KEY"] != "provider-key" {
 		t.Fatalf("raw injection wrong: %v", s.env)
 	}
-	if s.scrub["steady_token"] != "sekrit" {
-		t.Fatal("raw credential missing from scrub set")
+	// Decrypting the store is what registers its values for redaction.
+	if got := scrub.Redacted("carrying sekrit"); strings.Contains(got, "sekrit") {
+		t.Fatalf("stored credential not registered for redaction: %q", got)
 	}
 
 	typed := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"gh_key"}}}

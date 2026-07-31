@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"os"
 	"os/exec"
@@ -34,6 +35,7 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
@@ -279,13 +281,20 @@ type StagedRun struct {
 	meta      Meta
 	model     string
 	timeout   time.Duration
-	level     config.LogLevel
 	secrets   *runSecrets
 	staging   *Staging
 	workspace string
 	runTmp    string
 	env       []string
 	ocArgs    []string
+
+	// Run-output verbosity, derived once from log_level (design decision
+	// "Run output is rendered, bounded, and leveled"). The run stream is the
+	// model process's own bytes, not log records, so its shape is pipeline
+	// configuration fixed at staging: transcript streams opencode's raw
+	// output (debug), streamed lets the rendered stream reach stdout (info).
+	transcript bool
+	streamed   bool
 }
 
 // Discard releases a staged attempt that will not be spawned (for example,
@@ -310,7 +319,6 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		return nil, err
 	}
 	timeout := EffectiveTimeout(agent, r)
-	level := agent.EffectiveLogLevel()
 	// The harness config is parsed from the agent repository, not the
 	// workspace copy buildWorkspace makes later: MCP permission rules must
 	// never depend on pipeline ordering to see the server list. A file
@@ -430,12 +438,14 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		env = append(env, strings.ToUpper(k)+"="+agent.Variables[k])
 	}
 
+	level := agent.EffectiveLogLevel()
+	transcript := level <= slog.LevelDebug
 	// The opencode invocation is identical across spawn paths.
 	ocArgs := []string{"run", "--agent", "routine", "-m", model}
 	if r.FM.Effort != "" {
 		ocArgs = append(ocArgs, "--variant", r.FM.Effort)
 	}
-	if level == config.LogDebug {
+	if transcript {
 		// The full formatted transcript, plus opencode's own diagnostics.
 		ocArgs = append(ocArgs, "--print-logs", "--log-level", "DEBUG")
 	} else {
@@ -446,18 +456,19 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 
 	ok = true
 	return &StagedRun{
-		dir:       dir,
-		r:         r,
-		meta:      meta,
-		model:     model,
-		timeout:   timeout,
-		level:     level,
-		secrets:   secrets,
-		staging:   staging,
-		workspace: workspace,
-		runTmp:    runTmp,
-		env:       env,
-		ocArgs:    ocArgs,
+		dir:        dir,
+		r:          r,
+		meta:       meta,
+		model:      model,
+		timeout:    timeout,
+		secrets:    secrets,
+		staging:    staging,
+		workspace:  workspace,
+		runTmp:     runTmp,
+		env:        env,
+		ocArgs:     ocArgs,
+		transcript: transcript,
+		streamed:   level <= slog.LevelInfo,
 	}, nil
 }
 
@@ -479,7 +490,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	dir := sr.dir
 	workspace, runTmp, env, ocArgs := sr.workspace, sr.runTmp, sr.env, sr.ocArgs
 	attemptHome := filepath.Join(workspace, attemptHomeName)
-	model, timeout, level, secrets := sr.model, sr.timeout, sr.level, sr.secrets
+	model, timeout, secrets := sr.model, sr.timeout, sr.secrets
 	defer secrets.release()
 	ok := false
 	defer func() {
@@ -579,14 +590,14 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// beside -- never in front of -- the tail buffer, which classification
 	// and the failure tail read raw.
 	var flush func()
-	if level == config.LogDebug {
+	if sr.transcript {
 		pw := newPrefixWriter(os.Stdout, r.Name)
-		scrubber := scrub.NewWriter(io.MultiWriter(pw, tail), secrets.scrub)
+		scrubber := scrub.NewWriter(io.MultiWriter(pw, tail))
 		cmd.Stdout, cmd.Stderr = scrubber, scrubber
 		flush = func() { scrubber.Flush(); pw.Flush() }
 	} else {
 		sink := io.Writer(os.Stdout)
-		if level > config.LogInfo {
+		if !sr.streamed {
 			sink = io.Discard
 		}
 		pw := newPrefixWriter(sink, r.Name)
@@ -598,8 +609,8 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		// truncation boundary from splitting a secret past the exact-value
 		// matcher. stderr is not part of the event stream; its renderer just
 		// passes lines through, bounded.
-		rout := newRenderer(dst, secrets.scrub)
-		rerr := newRenderer(dst, secrets.scrub)
+		rout := newRenderer(dst)
+		rerr := newRenderer(dst)
 		cmd.Stdout, cmd.Stderr = rout, rerr
 		flush = func() { rout.Flush(); rerr.Flush(); pw.Flush() }
 	}
@@ -669,11 +680,16 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
 		res.Hint = authHint(dir, model, injected)
 	}
-	if level > config.LogInfo && (res.Outcome == Crashed || res.Outcome == Timeout) && len(tail.buf) > 0 {
+	if !sr.streamed && (res.Outcome == Crashed || res.Outcome == Timeout) && len(tail.buf) > 0 {
 		// A failed attempt's last output is the diagnostic payload, not
 		// chatter: it escapes the level gate, or a warn/error production
-		// agent fails invisibly.
-		_, _ = fmt.Fprintf(os.Stdout, "%s %s %s -- last output:\n%s\n", r.Name, meta.RunID, res.Outcome, bytes.TrimSpace(tail.buf))
+		// agent fails invisibly. It stays raw model output rather than log
+		// records -- the supervisor logs the failure itself, and this is the
+		// evidence under that line -- so it carries the same routine prefix
+		// every other run line does.
+		pw := newPrefixWriter(os.Stdout, r.Name)
+		_, _ = fmt.Fprintf(pw, "%s %s -- last output:\n%s\n", meta.RunID, res.Outcome, bytes.TrimSpace(tail.buf))
+		pw.Flush()
 	}
 	ok = true
 	return res, staging, nil
@@ -697,6 +713,16 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("not an agent repository: %w", err)
 	}
+	// A manual run is the whole process, so it installs the logger the same
+	// way the supervisor does -- otherwise log_level would mean nothing here
+	// and `OPENROUTINES_LOG_LEVEL=debug openroutines routines run` would not
+	// stream the transcript it exists to show.
+	loc, err := time.LoadLocation(agent.Timezone)
+	if err != nil {
+		return nil, err
+	}
+	logging.Setup(os.Stdout, agent.EffectiveLogLevel(), loc)
+
 	r, err := routine.Find(dir, name)
 	if err != nil {
 		return nil, err
@@ -912,11 +938,12 @@ func recordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, man
 }
 
 // runSecrets is a run's resolved secret material: the exact environment to
-// inject, the values the log scrubber must redact, and cleanup for derived
-// credentials (token revocation at attempt end).
+// inject, and cleanup for derived credentials (token revocation at attempt
+// end). Redaction needs no bookkeeping here -- resolving a credential
+// registers its value with the scrub registry at the point it is
+// materialized.
 type runSecrets struct {
 	env     map[string]string
-	scrub   map[string]string
 	cleanup []func()
 }
 
@@ -941,10 +968,18 @@ func (s *runSecrets) release() {
 // injects verbatim under its uppercase name; a typed credential (see
 // design decision "Credentials have types") is derived by the trusted runner and
 // injects its type's surface -- the stored root secret never enters the run.
-func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (*runSecrets, error) {
+// A resolve that fails releases whatever it already derived: the run it was
+// building never starts, so its material is dead the moment resolution is,
+// and no error path may be the one that forgets.
+func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (_ *runSecrets, err error) {
 	provider := strings.SplitN(model, "/", 2)[0]
 	providerKey := creds.ProviderKeyName(provider)
-	out := &runSecrets{env: map[string]string{}, scrub: map[string]string{}}
+	out := &runSecrets{env: map[string]string{}}
+	defer func() {
+		if err != nil {
+			out.release()
+		}
+	}()
 
 	key, keyErr := creds.LoadKey(dir)
 	if keyErr != nil {
@@ -968,29 +1003,23 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 			if err := out.setEnv(strings.ToUpper(name), v); err != nil {
 				return nil, err
 			}
-			out.scrub[name] = v
 			continue
 		}
 		derived, err := creds.Derive(name, spec, v)
 		if err != nil {
-			out.release()
 			return nil, err
 		}
 		out.cleanup = append(out.cleanup, derived.Cleanup)
 		for _, k := range slices.Sorted(maps.Keys(derived.Env)) {
 			if err := out.setEnv(k, derived.Env[k]); err != nil {
-				out.release()
 				return nil, err
 			}
 		}
-		maps.Copy(out.scrub, derived.Scrub)
 	}
 	if v, present := store[providerKey]; present {
 		if err := out.setEnv(strings.ToUpper(providerKey), v); err != nil {
-			out.release()
 			return nil, err
 		}
-		out.scrub[providerKey] = v
 	}
 	return out, nil
 }

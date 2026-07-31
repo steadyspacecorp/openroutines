@@ -21,7 +21,6 @@ import (
 // matcher.
 type renderer struct {
 	dst      io.Writer
-	secrets  map[string]string // name -> value, same map the scrub writer takes
 	buf      bytes.Buffer
 	dropping bool // mid-line beyond maxEventBytes: discard to the next newline
 }
@@ -39,8 +38,8 @@ const (
 	passthroughBytes = 2048
 )
 
-func newRenderer(dst io.Writer, secrets map[string]string) *renderer {
-	return &renderer{dst: dst, secrets: secrets}
+func newRenderer(dst io.Writer) *renderer {
+	return &renderer{dst: dst}
 }
 
 // prefixWriter attributes run output to its routine: runs execute
@@ -168,7 +167,7 @@ func (r *renderer) render(line string) {
 	}
 	var ev event
 	if json.Unmarshal([]byte(line), &ev) != nil || ev.Type == "" {
-		r.emit(firstBytes(scrub.Redact(line, r.secrets), passthroughBytes))
+		r.emit(firstBytes(scrub.Redacted(line), passthroughBytes))
 		return
 	}
 	switch ev.Type {
@@ -178,15 +177,15 @@ func (r *renderer) render(line string) {
 	case "text":
 		// The routine's own output: model-generated, token-bounded, printed
 		// whole -- this is the part of a run a person reads.
-		r.emit(scrub.Redact(ev.Part.Text, r.secrets))
+		r.emit(scrub.Redacted(ev.Part.Text))
 	case "tool_use":
 		r.renderTool(&ev)
 	case "error":
 		// Keep the payload: failure classification (the provider-auth hint)
 		// matches on this text, and so does the operator reading the log.
-		r.emit(firstBytes(scrub.Redact("[error] "+string(ev.Error), r.secrets), passthroughBytes))
+		r.emit(firstBytes(scrub.Redacted("[error] "+string(ev.Error)), passthroughBytes))
 	default:
-		r.emit(firstBytes(scrub.Redact(line, r.secrets), passthroughBytes))
+		r.emit(firstBytes(scrub.Redacted(line), passthroughBytes))
 	}
 }
 
@@ -195,7 +194,7 @@ func (r *renderer) render(line string) {
 // tail, because that is the immediate diagnostic even when the model recovers.
 func (r *renderer) renderTool(ev *event) {
 	st := &ev.Part.State
-	line := fmt.Sprintf("[tool %s] %s", ev.Part.Tool, firstBytes(scrub.Redact(st.Title, r.secrets), 256))
+	line := fmt.Sprintf("[tool %s] %s", ev.Part.Tool, firstBytes(scrub.Redacted(st.Title), 256))
 	var notes []string
 	if st.Status != "" && st.Status != "completed" {
 		notes = append(notes, st.Status)
@@ -207,7 +206,7 @@ func (r *renderer) renderTool(ev *event) {
 	if st.Error != "" {
 		output = st.Error
 	}
-	output = scrub.Redact(output, r.secrets)
+	output = scrub.Redacted(output)
 	failed := st.Error != "" || (st.Metadata.Exit != nil && *st.Metadata.Exit != 0) || (st.Status != "" && st.Status != "completed")
 	if strings.TrimSpace(output) != "" {
 		if failed {

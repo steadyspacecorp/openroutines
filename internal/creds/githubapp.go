@@ -106,7 +106,6 @@ func deriveGitHubApp(s Spec, stored, apiBase string) (*Derived, error) {
 			"GIT_COMMITTER_EMAIL": botEmail,
 		},
 		Bearer:  token.Token,
-		Scrub:   map[string]string{"github_app installation token": token.Token},
 		Cleanup: revoke,
 	}, nil
 }
