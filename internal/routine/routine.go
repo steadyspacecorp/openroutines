@@ -103,7 +103,7 @@ func Parse(path string) (*Routine, error) {
 	dec := yaml.NewDecoder(strings.NewReader(rest[:end]))
 	dec.KnownFields(true)
 	var fm Frontmatter
-	if err := dec.Decode(&fm); err != nil && err != io.EOF {
+	if err := dec.Decode(&fm); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("frontmatter: %w", err)
 	}
 	if fm.URL != "" {
