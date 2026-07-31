@@ -34,6 +34,11 @@ func TestDeriveOAuth2Client(t *testing.T) {
 	if d.Env["SUPPORT_DESK_TOKEN"] != "minted-bearer-123" || len(d.Env) != 1 {
 		t.Fatalf("env wrong: %v", d.Env)
 	}
+	// The static name surface must match what derivation minted -- the
+	// run-environment plan depends on DerivedEnvNames being the truth.
+	if planned := DerivedEnvNames(spec); len(planned) != 1 || planned[0] != "SUPPORT_DESK_TOKEN" {
+		t.Fatalf("DerivedEnvNames %v does not match minted env %v", planned, d.Env)
+	}
 	if d.Bearer != "minted-bearer-123" {
 		t.Fatalf("bearer = %q, want minted access token", d.Bearer)
 	}

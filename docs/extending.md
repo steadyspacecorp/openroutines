@@ -33,7 +33,7 @@ Multi-line values -- an App private key is the canonical case -- are stored one 
 
 ## Variables
 
-Non-secret configuration -- a repo name, a docs URL -- goes in a `variables:` map in `openroutines.yml`, and every run receives each one as an environment variable (`product_repo` becomes `$PRODUCT_REPO`). Secrets go in encrypted credentials instead; inside a routine the interface is the same either way, so the only question a value raises is whether it's secret.
+Non-secret configuration -- a repo name, a docs URL -- goes in a `variables:` map in `openroutines.yml`, and every run receives each one as an environment variable (`product_repo` becomes `$PRODUCT_REPO`). Secrets go in encrypted credentials instead; inside a routine the interface is the same either way, so the only question a value raises is whether it's secret. A variable can't share an environment name with any credential surface in a run -- a stored credential's uppercase name or a derived one like `GITHUB_TOKEN` -- the credential wins, the variable is not injected, and `check` fails the repo until one is renamed.
 
 ## Plugins
 

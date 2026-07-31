@@ -81,6 +81,73 @@ func TestCheckWarnsOnMissingOpencodeJSON(t *testing.T) {
 	}
 }
 
+// A variable shadowed by a credential's derived surface was an error
+// nowhere: the run silently dropped the variable while the standing
+// instruction kept advertising it. The run-environment plan makes it a
+// check failure.
+func TestCheckFlagsVariableShadowedByDerivedSurface(t *testing.T) {
+	dir := t.TempDir()
+	cfg := checkAgentYAML +
+		"variables:\n  github_token: ghp-placeholder\n" +
+		"credentials:\n  gh_app:\n    type: github_app\n    app_id: \"1\"\n"
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(cfg), 0o644)
+	os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
+	os.WriteFile(filepath.Join(dir, "routines", "release.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\ncredentials: [gh_app]\n---\nCut a release.\n"), 0o644)
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, `variable "github_token" is shadowed by credential "gh_app"`) {
+		t.Fatalf("expected a shadowed-variable failure:\n%s", out)
+	}
+	if !strings.Contains(out, "check failed") {
+		t.Fatalf("shadowing must fail check, not warn:\n%s", out)
+	}
+}
+
+// An {env:...} reference in a granted MCP server's entry must name something
+// the routine's run environment will contain -- otherwise the header
+// resolves empty and fails as opaque auth at run time.
+func TestCheckFlagsUnresolvableMCPEnvRef(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
+	os.WriteFile(filepath.Join(dir, "opencode.json"), []byte(
+		`{"mcp":{"steady":{"type":"remote","url":"https://mcp.example.com","headers":{"Authorization":"Bearer {env:STEADY_TOKEN}"}}}}`), 0o644)
+	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
+	os.WriteFile(filepath.Join(dir, "routines", "hooked.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\nmcp: [steady]\n---\nUse the server.\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "routines", "wired.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\nmcp: [steady]\ncredentials: [steady_token]\n---\nUse the server.\n"), 0o644)
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, `hooked: mcp server "steady" references {env:STEADY_TOKEN}`) {
+		t.Fatalf("expected an unresolvable env-ref failure for hooked:\n%s", out)
+	}
+	if strings.Contains(out, `wired: mcp server "steady" references`) {
+		t.Fatalf("wired declares the credential, its reference resolves:\n%s", out)
+	}
+}
+
+func TestCheckFlagsMCPRefOnUndeclaredProviderKey(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
+	os.WriteFile(filepath.Join(dir, "opencode.json"), []byte(
+		`{"mcp":{"gateway":{"type":"remote","url":"https://mcp.example.com","headers":{"Authorization":"Bearer {env:FAKE_API_KEY}"}}}}`), 0o644)
+	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
+	os.WriteFile(filepath.Join(dir, "routines", "keyed.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\nmcp: [gateway]\n---\nUse the server.\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "routines", "pinned.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\nmcp: [gateway]\ncredentials: [fake_api_key]\n---\nUse the server.\n"), 0o644)
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, `keyed: mcp server "gateway" references {env:FAKE_API_KEY}`) || !strings.Contains(out, `declare "fake_api_key"`) {
+		t.Fatalf("an undeclared provider key must not satisfy an mcp reference, and the failure should say how to fix it:\n%s", out)
+	}
+	if strings.Contains(out, `pinned: mcp server "gateway" references`) {
+		t.Fatalf("pinned declares the provider key, its reference is guaranteed:\n%s", out)
+	}
+}
+
 func TestCheckAllowsTypedTriggerCredential(t *testing.T) {
 	dir := t.TempDir()
 	config := checkAgentYAML + "credentials:\n  gh_key:\n    type: github_app\n    app_id: \"1\"\n"

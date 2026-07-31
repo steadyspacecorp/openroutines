@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/runenv"
 )
 
 func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
@@ -253,7 +255,7 @@ func TestResolveCredentialsScope(t *testing.T) {
 
 	agent := &config.Agent{}
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"slack_webhook"}}}
-	got, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5")
+	got, err := resolveCredentials(dir, runenv.New(agent, r, "anthropic/claude-sonnet-5"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +270,7 @@ func TestResolveCredentialsScope(t *testing.T) {
 	}
 
 	r.FM.Credentials = []string{"missing_cred"}
-	if _, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5"); err == nil {
+	if _, err := resolveCredentials(dir, runenv.New(agent, r, "anthropic/claude-sonnet-5")); err == nil {
 		t.Fatal("declaring an absent credential must fail the run, not proceed without it")
 	}
 }
@@ -335,6 +337,28 @@ func TestInstructionRendering(t *testing.T) {
 	agent.Variables = nil
 	if got := render(routine.Frontmatter{}); strings.Contains(got, "configuration variables") {
 		t.Fatalf("variables block rendered with no variables configured:\n%s", got)
+	}
+}
+
+// A fatal environment plan -- here two typed credentials minting the same
+// derived surface -- refuses the run as not-retryable before any secret
+// material moves. Before the plan existed this passed check, then burned the
+// full retry budget at spawn time and tripped the circuit breaker.
+func TestStageRefusesFatalEnvPlan(t *testing.T) {
+	agent := &config.Agent{Timezone: "UTC", Credentials: map[string]creds.Spec{
+		"app_one": {Type: "github_app", AppID: "1"},
+		"app_two": {Type: "github_app", AppID: "2"},
+	}}
+	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{
+		Model:       "anthropic/claude-sonnet-5",
+		Credentials: []string{"app_one", "app_two"},
+	}}
+	_, err := Stage(t.TempDir(), agent, r, Meta{RunID: "run_t", AttemptID: "attempt_01"}, &sync.Mutex{})
+	if !errors.Is(err, ErrFatal) {
+		t.Fatalf("want ErrFatal for a colliding environment plan, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "GITHUB_TOKEN") {
+		t.Fatalf("the refusal should name the colliding variable, got %v", err)
 	}
 }
 
@@ -588,7 +612,7 @@ func TestResolveCredentialsRaw(t *testing.T) {
 	agent := &config.Agent{Credentials: map[string]creds.Spec{"gh_key": {Type: "github_app", AppID: "1"}}}
 
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"steady_token"}}}
-	s, err := resolveCredentials(dir, agent, r, "openai/gpt")
+	s, err := resolveCredentials(dir, runenv.New(agent, r, "openai/gpt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,7 +626,7 @@ func TestResolveCredentialsRaw(t *testing.T) {
 	typed := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"gh_key"}}}
 	// A run with the typed credential fails at derivation (bad key)
 	// rather than injecting the stored root secret.
-	if _, err = resolveCredentials(dir, agent, typed, "openai/gpt"); err == nil {
+	if _, err = resolveCredentials(dir, runenv.New(agent, typed, "openai/gpt")); err == nil {
 		t.Fatal("expected derivation failure for an invalid stored key")
 	}
 }

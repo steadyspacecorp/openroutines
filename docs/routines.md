@@ -87,7 +87,7 @@ mcp: [steady]
 credentials: [steady_token]
 ```
 
-The grant opens the server's tools to this routine's runs; every other routine keeps them denied. Auth headers reference the run environment, so the server is only reachable when the routine also grants the credential that fills them: the `mcp` grant scopes the tool surface, the credential grant scopes the connection. `check` fails a grant naming a server `opencode.json` doesn't define.
+The grant opens the server's tools to this routine's runs; every other routine keeps them denied. Auth headers reference the run environment, so the server is only reachable when the routine also grants the credential that fills them: the `mcp` grant scopes the tool surface, the credential grant scopes the connection. `check` fails a grant naming a server `opencode.json` doesn't define, and a header reference (`{env:...}`) that nothing in the routine's run environment satisfies -- an unsatisfied reference would resolve empty at run time.
 
 What works: remote servers with static-token or client-credentials auth (a typed `oauth2_client` credential mints the bearer at spawn). OAuth-interactive servers have no headless path, and local stdio servers are out of scope by design -- the runtime image ships no language runtimes.
 

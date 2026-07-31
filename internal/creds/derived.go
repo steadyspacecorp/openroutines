@@ -120,6 +120,24 @@ func ValidateStored(s Spec, stored string) error {
 	return nil
 }
 
+// DerivedEnvNames returns the environment names Derive mints for s -- the
+// static name surface of a typed credential, known without deriving anything.
+// The run-environment plan validates collisions against these before any
+// secret material moves; the derived-type tests pin each list to what Derive
+// actually returns. Unknown types have no surface (SpecProblems rejects them).
+func DerivedEnvNames(s Spec) []string {
+	switch s.Type {
+	case "github_app":
+		return []string{"GITHUB_TOKEN", "GH_TOKEN", "GITHUB_APP_SLUG", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"}
+	case "oauth2_client":
+		if s.InjectAs == "" {
+			return nil
+		}
+		return []string{strings.ToUpper(s.InjectAs)}
+	}
+	return nil
+}
+
 // Derive materializes one typed credential. Providers are built into the
 // framework -- agent repositories cannot supply derivation code, which would
 // otherwise be a privileged plugin boundary on the trusted side.

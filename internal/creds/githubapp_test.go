@@ -120,6 +120,19 @@ func TestDeriveGitHubApp(t *testing.T) {
 	if stub.revocations != 1 {
 		t.Fatalf("expected 1 revocation after cleanup, got %d", stub.revocations)
 	}
+
+	// The static name surface must match what derivation actually minted:
+	// the run-environment plan validates collisions against DerivedEnvNames
+	// before anything derives, so drift here is a planner blind spot.
+	planned := DerivedEnvNames(Spec{Type: "github_app", AppID: "456"})
+	if len(planned) != len(d.Env) {
+		t.Fatalf("DerivedEnvNames %v does not match minted env %v", planned, d.Env)
+	}
+	for _, name := range planned {
+		if _, ok := d.Env[name]; !ok {
+			t.Fatalf("DerivedEnvNames lists %s, which Derive did not mint: %v", name, d.Env)
+		}
+	}
 }
 
 func TestDeriveGitHubAppRefusesAmbiguity(t *testing.T) {

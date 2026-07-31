@@ -37,15 +37,16 @@ const ReservedPrefix = "openroutines"
 
 // ReservedEnvName reports whether a credential or variable name would shadow
 // an environment variable the framework itself constructs for a run (TZ,
-// PATH, HOME, TMPDIR, XDG_*) or the dynamic-linker LD_* family -- a
-// credential named `ld_preload` would otherwise become LD_PRELOAD in the
-// model process.
+// PATH, HOME, TMPDIR, XDG_*), the dynamic-linker LD_* family -- a credential
+// named `ld_preload` would otherwise become LD_PRELOAD in the model process
+// -- or the harness's OPENCODE_* configuration surface, which belongs to
+// opencode.json and the framework, never to a grant.
 func ReservedEnvName(name string) bool {
 	switch name {
-	case "tz", "path", "home", "tmpdir":
+	case "tz", "path", "home", "tmpdir", "opencode":
 		return true
 	}
-	return strings.HasPrefix(name, "ld_") || strings.HasPrefix(name, "xdg_")
+	return strings.HasPrefix(name, "ld_") || strings.HasPrefix(name, "xdg_") || strings.HasPrefix(name, "opencode_")
 }
 
 // GenerateKey mints a 32-byte master key, hex-encoded.

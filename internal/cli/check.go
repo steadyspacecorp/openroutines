@@ -18,6 +18,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/plugin"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/runenv"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
@@ -219,6 +220,35 @@ func cmdCheck(args []string) int {
 			// an unknown name is a silent no-op at run time, so fail loudly.
 			if !slices.Contains(oc.MCPServers(), m) {
 				errs = append(errs, fmt.Sprintf("mcp server %q is not defined in opencode.json's mcp block", m))
+			}
+		}
+		// The run-environment plan -- the same computation the runner injects
+		// from. A collision or a shadowed variable is a configuration failure
+		// here, not a burned retry budget in production; a granted server's
+		// {env:...} reference must be a name this routine's run will contain.
+		if agent != nil {
+			model, _ := runner.EffectiveModel(agent, r)
+			plan := runenv.New(agent, r, model)
+			errs = append(errs, plan.Problems()...)
+			provider := ""
+			for _, c := range plan.Credentials {
+				if c.Kind == runenv.Provider {
+					provider = c.Name
+				}
+			}
+			for _, m := range r.FM.MCP {
+				for _, ref := range oc.MCPEnvRefs(m) {
+					switch {
+					case plan.Satisfies(ref):
+					case provider != "" && ref == strings.ToUpper(provider):
+						// Auto-injection is skipped when the key is not stored,
+						// so the reference resolves empty on exactly the setups
+						// where the model still authenticates via opencode.
+						errs = append(errs, fmt.Sprintf("mcp server %q references {env:%s}, the provider key, which is only auto-injected when stored -- declare %q in credentials to guarantee it", m, ref, provider))
+					default:
+						errs = append(errs, fmt.Sprintf("mcp server %q references {env:%s}, which is not in this routine's run environment -- declare the credential or define the variable", m, ref))
+					}
+				}
 			}
 		}
 		if !routine.NamePattern.MatchString(r.Name) {

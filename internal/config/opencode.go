@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -64,6 +65,32 @@ func (o *OpenCode) ProviderBaseURL(id string) string {
 func (o *OpenCode) MCPServers() []string {
 	mcp, _ := o.cfg["mcp"].(map[string]any)
 	return slices.Sorted(maps.Keys(mcp))
+}
+
+// envRefPattern matches opencode's {env:NAME} config placeholders.
+var envRefPattern = regexp.MustCompile(`\{env:([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// MCPEnvRefs returns the environment names a server's entry references via
+// {env:...} placeholders (auth headers, typically), sorted. check
+// cross-checks them against each granting routine's planned run environment:
+// runs construct their environment from scratch, so a reference no grant
+// satisfies resolves empty at run time and surfaces as an opaque auth
+// failure instead of a configuration problem.
+func (o *OpenCode) MCPEnvRefs(name string) []string {
+	mcp, _ := o.cfg["mcp"].(map[string]any)
+	entry, present := mcp[name]
+	if !present {
+		return nil
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return nil
+	}
+	set := map[string]struct{}{}
+	for _, m := range envRefPattern.FindAllStringSubmatch(string(raw), -1) {
+		set[m[1]] = struct{}{}
+	}
+	return slices.Sorted(maps.Keys(set))
 }
 
 // Drift returns warnings about framework concerns that have crept into the

@@ -36,6 +36,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/runenv"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
@@ -320,7 +321,14 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		return nil, err
 	}
 
-	secrets, err := resolveCredentials(dir, agent, r, model)
+	// The environment plan is the same one check validates; a fatal problem
+	// here means check would have failed the repo, so no retry can fix it --
+	// refuse before any secret material moves.
+	plan := runenv.New(agent, r, model)
+	if fatal := plan.Fatal(); len(fatal) > 0 {
+		return nil, fmt.Errorf("%w: run environment: %s", ErrFatal, strings.Join(fatal, "; "))
+	}
+	secrets, err := resolveCredentials(dir, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -423,11 +431,10 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	}
 	// Non-secret variables from openroutines.yml are injected into every run.
 	// On a name collision the credential wins; check flags it.
-	for _, k := range slices.Sorted(maps.Keys(agent.Variables)) {
-		if _, taken := secrets.env[strings.ToUpper(k)]; taken {
-			continue
+	for _, v := range plan.Variables {
+		if v.ShadowedBy == "" {
+			env = append(env, v.Env+"="+agent.Variables[v.Name])
 		}
-		env = append(env, strings.ToUpper(k)+"="+agent.Variables[k])
 	}
 
 	// The opencode invocation is identical across spawn paths.
@@ -936,19 +943,19 @@ func (s *runSecrets) release() {
 	s.cleanup = nil
 }
 
-// resolveCredentials builds the routine's secret set: declared credentials
-// plus the auto-injected provider key for its model. A raw credential
-// injects verbatim under its uppercase name; a typed credential (see
-// design decision "Credentials have types") is derived by the trusted runner and
-// injects its type's surface -- the stored root secret never enters the run.
-func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (*runSecrets, error) {
-	provider := strings.SplitN(model, "/", 2)[0]
-	providerKey := creds.ProviderKeyName(provider)
+// resolveCredentials fills the plan's credential grants with values from the
+// store: a raw credential injects verbatim under its uppercase name; a typed
+// credential (see design decision "Credentials have types") is derived by
+// the trusted runner and injects its type's surface -- the stored root
+// secret never enters the run. Which names each grant mints, and that they
+// don't collide, is the plan's job -- decided before any secret moved.
+func resolveCredentials(dir string, plan *runenv.Plan) (*runSecrets, error) {
 	out := &runSecrets{env: map[string]string{}, scrub: map[string]string{}}
+	declared := slices.ContainsFunc(plan.Credentials, func(c runenv.Credential) bool { return c.Kind != runenv.Provider })
 
 	key, keyErr := creds.LoadKey(dir)
 	if keyErr != nil {
-		if len(r.FM.Credentials) > 0 {
+		if declared {
 			return nil, fmt.Errorf("routine declares credentials but %w", keyErr)
 		}
 		// No store: opencode may still have its own auth for the provider.
@@ -958,39 +965,44 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range r.FM.Credentials {
-		v, present := store[name]
-		if !present {
-			return nil, fmt.Errorf("routine declares credential %q, not present in %s", name, creds.FileName)
-		}
-		spec, typed := agent.Credentials[name]
-		if !typed {
-			if err := out.setEnv(strings.ToUpper(name), v); err != nil {
-				return nil, err
+	for _, c := range plan.Credentials {
+		v, present := store[c.Name]
+		switch {
+		case c.Kind == runenv.Provider:
+			// The provider key is the framework's grant, not the routine's;
+			// absent from the store, opencode may still have its own auth.
+			if !present {
+				continue
 			}
-			out.scrub[name] = v
-			continue
-		}
-		derived, err := creds.Derive(name, spec, v)
-		if err != nil {
-			out.release()
-			return nil, err
-		}
-		out.cleanup = append(out.cleanup, derived.Cleanup)
-		for _, k := range slices.Sorted(maps.Keys(derived.Env)) {
-			if err := out.setEnv(k, derived.Env[k]); err != nil {
+			if err := out.setEnv(c.Env[0], v); err != nil {
 				out.release()
 				return nil, err
 			}
-		}
-		maps.Copy(out.scrub, derived.Scrub)
-	}
-	if v, present := store[providerKey]; present {
-		if err := out.setEnv(strings.ToUpper(providerKey), v); err != nil {
+			out.scrub[c.Name] = v
+		case !present:
 			out.release()
-			return nil, err
+			return nil, fmt.Errorf("routine declares credential %q, not present in %s", c.Name, creds.FileName)
+		case c.Kind == runenv.Raw:
+			if err := out.setEnv(c.Env[0], v); err != nil {
+				out.release()
+				return nil, err
+			}
+			out.scrub[c.Name] = v
+		default:
+			derived, err := creds.Derive(c.Name, c.Spec, v)
+			if err != nil {
+				out.release()
+				return nil, err
+			}
+			out.cleanup = append(out.cleanup, derived.Cleanup)
+			for _, k := range slices.Sorted(maps.Keys(derived.Env)) {
+				if err := out.setEnv(k, derived.Env[k]); err != nil {
+					out.release()
+					return nil, err
+				}
+			}
+			maps.Copy(out.scrub, derived.Scrub)
 		}
-		out.scrub[providerKey] = v
 	}
 	return out, nil
 }
