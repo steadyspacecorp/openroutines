@@ -311,8 +311,8 @@ func TestSessionThatEndedMidTurnIsNotCompleted(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.Tick(ctx, t0) // register
-	s.Tick(ctx, t0.Add(61*time.Second))
+	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
 	if strings.Contains(records, `"outcome":"completed"`) {

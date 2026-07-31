@@ -441,6 +441,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 // cleaned, exactly as Execute always behaved.
 func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 	r, meta, staging := sr.r, sr.meta, sr.staging
+	dir := sr.dir
 	workspace, runTmp, env, ocArgs := sr.workspace, sr.runTmp, sr.env, sr.ocArgs
 	attemptHome := filepath.Join(workspace, attemptHomeName)
 	model, timeout, level, secrets := sr.model, sr.timeout, sr.level, sr.secrets
