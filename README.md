@@ -1,5 +1,7 @@
 # OpenRoutines
 
+> **Early alpha:** OpenRoutines is under active development and not ready for production use. APIs, configuration, and behavior may change without notice. We're sharing the work early -- watch the repository for updates.
+
 [![ci](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml/badge.svg)](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml)
 
 **The framework for running simple, secure, and durable autonomous AI agents.**
