@@ -1,2 +1,5 @@
 # Release artifacts (goreleaser) -- they live on GitHub Releases
 dist/
+
+# `make build` output; the rest of bin/ is tracked development scripts
+/bin/openroutines
