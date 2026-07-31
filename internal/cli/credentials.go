@@ -27,9 +27,24 @@ func cmdCredentials(args []string) int {
 		fmt.Print(credentialsUsage)
 		return 2
 	}
+	if wantsHelp(args[:1]) {
+		fmt.Print(credentialsUsage)
+		return 0
+	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "list":
+		positional, _, help, err := parseFlags(rest, nil)
+		if err != nil {
+			return fail(err)
+		}
+		if help {
+			fmt.Println("usage: openroutines credentials list")
+			return 0
+		}
+		if len(positional) != 0 {
+			return fail(fmt.Errorf("usage: openroutines credentials list"))
+		}
 		return credentialsList()
 	case "set":
 		return credentialsSet(rest)
@@ -88,10 +103,18 @@ func credentialsList() int {
 }
 
 func credentialsSet(args []string) int {
-	if len(args) != 1 {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println("usage: openroutines credentials set <name>")
+		return 0
+	}
+	if len(positional) != 1 {
 		return fail(fmt.Errorf("usage: openroutines credentials set <name>"))
 	}
-	name := args[0]
+	name := positional[0]
 	if !creds.NamePattern.MatchString(name) {
 		return fail(fmt.Errorf("credential name %q must be lowercase snake_case (it becomes the env var %s)", name, strings.ToUpper(name)))
 	}
@@ -143,10 +166,18 @@ func credentialsSet(args []string) int {
 }
 
 func credentialsRemove(args []string) int {
-	if len(args) != 1 {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println("usage: openroutines credentials remove <name>")
+		return 0
+	}
+	if len(positional) != 1 {
 		return fail(fmt.Errorf("usage: openroutines credentials remove <name>"))
 	}
-	name := args[0]
+	name := positional[0]
 	key, store, err := openStore()
 	if err != nil {
 		return fail(err)

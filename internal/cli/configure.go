@@ -13,16 +13,41 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
+const configureUsage = "usage: openroutines configure [--yes]"
+
 // cmdConfigure interactively fills in openroutines.yml, generates the master key,
 // and seeds encrypted credentials. Idempotent: existing values are defaults.
-func cmdConfigure(_ []string) int {
+func cmdConfigure(args []string) int {
+	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--yes": {}})
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println(configureUsage)
+		return 0
+	}
+	if len(positional) != 0 {
+		return fail(fmt.Errorf("%s", configureUsage))
+	}
+	yes := flags["--yes"] == "true"
+
 	dir := "."
 	agent, err := config.Load(dir)
 	if err != nil {
 		return fail(err)
 	}
 
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
 	in := bufio.NewReader(os.Stdin)
+	// eofHit tracks whether stdin ran out mid-prompt: a script piping a
+	// complete set of answers (bin/smoke does exactly this) reads a real
+	// newline for every field and never sets it. An unfamiliar invocation
+	// with nothing on stdin -- the reflex against configure --help before
+	// --help was recognized (issue #67) -- hits EOF on the very first
+	// prompt, and every prompt after it would silently take its default:
+	// exactly the failure mode that generated a master key and wrote
+	// credentials.yml.enc unattended.
+	eofHit := false
 	prompt := func(label, current string) string {
 		def := current
 		if strings.Contains(def, "{{") {
@@ -33,7 +58,10 @@ func cmdConfigure(_ []string) int {
 		} else {
 			fmt.Printf("%s: ", label)
 		}
-		line, _ := in.ReadString('\n')
+		line, rerr := in.ReadString('\n')
+		if rerr != nil {
+			eofHit = true
+		}
 		line = strings.TrimSpace(line)
 		if line == "" {
 			return def
@@ -49,6 +77,9 @@ func cmdConfigure(_ []string) int {
 	agent.Defaults.Model = prompt("Default model (provider/model)", defaultModel(agent.Defaults.Model))
 	if agent.Defaults.Timeout == "" || strings.Contains(agent.Defaults.Timeout, "{{") {
 		agent.Defaults.Timeout = "5m"
+	}
+	if eofHit && !interactive && !yes {
+		return fail(fmt.Errorf("stdin ended before every prompt was answered -- rerun interactively, pipe a complete set of answers, or pass --yes to accept defaults for the rest (nothing was written)"))
 	}
 	if err := agent.Save(dir); err != nil {
 		return fail(err)

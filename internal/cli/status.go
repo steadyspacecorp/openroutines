@@ -21,9 +21,23 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
+const statusUsage = "usage: openroutines status"
+
 // cmdStatus shows what the agent has and still needs: identity, key, model,
 // routines with their next firing, skills, and memory sync state.
-func cmdStatus(_ []string) int {
+func cmdStatus(args []string) int {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println(statusUsage)
+		return 0
+	}
+	if len(positional) != 0 {
+		return fail(fmt.Errorf("%s", statusUsage))
+	}
+
 	dir := "."
 	agent, err := config.Load(dir)
 	if err != nil {

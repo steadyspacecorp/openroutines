@@ -25,7 +25,7 @@ func TestParseRoutineRunArgs(t *testing.T) {
 		{name: "extra argument", args: []string{"digest", "other"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			gotName, gotNo, err := parseRoutineRunArgs(tc.args)
+			gotName, gotNo, _, err := parseRoutineRunArgs(tc.args)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("error = %v, want error %v", err, tc.wantErr)
 			}

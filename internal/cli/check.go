@@ -26,10 +26,24 @@ import (
 // define the real vocabulary; this just catches obvious mistakes.
 var effortPattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
+const checkUsage = "usage: openroutines check"
+
 // cmdCheck validates the agent repository: openroutines.yml, every routine's
 // frontmatter, skill references, credential names, and deploy prerequisites.
 // Exit code 1 on any failure -- made for CI.
-func cmdCheck(_ []string) int {
+func cmdCheck(args []string) int {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println(checkUsage)
+		return 0
+	}
+	if len(positional) != 0 {
+		return fail(fmt.Errorf("%s", checkUsage))
+	}
+
 	dir := "."
 	failures := 0
 	warnings := 0
