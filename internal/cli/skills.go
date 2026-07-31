@@ -25,6 +25,10 @@ func cmdSkills(args []string) int {
 		fmt.Print(skillsUsage)
 		return 2
 	}
+	if wantsHelp(args[:1]) {
+		fmt.Print(skillsUsage)
+		return 0
+	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "new":
@@ -32,6 +36,17 @@ func cmdSkills(args []string) int {
 	case "add":
 		return skillsAdd(rest)
 	case "list":
+		positional, _, help, err := parseFlags(rest, nil)
+		if err != nil {
+			return fail(err)
+		}
+		if help {
+			fmt.Println("usage: openroutines skills list")
+			return 0
+		}
+		if len(positional) != 0 {
+			return fail(fmt.Errorf("usage: openroutines skills list"))
+		}
 		return skillsList()
 	case "remove":
 		return skillsRemove(rest)
@@ -52,9 +67,15 @@ Usage:
   openroutines skills remove <name>        refuses while any routine declares it
 `
 
+const skillsNewUsage = "usage: openroutines skills new <name | git-url | owner/repo> [--path <sub/dir>]"
+
 func skillsNew(args []string) int {
+	if wantsHelp(args) {
+		fmt.Println(skillsNewUsage)
+		return 0
+	}
 	if len(args) == 0 {
-		return fail(fmt.Errorf("usage: openroutines skills new <name | git-url | owner/repo> [--path <sub/dir>]"))
+		return fail(fmt.Errorf("%s", skillsNewUsage))
 	}
 	// A skill name can't contain / : or @ -- so an argument that does is a
 	// source to vendor from, not a name to scaffold.
@@ -62,7 +83,7 @@ func skillsNew(args []string) int {
 		return skillsAdd(args)
 	}
 	if len(args) != 1 {
-		return fail(fmt.Errorf("usage: openroutines skills new <name | git-url | owner/repo> [--path <sub/dir>]"))
+		return fail(fmt.Errorf("%s", skillsNewUsage))
 	}
 	name := args[0]
 	if !skill.NamePattern.MatchString(name) {
@@ -111,10 +132,18 @@ func skillsList() int {
 }
 
 func skillsRemove(args []string) int {
-	if len(args) != 1 {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println("usage: openroutines skills remove <name>")
+		return 0
+	}
+	if len(positional) != 1 {
 		return fail(fmt.Errorf("usage: openroutines skills remove <name>"))
 	}
-	name := args[0]
+	name := positional[0]
 	// Grammar first, then containment -- this path ends in os.RemoveAll,
 	// and an unvalidated name like "../.." would resolve outside skills/.
 	if !skill.NamePattern.MatchString(name) {

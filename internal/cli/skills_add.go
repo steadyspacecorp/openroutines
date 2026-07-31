@@ -14,21 +14,22 @@ import (
 // skillsAdd vendors a skill from a git repository into skills/<name>,
 // recording provenance (source + commit) in the SKILL.md frontmatter.
 // A skill is an executable dependency: the user reviews the diff like code.
+const skillsAddUsage = "usage: openroutines skills add <git-url | owner/repo> [--path sub/dir]"
+
 func skillsAdd(args []string) int {
-	var source, subPath string
-	rest := args[:0:0]
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--path" && i+1 < len(args) {
-			subPath = args[i+1]
-			i++
-			continue
-		}
-		rest = append(rest, args[i])
+	rest, flags, help, err := parseFlags(args, map[string]flagSpec{"--path": {value: true}})
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println(skillsAddUsage)
+		return 0
 	}
 	if len(rest) != 1 {
-		return fail(fmt.Errorf("usage: openroutines skills add <git-url | owner/repo> [--path sub/dir]"))
+		return fail(fmt.Errorf("%s", skillsAddUsage))
 	}
-	source = rest[0]
+	source := rest[0]
+	subPath := flags["--path"]
 	cloneURL := source
 	// GitHub shorthand: owner/repo.
 	if !strings.Contains(source, "://") && !strings.Contains(source, "@") && strings.Count(source, "/") == 1 {

@@ -16,15 +16,21 @@ import (
 // Deliberately not run by status or usage: Sync fetches, may rebase, and
 // force-pushes the accepted-tip baseline to origin. A command that reports
 // state must not do any of that.
+const syncUsage = "usage: openroutines sync [--push]"
+
 func cmdSync(args []string) int {
-	push := false
-	for _, a := range args {
-		if a == "--push" {
-			push = true
-			continue
-		}
-		return fail(fmt.Errorf("usage: openroutines sync [--push]"))
+	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--push": {}})
+	if err != nil {
+		return fail(err)
 	}
+	if help {
+		fmt.Println(syncUsage)
+		return 0
+	}
+	if len(positional) != 0 {
+		return fail(fmt.Errorf("%s", syncUsage))
+	}
+	push := flags["--push"] == "true"
 
 	// A fresh clone has no memory worktree at all -- the exact checkout most
 	// likely to be reaching for sync. Materialize it the way the supervisor

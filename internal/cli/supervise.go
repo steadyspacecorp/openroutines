@@ -2,15 +2,30 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os/signal"
 	"syscall"
 
 	"github.com/steadyspacecorp/openroutines/internal/supervisor"
 )
 
+const superviseUsage = "usage: openroutines supervise"
+
 // cmdSupervise runs the scheduler until SIGTERM/SIGINT: the container
 // entrypoint.
-func cmdSupervise(_ []string) int {
+func cmdSupervise(args []string) int {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println(superviseUsage)
+		return 0
+	}
+	if len(positional) != 0 {
+		return fail(fmt.Errorf("%s", superviseUsage))
+	}
+
 	s, err := supervisor.New(".")
 	if err != nil {
 		return fail(err)

@@ -37,15 +37,22 @@ type usageRow struct {
 // from runs.jsonl. --json emits the machine-readable form for scripts and
 // monitors; tokens with model and effort are the durable record, and
 // cost_reported is opencode's own estimate (informational -- prices drift).
+const usageUsage = "usage: openroutines usage [--json]"
+
 func cmdUsage(args []string) int {
-	asJSON := false
-	for _, a := range args {
-		if a == "--json" {
-			asJSON = true
-			continue
-		}
-		return fail(fmt.Errorf("usage: openroutines usage [--json]"))
+	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--json": {}})
+	if err != nil {
+		return fail(err)
 	}
+	if help {
+		fmt.Println(usageUsage)
+		return 0
+	}
+	if len(positional) != 0 {
+		return fail(fmt.Errorf("%s", usageUsage))
+	}
+	asJSON := flags["--json"] == "true"
+
 	rows, records := aggregateUsage(".")
 
 	if asJSON {

@@ -14,12 +14,22 @@ import (
 
 const templateRoot = "template"
 
+const scaffoldUsage = "usage: openroutines scaffold <path>"
+
 // cmdScaffold stamps out a new agent repository from the embedded template.
 func cmdScaffold(args []string) int {
-	if len(args) != 1 {
-		return fail(fmt.Errorf("usage: openroutines scaffold <path>"))
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
 	}
-	target := args[0]
+	if help {
+		fmt.Println(scaffoldUsage)
+		return 0
+	}
+	if len(positional) != 1 {
+		return fail(fmt.Errorf("%s", scaffoldUsage))
+	}
+	target := positional[0]
 	name := filepath.Base(target)
 
 	if entries, err := os.ReadDir(target); err == nil && len(entries) > 0 {
@@ -35,7 +45,7 @@ func cmdScaffold(args []string) int {
 		"{{OPENROUTINES_VERSION}}", version.Version,
 	)
 
-	err := fs.WalkDir(openroutines.TemplateFS, templateRoot, func(path string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(openroutines.TemplateFS, templateRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

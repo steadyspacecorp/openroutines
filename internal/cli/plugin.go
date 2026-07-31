@@ -15,9 +15,15 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/plugin"
 )
 
+const pluginUsage = "usage: openroutines plugin <add|list|update>"
+
 func cmdPlugin(args []string) int {
 	if len(args) == 0 {
-		return fail(fmt.Errorf("usage: openroutines plugin <add|list|update>"))
+		return fail(fmt.Errorf("%s", pluginUsage))
+	}
+	if wantsHelp(args[:1]) {
+		fmt.Println(pluginUsage)
+		return 0
 	}
 	switch args[0] {
 	case "add":
@@ -31,30 +37,30 @@ func cmdPlugin(args []string) int {
 	}
 }
 
+const pluginAddUsage = "usage: openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir] [--yes]"
+
 // pluginAdd installs a plugin: clone (or read a local directory), validate
 // the whole payload, show the manifest and the grant summary, confirm, copy.
 // Everything the bundle asks for is stated before anything lands -- review
 // is the only gate (design decision "Plugins").
 func pluginAdd(args []string) int {
-	var source, subPath string
-	yes := false
-	rest := args[:0:0]
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--path" && i+1 < len(args) {
-			subPath = args[i+1]
-			i++
-			continue
-		}
-		if args[i] == "--yes" {
-			yes = true
-			continue
-		}
-		rest = append(rest, args[i])
+	rest, flags, help, err := parseFlags(args, map[string]flagSpec{
+		"--path": {value: true},
+		"--yes":  {},
+	})
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println(pluginAddUsage)
+		return 0
 	}
 	if len(rest) != 1 {
-		return fail(fmt.Errorf("usage: openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir] [--yes]"))
+		return fail(fmt.Errorf("%s", pluginAddUsage))
 	}
-	source = rest[0]
+	source := rest[0]
+	subPath := flags["--path"]
+	yes := flags["--yes"] == "true"
 
 	root, provenance, cleanup, err := plugin.Fetch(source, subPath, "")
 	if err != nil {
@@ -177,7 +183,15 @@ func shortRevision(revision string) string {
 }
 
 func pluginList(args []string) int {
-	if len(args) != 0 {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println("usage: openroutines plugin list")
+		return 0
+	}
+	if len(positional) != 0 {
 		return fail(fmt.Errorf("usage: openroutines plugin list"))
 	}
 	entries, err := os.ReadDir("plugins")
@@ -207,20 +221,22 @@ func pluginList(args []string) int {
 	return 0
 }
 
+const pluginUpdateUsage = "usage: openroutines plugin update <name> [--yes]"
+
 func pluginUpdate(args []string) int {
-	yes := false
-	var rest []string
-	for _, arg := range args {
-		if arg == "--yes" {
-			yes = true
-		} else {
-			rest = append(rest, arg)
-		}
+	rest, flags, help, err := parseFlags(args, map[string]flagSpec{"--yes": {}})
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println(pluginUpdateUsage)
+		return 0
 	}
 	if len(rest) != 1 {
-		return fail(fmt.Errorf("usage: openroutines plugin update <name> [--yes]"))
+		return fail(fmt.Errorf("%s", pluginUpdateUsage))
 	}
 	name := rest[0]
+	yes := flags["--yes"] == "true"
 	upd, err := plugin.PrepareUpdate(".", name)
 	if err != nil {
 		return fail(err)

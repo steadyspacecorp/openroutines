@@ -28,10 +28,24 @@ var frameworkOwned = []string{
 	"AGENTS.md",
 }
 
+const updateUsage = "usage: openroutines update"
+
 // cmdUpdate brings the agent up to the version of the running binary: bumps
 // the pin and offers each framework-owned file's changes interactively
 // (rails app:update style). It stages nothing -- review, commit, push.
-func cmdUpdate(_ []string) int {
+func cmdUpdate(args []string) int {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println(updateUsage)
+		return 0
+	}
+	if len(positional) != 0 {
+		return fail(fmt.Errorf("%s", updateUsage))
+	}
+
 	dir := "."
 	agent, err := config.Load(dir)
 	if err != nil {

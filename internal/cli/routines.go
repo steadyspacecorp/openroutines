@@ -29,11 +29,26 @@ func cmdRoutines(args []string) int {
 		fmt.Print(routinesUsage)
 		return 2
 	}
+	if wantsHelp(args[:1]) {
+		fmt.Print(routinesUsage)
+		return 0
+	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "new":
 		return routinesNew(rest)
 	case "list":
+		positional, _, help, err := parseFlags(rest, nil)
+		if err != nil {
+			return fail(err)
+		}
+		if help {
+			fmt.Println("usage: openroutines routines list")
+			return 0
+		}
+		if len(positional) != 0 {
+			return fail(fmt.Errorf("usage: openroutines routines list"))
+		}
 		return routinesList()
 	case "run":
 		return routinesRun(rest)
@@ -66,9 +81,13 @@ Usage:
 `
 
 func routinesRun(args []string) int {
-	nameArg, noMemory, err := parseRoutineRunArgs(args)
+	nameArg, noMemory, help, err := parseRoutineRunArgs(args)
 	if err != nil {
 		return fail(err)
+	}
+	if help {
+		fmt.Println(routinesRunUsage)
+		return 0
 	}
 	name, err := routineName(nameArg)
 	if err != nil {
@@ -93,34 +112,35 @@ func routinesRun(args []string) int {
 	return 0
 }
 
-func parseRoutineRunArgs(args []string) (string, bool, error) {
-	noMemory := false
-	var nameArg string
-	for _, arg := range args {
-		switch arg {
-		case "--no-memory":
-			if noMemory {
-				return "", false, fmt.Errorf("usage: openroutines routines run <name> [--no-memory]")
-			}
-			noMemory = true
-		default:
-			if strings.HasPrefix(arg, "-") || nameArg != "" {
-				return "", false, fmt.Errorf("usage: openroutines routines run <name> [--no-memory]")
-			}
-			nameArg = arg
-		}
+const routinesRunUsage = "usage: openroutines routines run <name> [--no-memory]"
+
+func parseRoutineRunArgs(args []string) (string, bool, bool, error) {
+	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--no-memory": {}})
+	if err != nil {
+		return "", false, false, err
 	}
-	if nameArg == "" {
-		return "", false, fmt.Errorf("usage: openroutines routines run <name> [--no-memory]")
+	if help {
+		return "", false, true, nil
 	}
-	return nameArg, noMemory, nil
+	if len(positional) != 1 {
+		return "", false, false, fmt.Errorf("%s", routinesRunUsage)
+	}
+	return positional[0], flags["--no-memory"] == "true", false, nil
 }
 
 func routinesNew(args []string) int {
-	if len(args) != 1 {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println("usage: openroutines routines new <name>")
+		return 0
+	}
+	if len(positional) != 1 {
 		return fail(fmt.Errorf("usage: openroutines routines new <name>"))
 	}
-	name, err := routineName(args[0])
+	name, err := routineName(positional[0])
 	if err != nil {
 		return fail(err)
 	}
@@ -179,10 +199,18 @@ func routinePath(name string) string {
 }
 
 func routinesEdit(args []string) int {
-	if len(args) != 1 {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println("usage: openroutines routines edit <name>")
+		return 0
+	}
+	if len(positional) != 1 {
 		return fail(fmt.Errorf("usage: openroutines routines edit <name>"))
 	}
-	name, err := routineName(args[0])
+	name, err := routineName(positional[0])
 	if err != nil {
 		return fail(err)
 	}
@@ -215,10 +243,18 @@ func routinesSetActive(args []string, active bool) int {
 	if !active {
 		verb = "deactivate"
 	}
-	if len(args) != 1 {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Printf("usage: openroutines routines %s <name>\n", verb)
+		return 0
+	}
+	if len(positional) != 1 {
 		return fail(fmt.Errorf("usage: openroutines routines %s <name>", verb))
 	}
-	name, err := routineName(args[0])
+	name, err := routineName(positional[0])
 	if err != nil {
 		return fail(err)
 	}
@@ -235,10 +271,18 @@ func routinesSetActive(args []string, active bool) int {
 }
 
 func routinesRemove(args []string) int {
-	if len(args) != 1 {
+	positional, _, help, err := parseFlags(args, nil)
+	if err != nil {
+		return fail(err)
+	}
+	if help {
+		fmt.Println("usage: openroutines routines remove <name>")
+		return 0
+	}
+	if len(positional) != 1 {
 		return fail(fmt.Errorf("usage: openroutines routines remove <name>"))
 	}
-	name, err := routineName(args[0])
+	name, err := routineName(positional[0])
 	if err != nil {
 		return fail(err)
 	}
