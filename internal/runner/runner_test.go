@@ -381,6 +381,56 @@ func settleFixture(t *testing.T) string {
 	return dir
 }
 
+// A new consumer's inbox is empty by construction. Its first successful run
+// must still persist the current boundary, or every later run is another
+// "first run" that skips forward and receives nothing forever.
+func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
+	dir := settleFixture(t)
+	mem := memory.At(dir)
+	through, err := mem.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := func(first bool, boundary string) *Staging {
+		s := &Staging{
+			MemoryDir:        t.TempDir(),
+			BaseDir:          t.TempDir(),
+			workspace:        t.TempDir(),
+			ConsumerThrough:  boundary,
+			ConsumerFirstRun: first,
+		}
+		if err := mem.Snapshot(s.BaseDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := memory.CloneTree(s.BaseDir, s.MemoryDir); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	r := &routine.Routine{Name: "slack-report", FM: routine.Frontmatter{Consumes: "memory"}}
+	if _, err := Settle(dir, r, stage(true, through), &ExecResult{Outcome: Completed}, Meta{RunID: "run_first", AttemptID: "attempt_01"}, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := mem.LoadCursor(r.Name)
+	if err != nil || cursor == nil || cursor.ConsumedThrough != through || cursor.ByRun != "run_first" {
+		t.Fatalf("bootstrap cursor = %+v, err = %v; want %s by run_first", cursor, err, through)
+	}
+
+	// Once initialized, successful completion alone must not consume real
+	// pending changes: the explicit marker remains the delivery receipt.
+	newBoundary, err := mem.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle(dir, r, stage(false, newBoundary), &ExecResult{Outcome: Completed}, Meta{RunID: "run_empty", AttemptID: "attempt_01"}, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err = mem.LoadCursor(r.Name)
+	if err != nil || cursor.ConsumedThrough != through || cursor.ByRun != "run_first" {
+		t.Fatalf("cursor advanced without marker: %+v, err = %v", cursor, err)
+	}
+}
+
 // A completed attempt whose staged memory is rejected settles as crashed --
 // in the returned outcome, the failure event, the run record, and the
 // settlement commit alike. The run record saying "completed" while the run
