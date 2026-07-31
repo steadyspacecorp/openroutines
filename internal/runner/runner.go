@@ -473,21 +473,29 @@ func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Ro
 	}
 	res.Duration = time.Since(started).Round(time.Millisecond)
 	flush()
+	res.Model = model
+	res.Effort = r.FM.Effort
+	// Exit code alone is too weak a success signal for an agentic runtime:
+	// opencode exits 0 on a session whose agent loop died mid-turn. The
+	// session record is what says whether the run actually finished (design
+	// decision "A run is completed only when its session ended cleanly").
+	session := captureSession(workspace, ocExec)
+	res.Usage = session.Usage
+	if res.Outcome == Completed && session.Failure != "" {
+		res.Outcome = Crashed
+		res.Hint = session.Failure
+	}
+	if res.Outcome == Crashed && authFailurePattern.Match(tail.buf) {
+		provider := strings.SplitN(model, "/", 2)[0]
+		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
+		res.Hint = authHint(dir, model, injected)
+	}
 	if level > config.LogInfo && (res.Outcome == Crashed || res.Outcome == Timeout) && len(tail.buf) > 0 {
 		// A failed attempt's last output is the diagnostic payload, not
 		// chatter: it escapes the level gate, or a warn/error production
 		// agent fails invisibly.
 		_, _ = fmt.Fprintf(os.Stdout, "%s %s %s -- last output:\n%s\n", r.Name, meta.RunID, res.Outcome, bytes.TrimSpace(tail.buf))
 	}
-	res.Model = model
-	res.Effort = r.FM.Effort
-	res.Usage = captureUsage(workspace, ocExec)
-	if res.Outcome == Crashed && authFailurePattern.Match(tail.buf) {
-		provider := strings.SplitN(model, "/", 2)[0]
-		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
-		res.Hint = authHint(dir, model, injected)
-	}
-
 	ok = true
 	return res, staging, nil
 }
@@ -677,6 +685,11 @@ func recordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, man
 	}
 	if res.Effort != "" {
 		fields["effort"] = res.Effort
+	}
+	// Why a failed attempt failed belongs in the machine-readable log too,
+	// not only in the event: `status` and the check-in routine read this.
+	if res.Hint != "" {
+		fields["hint"] = res.Hint
 	}
 	if res.Usage != nil {
 		fields["tokens"] = res.Usage
