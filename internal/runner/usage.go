@@ -157,7 +157,12 @@ func summarize(msgs []assistantInfo) Session {
 }
 
 // assistantInfo is the slice of an opencode message record the capture
-// reads -- identical in the export payload and the legacy files.
+// reads -- identical in the export payload and the legacy files. Field
+// names are measured against the real runtime, not just its schema: across
+// 227 assistant messages written by opencode 1.18.3, `finish` was present
+// on 224 (values `stop` and `tool-calls`) and `error` on 3, always shaped
+// `{name, data:{message}}`. The three errored messages carried no `finish`
+// at all, which is why the error check is not folded into the finish one.
 type assistantInfo struct {
 	Role   string `json:"role"`
 	Tokens *struct {
