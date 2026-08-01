@@ -3,6 +3,7 @@ package supervisor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -53,7 +54,7 @@ func TestAttemptIdentityIsNotReusedWhenCleanupFails(t *testing.T) {
 			return fmt.Errorf("pid escaped uid %d", uid)
 		},
 	}
-	if s.releaseIdentity(20000) {
+	if s.releaseIdentity(20000, nil) {
 		t.Fatal("cleanup failure returned the identity to the pool")
 	}
 	if len(s.slots) != 0 {
@@ -66,6 +67,30 @@ func TestAttemptIdentityIsNotReusedWhenCleanupFails(t *testing.T) {
 		}
 	default:
 		t.Fatal("cleanup failure did not stop supervision")
+	}
+}
+
+func TestAttemptIdentityIsNotReusedWhenWorkspaceCleanupFails(t *testing.T) {
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	s := &Supervisor{
+		Log:   log.New(io.Discard, "", 0),
+		slots: make(chan uint32, 1),
+		fatal: make(chan error, 1),
+		reap:  func(uint32) error { return nil },
+	}
+	if s.releaseIdentity(20000, errors.New("attempt workspace still exists")) {
+		t.Fatal("workspace cleanup failure returned the identity to the pool")
+	}
+	if len(s.slots) != 0 {
+		t.Fatal("poisoned identity is available for reuse")
+	}
+	select {
+	case err := <-s.fatal:
+		if !strings.Contains(err.Error(), "attempt workspace still exists") {
+			t.Fatalf("fatal error = %v", err)
+		}
+	default:
+		t.Fatal("workspace cleanup failure did not stop supervision")
 	}
 }
 

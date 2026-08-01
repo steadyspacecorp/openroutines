@@ -314,25 +314,27 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			defer s.runs.Done()
 			defer release()
 			defer s.setRunning(d.r.Name, false)
-			s.execute(ctx, d.r, d.st, now, uid)
-			if !s.releaseIdentity(uid) {
+			cleanupErr := s.execute(ctx, d.r, d.st, now, uid)
+			if !s.releaseIdentity(uid, cleanupErr) {
 				return
 			}
 		}(d, attemptUID, release)
 	}
 }
 
-func (s *Supervisor) releaseIdentity(uid uint32) bool {
+func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
+	err := cleanupErr
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-		if err := s.reap(uid); err != nil {
-			fatal := fmt.Errorf("attempt uid %d cleanup failed -- refusing to reuse identity: %w", uid, err)
-			s.errorf("%v", fatal)
-			select {
-			case s.fatal <- fatal:
-			default:
-			}
-			return false // poisoned: never return this identity to the pool
+		err = errors.Join(err, s.reap(uid))
+	}
+	if err != nil {
+		fatal := fmt.Errorf("attempt uid %d cleanup failed -- refusing to reuse identity: %w", uid, err)
+		s.errorf("%v", fatal)
+		select {
+		case s.fatal <- fatal:
+		default:
 		}
+		return false // poisoned: never return this identity to the pool
 	}
 	s.slots <- uid
 	return true
@@ -581,7 +583,7 @@ func (s *Supervisor) abandon(name string, st *schedule.State, detail string, now
 }
 
 // execute runs one attempt of a pending logical run and settles the outcome.
-func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) {
+func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) (cleanupErr error) {
 	agent, err := config.Load(s.Dir)
 	if err != nil {
 		s.errorf("%s: %v", r.Name, err)
@@ -631,8 +633,11 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		defer stopHeartbeat()
 	}
 	staged, err := runner.Stage(s.Dir, agent, r, meta, &s.memMu)
+	if errors.Is(err, runner.ErrAttemptCleanup) {
+		cleanupErr = err
+	}
 	if err == nil && !s.noOrigin && !s.renewLease() {
-		staged.Discard()
+		cleanupErr = staged.Discard()
 		s.warnf("%s: %s not started -- lease lost after staging; the current holder will retry it", r.Name, p.RunID)
 		return
 	}
@@ -643,6 +648,9 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	var staging *runner.Staging
 	if err == nil {
 		res, staging, err = staged.Run(runCtx)
+		if errors.Is(err, runner.ErrAttemptCleanup) {
+			cleanupErr = err
+		}
 	}
 	detail := ""
 	fatal := false
@@ -655,7 +663,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
 		detail = err.Error()
 	} else {
-		defer staging.Cleanup()
+		defer func() { cleanupErr = errors.Join(cleanupErr, staging.Cleanup()) }()
 	}
 
 	// Settlement is the other memory critical section: import, run record,
@@ -732,6 +740,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		return // keep completion and remediation together on the next successful push
 	}
 	s.pushBestEffort()
+	return
 }
 
 func (s *Supervisor) syncOnce() {
