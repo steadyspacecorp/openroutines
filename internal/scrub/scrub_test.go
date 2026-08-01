@@ -42,6 +42,26 @@ func TestBufferCapOnNewlineFreeOutput(t *testing.T) {
 	}
 }
 
+// Ephemeral entries under one name coexist, and releasing one leaves the
+// others redacting -- the concurrent-runs contract.
+func TestEphemeralRegistrationsCoexistAndRelease(t *testing.T) {
+	release1 := RegisterEphemeral("bearer (desk)", "eph-value-one")
+	release2 := RegisterEphemeral("bearer (desk)", "eph-value-two")
+	for _, v := range []string{"eph-value-one", "eph-value-two"} {
+		if got := Redacted(v); got != "[REDACTED:BEARER (DESK)]" {
+			t.Fatalf("live ephemeral %q must redact, got %q", v, got)
+		}
+	}
+	release1()
+	if got := Redacted("eph-value-one"); got != "eph-value-one" {
+		t.Fatalf("released value must stop redacting, got %q", got)
+	}
+	if got := Redacted("eph-value-two"); got != "[REDACTED:BEARER (DESK)]" {
+		t.Fatalf("release must remove only its own entry, got %q", got)
+	}
+	release2()
+}
+
 func TestEmptySecretNeverRedacts(t *testing.T) {
 	Register(map[string]string{"empty": ""})
 	if got := Redacted("hello"); got != "hello" {

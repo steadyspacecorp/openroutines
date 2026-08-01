@@ -15,44 +15,75 @@ import (
 	"bytes"
 	"io"
 	"maps"
+	"strconv"
 	"strings"
 	"sync/atomic"
 )
+
+// entry is one registered secret: the marker name is not the map key, so
+// several live entries may share a name (see RegisterEphemeral).
+type entry struct {
+	name  string
+	value string
+}
 
 // process is the registry: a concurrency-safe map where readers snapshot
 // the current state through an atomic pointer while writers swap in a
 // rebuilt copy. Trigger polls register bearer material mid-flight while run
 // goroutines redact through writers that hold the set -- mutating a plain
 // map under those readers is a fatal runtime error, not just a race.
-var process atomic.Pointer[map[string]string]
+var process atomic.Pointer[map[string]entry]
 
 func init() {
-	process.Store(&map[string]string{})
+	process.Store(&map[string]entry{})
 }
 
-// Register adds secret values to the process registry, keyed by the name
-// that appears in the redaction marker. A re-registered name overwrites
-// rather than accumulates, so repeated materialization of the same
-// credential keeps the registry bounded.
-func Register(values map[string]string) {
+func swap(mutate func(map[string]entry)) {
 	for {
 		old := process.Load()
-		next := make(map[string]string, len(*old)+len(values))
+		next := make(map[string]entry, len(*old)+1)
 		maps.Copy(next, *old)
-		maps.Copy(next, values)
+		mutate(next)
 		if process.CompareAndSwap(old, &next) {
 			return
 		}
 	}
 }
 
+// Register adds process-lifetime secret values, keyed by the name that
+// appears in the redaction marker. A re-registered name overwrites rather
+// than accumulates, so repeated materialization of the same credential
+// keeps the registry bounded.
+func Register(values map[string]string) {
+	swap(func(next map[string]entry) {
+		for name, value := range values {
+			next["named:"+name] = entry{name, value}
+		}
+	})
+}
+
+var ephemeralSeq atomic.Uint64
+
+// RegisterEphemeral adds one short-lived secret value under its own entry:
+// concurrent runs minting the same credential each hold distinct material,
+// and one registration must never displace another still in use. The
+// returned release removes exactly this entry, which is what keeps the
+// registry bounded -- by live material, not by history.
+func RegisterEphemeral(name, value string) (release func()) {
+	id := "ephemeral:" + strconv.FormatUint(ephemeralSeq.Add(1), 10)
+	swap(func(next map[string]entry) { next[id] = entry{name, value} })
+	return func() {
+		swap(func(next map[string]entry) { delete(next, id) })
+	}
+}
+
 // Redacted replaces every registered secret value in s with [REDACTED:name].
 func Redacted(s string) string {
-	for name, value := range *process.Load() {
-		if value == "" {
+	for _, e := range *process.Load() {
+		if e.value == "" {
 			continue
 		}
-		s = strings.ReplaceAll(s, value, "[REDACTED:"+strings.ToUpper(name)+"]")
+		s = strings.ReplaceAll(s, e.value, "[REDACTED:"+strings.ToUpper(e.name)+"]")
 	}
 	return s
 }

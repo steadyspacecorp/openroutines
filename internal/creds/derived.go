@@ -28,8 +28,9 @@ type Spec struct {
 // exact environment to inject into a run, the bearer value (when the type
 // produces one) available to trusted supervisor callers, and cleanup that
 // disposes of anything revocable. Derive registers the bearer with the
-// scrub registry; neither providers nor callers handle redaction. Cleanup
-// is best-effort and safe to call once after the material's use.
+// scrub registry and Cleanup releases that registration; neither providers
+// nor callers handle redaction. Cleanup is best-effort and safe to call
+// once after the material's use.
 type Derived struct {
 	Env     map[string]string
 	Bearer  string
@@ -141,6 +142,15 @@ func Derive(name string, s Spec, stored string) (*Derived, error) {
 	if err != nil {
 		return nil, err
 	}
-	scrub.Register(map[string]string{s.Type + " bearer (" + name + ")": d.Bearer})
+	// Ephemeral, not named: concurrent runs minting the same credential hold
+	// distinct bearers, and registering the second must not stop redacting
+	// the first. Cleanup revokes before it releases, so anything the
+	// revocation logs still redacts.
+	release := scrub.RegisterEphemeral(s.Type+" bearer ("+name+")", d.Bearer)
+	revoke := d.Cleanup
+	d.Cleanup = func() {
+		revoke()
+		release()
+	}
 	return d, nil
 }
