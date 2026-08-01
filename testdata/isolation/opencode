@@ -8,4 +8,11 @@ printf '{"role":"assistant","modelID":"fake","finish":"stop","tokens":{"input":1
   > .home/.local/share/opencode/storage/message/ses_fake/msg_1.json
 mkdir -p memory/ledgers
 echo "uid=$(id -u) gid=$(id -g)" >> memory/ledgers/isolation.md
+# The umask keeps default modes group-accessible, but a model process can
+# still chmod its own files closed. Leave a locked tree in the attempt home
+# so the smoke run proves cleanup reclaims and removes it anyway.
+mkdir -p .home/locked
+echo hidden > .home/locked/secret
+chmod 600 .home/locked/secret
+chmod 700 .home/locked
 echo done

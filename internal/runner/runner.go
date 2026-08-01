@@ -134,6 +134,10 @@ type Staging struct {
 	// compose instead of clobbering each other.
 	BaseDir   string
 	workspace string
+	// attemptUID is set when the workspace was prepared for an attempt
+	// identity: Cleanup may then need that identity's help to reclaim
+	// paths the model process chmodded away from the group.
+	attemptUID uint32
 
 	// ConsumerThrough is the memory commit the delivery inbox was prepared
 	// against -- set only for consumer routines, fixed before the run starts.
@@ -144,12 +148,31 @@ type Staging struct {
 	ConsumerFirstRun bool
 }
 
-// Cleanup discards the whole run workspace, staging and base included.
+// Cleanup discards the whole run workspace, staging and base included. The
+// shim's umask keeps model-created files group-accessible, but umask only
+// removes bits: a model process can still chmod its own files 0600 or 0700,
+// which the capability-less supervisor cannot delete. When that happens the
+// attempt identity itself is asked to reopen its tree, so a leftover cannot
+// outlive the run and be read by the identity's next assignee.
 func (s *Staging) Cleanup() {
-	os.RemoveAll(s.workspace)
+	if err := os.RemoveAll(s.workspace); err != nil && s.attemptUID != 0 {
+		reclaimAttemptTrees(s.attemptUID, s.workspace)
+		_ = os.RemoveAll(s.workspace)
+	}
 	if s.BaseDir != "" {
 		os.RemoveAll(s.BaseDir)
 	}
+}
+
+// reclaimAttemptTrees spawns the capless helper as the attempt identity to
+// restore group bits on paths that identity owns. Best effort: cleanup
+// retries either way, and a failure leaves nothing worse than the leftover
+// it was trying to remove.
+func reclaimAttemptTrees(uid uint32, root string) {
+	cmd := exec.Command(sandbox.HelperPath, "sandbox-reclaim", root)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid}}
+	_ = cmd.Run()
 }
 
 // Consumed reports whether the routine created the consume marker: its
@@ -377,6 +400,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		if err := prepareAttemptTrees(meta.AttemptUID, staging.MemoryDir, runTmp, attemptHome); err != nil {
 			return nil, fmt.Errorf("preparing attempt uid %d trees: %w", meta.AttemptUID, err)
 		}
+		staging.attemptUID = meta.AttemptUID
 	}
 
 	// Clean environment: constructed, never inherited.
