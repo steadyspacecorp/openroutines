@@ -269,6 +269,7 @@ EOF
     set -e
     openroutines routines run isolation
     git -C /agent show memory:ledgers/isolation.md
+    git -C /agent show memory:ledgers/escapee.md >/dev/null
     if ls /tmp | grep -q openroutines-; then echo "run workspace not cleaned"; exit 1; fi
     if grep -l "^Uid:.20032" /proc/[0-9]*/status 2>/dev/null | grep -q .; then
       echo "escaped descendant outlived the run"; exit 1
