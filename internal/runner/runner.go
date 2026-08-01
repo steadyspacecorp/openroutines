@@ -59,7 +59,7 @@ type Meta struct {
 	AttemptID      string
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
-	AttemptUID     uint32 // production-only identity reserved by the supervisor
+	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -125,6 +125,11 @@ func authHint(dir, model string, injected bool) string {
 // only asks whether the failure it was handed is one of these.
 var ErrFatal = errors.New("not retryable")
 
+// ErrAttemptCleanup marks a workspace that was not proven discarded. The
+// supervisor must poison the attempt identity instead of returning it to the
+// pool, or its next assignee could read the leftover tree.
+var ErrAttemptCleanup = errors.New("attempt workspace cleanup failed")
+
 // Staging is the attempt's staged memory, awaiting import or discard.
 type Staging struct {
 	MemoryDir string
@@ -134,6 +139,10 @@ type Staging struct {
 	// compose instead of clobbering each other.
 	BaseDir   string
 	workspace string
+	// attemptUID is set when the workspace was prepared for an attempt
+	// identity: Cleanup may then need that identity's help to reclaim
+	// paths the model process chmodded away from the group.
+	attemptUID uint32
 
 	// ConsumerThrough is the memory commit the delivery inbox was prepared
 	// against -- set only for consumer routines, fixed before the run starts.
@@ -144,12 +153,45 @@ type Staging struct {
 	ConsumerFirstRun bool
 }
 
-// Cleanup discards the whole run workspace, staging and base included.
-func (s *Staging) Cleanup() {
-	os.RemoveAll(s.workspace)
-	if s.BaseDir != "" {
-		os.RemoveAll(s.BaseDir)
+// Cleanup discards the whole run workspace, staging and base included. The
+// shim's umask keeps model-created files group-accessible, but umask only
+// removes bits: a model process can still chmod its own files 0600 or 0700,
+// which the capability-less supervisor cannot delete. When that happens the
+// attempt identity itself is asked to reopen its tree, so a leftover cannot
+// outlive the run and be read by the identity's next assignee.
+func (s *Staging) Cleanup() error {
+	if s.attemptUID != 0 {
+		// Kill anything still carrying the identity before touching the
+		// tree: an escaped descendant could otherwise race the removal,
+		// re-closing or recreating paths behind it. The slot owner reaps
+		// again before reuse; this pass makes the removal itself trustworthy.
+		if err := sandbox.ReapIdentity(s.attemptUID); err != nil {
+			return fmt.Errorf("%w: reap uid %d before removal: %w", ErrAttemptCleanup, s.attemptUID, err)
+		}
 	}
+	if err := os.RemoveAll(s.workspace); err != nil {
+		if s.attemptUID == 0 {
+			return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.workspace, err)
+		}
+		reclaimErr := reclaimAttemptTrees(s.attemptUID, s.workspace)
+		if removeErr := os.RemoveAll(s.workspace); removeErr != nil {
+			return fmt.Errorf("%w: reclaim uid %d tree and remove %s", errors.Join(ErrAttemptCleanup, reclaimErr, removeErr), s.attemptUID, s.workspace)
+		}
+	}
+	if s.BaseDir != "" {
+		_ = os.RemoveAll(s.BaseDir)
+	}
+	return nil
+}
+
+// reclaimAttemptTrees spawns the capless helper as the attempt identity to
+// restore group bits on paths that identity owns. Cleanup retries removal
+// either way and includes this error if the retry also fails.
+func reclaimAttemptTrees(uid uint32, root string) error {
+	cmd := exec.Command(sandbox.HelperPath, "sandbox-reclaim", root)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid}}
+	return cmd.Run()
 }
 
 // Consumed reports whether the routine created the consume marker: its
@@ -224,24 +266,6 @@ func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 	return timeout
 }
 
-// Execute performs one attempt and returns its result plus the staged memory
-// for the caller to import or discard. The caller must Cleanup() the staging.
-// Cancelling ctx kills the attempt's process group (shutdown semantics).
-func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Routine, meta Meta) (*ExecResult, *Staging, error) {
-	sr, err := Stage(dir, agent, r, meta, nopLocker{})
-	if err != nil {
-		return nil, nil, err
-	}
-	return sr.Run(ctx)
-}
-
-// nopLocker is the manual-run path's memory lock: a single `routines run`
-// has no concurrent settlements to serialize against.
-type nopLocker struct{}
-
-func (nopLocker) Lock()   {}
-func (nopLocker) Unlock() {}
-
 // StagedRun is a fully prepared attempt: credentials resolved, workspace
 // built, memory snapshotted, inbox and schedule written -- everything that
 // reads the memory worktree or supervisor-owned state is done by the time
@@ -265,11 +289,10 @@ type StagedRun struct {
 }
 
 // Discard releases a staged attempt that will not be spawned (for example,
-// because its supervisor lost the lease after staging). It is idempotent with
-// the same best-effort cleanup used after a run.
-func (sr *StagedRun) Discard() {
+// because its supervisor lost the lease after staging).
+func (sr *StagedRun) Discard() error {
 	sr.secrets.release()
-	sr.staging.Cleanup()
+	return sr.staging.Cleanup()
 }
 
 // Stage prepares one attempt without spawning anything. mu is the caller's
@@ -278,7 +301,7 @@ func (sr *StagedRun) Discard() {
 // the network (a github_app derivation is two HTTPS round trips) and must
 // not hold up every other attempt's settlement. On error, everything Stage
 // acquired -- derived credentials, the workspace -- is already released.
-func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (*StagedRun, error) {
+func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (stagedRun *StagedRun, err error) {
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && meta.AttemptUID == 0 {
 		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
 	}
@@ -316,7 +339,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	staging := &Staging{MemoryDir: filepath.Join(workspace, memory.Dir), workspace: workspace}
 	defer func() {
 		if !ok {
-			staging.Cleanup()
+			err = errors.Join(err, staging.Cleanup())
 		}
 	}()
 	if staging.BaseDir, err = os.MkdirTemp("", "openroutines-base-*"); err != nil {
@@ -370,12 +393,14 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	}
 	attemptHome := filepath.Join(workspace, attemptHomeName)
 	if meta.AttemptUID != 0 && os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-		if err := prepareWorkspaceAccess(workspace); err != nil {
+		// An attempt identity's gid equals its uid (template Dockerfile).
+		if err := prepareWorkspaceAccess(meta.AttemptUID, workspace); err != nil {
 			return nil, fmt.Errorf("preparing read-only attempt workspace: %w", err)
 		}
-		if err := prepareAttemptOwnership(meta.AttemptUID, staging.MemoryDir, runTmp, attemptHome); err != nil {
-			return nil, fmt.Errorf("preparing attempt uid %d: %w", meta.AttemptUID, err)
+		if err := prepareAttemptTrees(meta.AttemptUID, staging.MemoryDir, runTmp, attemptHome); err != nil {
+			return nil, fmt.Errorf("preparing attempt uid %d trees: %w", meta.AttemptUID, err)
 		}
+		staging.attemptUID = meta.AttemptUID
 	}
 
 	// Clean environment: constructed, never inherited.
@@ -448,8 +473,8 @@ func frameworkEnv(timezone string, r *routine.Routine, meta Meta) []string {
 // Run spawns the staged attempt's model process and waits it out. Derived
 // credential material is revoked when the attempt ends, success or failure;
 // a fresh attempt derives fresh material. On error the staging is already
-// cleaned, exactly as Execute always behaved.
-func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
+// cleaned, and a cleanup failure is joined to the returned error.
+func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStaging *Staging, err error) {
 	r, meta, staging := sr.r, sr.meta, sr.staging
 	dir := sr.dir
 	workspace, runTmp, env, ocArgs := sr.workspace, sr.runTmp, sr.env, sr.ocArgs
@@ -459,7 +484,7 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 	ok := false
 	defer func() {
 		if !ok {
-			staging.Cleanup()
+			err = errors.Join(err, staging.Cleanup())
 		}
 	}()
 
@@ -656,7 +681,18 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 
 // Run executes routine `name` manually. noMemory discards staged memory
 // writes and the run record after the otherwise ordinary run completes.
-func Run(dir, name string, noMemory bool) (*Result, error) {
+// Inside the production container a manual run reserves the manual attempt
+// identity first, so it can never share a uid with a supervisor slot.
+func Run(dir, name string, noMemory bool) (result *Result, err error) {
+	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+		uid, releaseIdentity, err := reserveManualIdentity(dir)
+		if err != nil {
+			return nil, err
+		}
+		defer releaseIdentity()
+		meta.AttemptUID = uid
+	}
 	agent, err := config.Load(dir)
 	if err != nil {
 		return nil, fmt.Errorf("not an agent repository: %w", err)
@@ -673,19 +709,33 @@ func Run(dir, name string, noMemory bool) (*Result, error) {
 		return nil, err
 	}
 	defer release()
-	runID := newRunID()
-	exec, staging, err := Execute(context.Background(), dir, agent, r, Meta{RunID: runID, AttemptID: "attempt_01"})
+	// The cross-process memory lock: a supervisor may be settling runs into
+	// the same worktree beside this process -- in the production container
+	// always, on a host whenever `supervise` runs locally. Staging snapshots
+	// and settlement each take their turn behind the same kernel lock the
+	// supervisor's own critical sections hold.
+	memLock, err := OpenMemoryLock(dir)
 	if err != nil {
 		return nil, err
 	}
-	defer staging.Cleanup()
+	sr, err := Stage(dir, agent, r, meta, memLock)
+	if err != nil {
+		return nil, err
+	}
+	exec, staging, err := sr.Run(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, staging.Cleanup()) }()
 
-	res := &Result{RunID: runID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
+	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
 	if noMemory {
 		return res, nil
 	}
 
-	settlement, err := Settle(dir, r, staging, exec, Meta{RunID: runID, AttemptID: "attempt_01"}, "", nil)
+	memLock.Lock()
+	defer memLock.Unlock()
+	settlement, err := Settle(dir, r, staging, exec, meta, "", nil)
 	res.Outcome = settlement.Outcome
 	res.Commit = settlement.Commit
 	res.Conflicted = settlement.Conflicted
@@ -1159,7 +1209,7 @@ func variablesLine(agent *config.Agent) string {
 // pipeDrainDeadline bounds how long waiting on the run's output pipes may
 // outlast the process itself. A grandchild that left the process group --
 // a tool that daemonized into its own session -- keeps the inherited pipe
-// open after the run is signalled and killed, and the wait for EOF would
+// open after the run is signaled and killed, and the wait for EOF would
 // otherwise never end: the supervisor would hang on a run it had already
 // terminated. On expiry the pipes are closed and what can be reaped is
 // reaped; the orphan lives on, but it no longer holds the tick loop.
@@ -1190,7 +1240,7 @@ func killClient(cmd *exec.Cmd, grace time.Duration, done chan error) {
 
 // signalTarget is the run's own process group, or the process alone when the
 // spawn path did not make it a group leader. Every spawn path that gets
-// signalled sets Setpgid today; the guard is there because signalling -pid
+// signaled sets Setpgid today; the guard is there because signaling -pid
 // without it reaches the supervisor's own group and kills the supervisor.
 func signalTarget(cmd *exec.Cmd) int {
 	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {

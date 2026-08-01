@@ -3,6 +3,7 @@ package runner
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 // flock semantics are per open-file-description, so a second acquisition in
@@ -29,4 +30,37 @@ func TestLockRoutineExcludesConcurrentAttempts(t *testing.T) {
 		t.Fatalf("released lock should re-acquire: %v", err)
 	}
 	release3()
+}
+
+// The memory lock's cross-process exclusion rides the same per-description
+// flock semantics: two separate opens of the lock -- a supervisor and a
+// manual run -- contend through the kernel, not through the in-process mutex.
+func TestMemoryLockExcludesAcrossOpens(t *testing.T) {
+	dir := t.TempDir()
+	supervisor, err := OpenMemoryLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manual, err := OpenMemoryLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor.Lock()
+	acquired := make(chan struct{})
+	go func() {
+		manual.Lock()
+		close(acquired)
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("second open acquired the memory lock while the first held it")
+	case <-time.After(50 * time.Millisecond):
+	}
+	supervisor.Unlock()
+	select {
+	case <-acquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("memory lock was not handed over after release")
+	}
+	manual.Unlock()
 }

@@ -14,6 +14,15 @@ import (
 // Linux is an explicit development opt-in.
 var ErrUnsupported = errors.New("landlock is unavailable on this platform")
 
+// AttemptUIDBase is the first identity in the reserved production attempt
+// pool. The supervisor's run slots use AttemptUIDBase through
+// AttemptUIDBase+concurrency-1; the identity one past the concurrency
+// ceiling is reserved for manual runs (`routines run` inside the container),
+// so a manual attempt can never collide with a supervisor slot. The template
+// Dockerfile pre-creates all of them and puts the agent user in each
+// identity's group.
+const AttemptUIDBase = 20000
+
 // HelperPath is the capless production re-exec target. The supervisor binary
 // is executable only by the agent identity because it carries UID-switching
 // capabilities; attempts may execute this copy, but it carries no capability

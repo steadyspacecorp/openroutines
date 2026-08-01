@@ -81,7 +81,7 @@ func capture(t *testing.T, dir string, run func()) string {
 
 // A routine mid-retry or sitting out a circuit-breaker cool-down must not
 // render like a healthy one -- least of all with a next-fire time it will not
-// honour.
+// honor.
 func TestStatusShowsSchedulingState(t *testing.T) {
 	now := time.Now().UTC()
 	dir := statusAgent(t, map[string]string{
@@ -120,7 +120,7 @@ func TestStatusShowsSchedulingState(t *testing.T) {
 		}
 	}
 	// The cooling-down routine fires every five minutes; printing a next time
-	// it will not honour is the bug this replaces.
+	// it will not honor is the bug this replaces.
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "  flaky") && strings.Contains(line, "next") {
 			t.Fatalf("a cooling-down routine must not advertise a next firing: %q", line)

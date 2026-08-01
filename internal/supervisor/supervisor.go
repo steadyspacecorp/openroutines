@@ -42,7 +42,7 @@ import (
 const (
 	TickInterval   = time.Minute
 	MaxAttempts    = 5
-	attemptUIDBase = 20000
+	attemptUIDBase = sandbox.AttemptUIDBase
 )
 
 // Schedulable reports whether a tick will act on a routine at all. Exported
@@ -72,9 +72,11 @@ type Supervisor struct {
 	// bookkeeping (sync, trim, scheduling state, intent commit), each
 	// attempt's reserve-and-stage, and each attempt's settlement. Runs
 	// execute in parallel; the ledger they check out from and settle into
-	// takes one writer at a time. Everything below through pollFailed is
-	// touched only under memMu or only by the tick goroutine.
-	memMu sync.Mutex
+	// takes one writer at a time. The lock is kernel-backed, so a manual
+	// `routines run` beside this process serializes through it too instead
+	// of becoming a second uncoordinated writer. Everything below through
+	// pollFailed is touched only under memMu or only by the tick goroutine.
+	memMu *runner.MemoryLock
 
 	// leaseMu guards the lease heartbeat state: in-flight runs heartbeat
 	// concurrently with each other and with the tick. Lease git operations
@@ -140,6 +142,10 @@ func New(dir string) (*Supervisor, error) {
 	}
 	secrets := scrub.NewSet(memory.SupervisorSecrets(dir))
 	mem := memory.At(dir)
+	memMu, err := runner.OpenMemoryLock(dir)
+	if err != nil {
+		return nil, err
+	}
 	slots := make(chan uint32, agent.RunSlots())
 	for i := range agent.RunSlots() {
 		slots <- uint32(attemptUIDBase + i)
@@ -150,6 +156,7 @@ func New(dir string) (*Supervisor, error) {
 		Log:        log.New(scrub.NewSetWriter(os.Stdout, secrets), "", log.LstdFlags|log.LUTC),
 		level:      agent.EffectiveLogLevel(),
 		mem:        mem,
+		memMu:      memMu,
 		leaseTTL:   memory.LeaseTTL,
 		loc:        loc,
 		retention:  retention,
@@ -203,7 +210,7 @@ func (s *Supervisor) errorf(format string, v ...any) {
 }
 
 // Run is the supervise loop: startup, then one Tick per minute until ctx is
-// cancelled, then shutdown (final commit and push, lease release).
+// canceled, then shutdown (final commit and push, lease release).
 func (s *Supervisor) Run(ctx context.Context) error {
 	// The supervisor's environment may carry the master and deploy keys.
 	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
@@ -220,7 +227,14 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		s.infof("deploy key configured for memory sync")
 	}
-	if err := s.mem.Ensure(); err != nil {
+	// Under memMu like every other worktree operation: first-boot
+	// materialization racing a manual run's own locked Ensure would have
+	// two processes creating the branch, worktree, and seed commit at once.
+	if err := func() error {
+		s.memMu.Lock()
+		defer s.memMu.Unlock()
+		return s.mem.Ensure()
+	}(); err != nil {
 		return err
 	}
 	if s.noOrigin {
@@ -314,25 +328,27 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			defer s.runs.Done()
 			defer release()
 			defer s.setRunning(d.r.Name, false)
-			s.execute(ctx, d.r, d.st, now, uid)
-			if !s.releaseIdentity(uid) {
+			cleanupErr := s.execute(ctx, d.r, d.st, now, uid)
+			if !s.releaseIdentity(uid, cleanupErr) {
 				return
 			}
 		}(d, attemptUID, release)
 	}
 }
 
-func (s *Supervisor) releaseIdentity(uid uint32) bool {
+func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
+	err := cleanupErr
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-		if err := s.reap(uid); err != nil {
-			fatal := fmt.Errorf("attempt uid %d cleanup failed -- refusing to reuse identity: %w", uid, err)
-			s.errorf("%v", fatal)
-			select {
-			case s.fatal <- fatal:
-			default:
-			}
-			return false // poisoned: never return this identity to the pool
+		err = errors.Join(err, s.reap(uid))
+	}
+	if err != nil {
+		fatal := fmt.Errorf("attempt uid %d cleanup failed -- refusing to reuse identity: %w", uid, err)
+		s.errorf("%v", fatal)
+		select {
+		case s.fatal <- fatal:
+		default:
 		}
+		return false // poisoned: never return this identity to the pool
 	}
 	s.slots <- uid
 	return true
@@ -581,7 +597,7 @@ func (s *Supervisor) abandon(name string, st *schedule.State, detail string, now
 }
 
 // execute runs one attempt of a pending logical run and settles the outcome.
-func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) {
+func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) (cleanupErr error) {
 	agent, err := config.Load(s.Dir)
 	if err != nil {
 		s.errorf("%s: %v", r.Name, err)
@@ -630,9 +646,12 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun)
 		defer stopHeartbeat()
 	}
-	staged, err := runner.Stage(s.Dir, agent, r, meta, &s.memMu)
+	staged, err := runner.Stage(s.Dir, agent, r, meta, s.memMu)
+	if errors.Is(err, runner.ErrAttemptCleanup) {
+		cleanupErr = err
+	}
 	if err == nil && !s.noOrigin && !s.renewLease() {
-		staged.Discard()
+		cleanupErr = staged.Discard()
 		s.warnf("%s: %s not started -- lease lost after staging; the current holder will retry it", r.Name, p.RunID)
 		return
 	}
@@ -643,6 +662,9 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	var staging *runner.Staging
 	if err == nil {
 		res, staging, err = staged.Run(runCtx)
+		if errors.Is(err, runner.ErrAttemptCleanup) {
+			cleanupErr = err
+		}
 	}
 	detail := ""
 	fatal := false
@@ -655,7 +677,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
 		detail = err.Error()
 	} else {
-		defer staging.Cleanup()
+		defer func() { cleanupErr = errors.Join(cleanupErr, staging.Cleanup()) }()
 	}
 
 	// Settlement is the other memory critical section: import, run record,
@@ -718,7 +740,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		if ctx.Err() != nil {
 			s.infof("%s: %s interrupted by shutdown -- will retry on next boot", r.Name, p.RunID)
 		} else {
-			s.warnf("%s: %s cancelled -- lease lost mid-run; whoever holds the lease retries it", r.Name, p.RunID)
+			s.warnf("%s: %s canceled -- lease lost mid-run; whoever holds the lease retries it", r.Name, p.RunID)
 		}
 		return // no push: shutdown's final commit carries the record, and a lease loser must not push
 	case settlement.Outcome == runner.Completed:
@@ -732,6 +754,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		return // keep completion and remediation together on the next successful push
 	}
 	s.pushBestEffort()
+	return
 }
 
 func (s *Supervisor) syncOnce() {
@@ -910,6 +933,16 @@ func (s *Supervisor) warnKeyDelivery() {
 		creds.EnvMasterKey, creds.EnvMasterKeyFile, creds.EnvMasterKey)
 }
 
+func verifyAttemptGroups(groups []int, slots int) error {
+	for slot := range slots {
+		gid := attemptUIDBase + slot
+		if !slices.Contains(groups, gid) {
+			return fmt.Errorf("the agent user is not in attempt group %d for run slot %d -- rebuild the deploy image from the current template Dockerfile", gid, slot+1)
+		}
+	}
+	return nil
+}
+
 // verifySandbox enforces the fail-closed policy at boot, not mid-run. Only
 // production (inside the agent image) spawns model processes natively behind
 // the Landlock shim; everywhere else they run in the per-run container, or
@@ -917,6 +950,18 @@ func (s *Supervisor) warnKeyDelivery() {
 func (s *Supervisor) verifySandbox() error {
 	switch {
 	case os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
+		// Attempt tree access is granted by group: staging chgrps each run's
+		// trees to the attempt's group, unprivileged only because the agent
+		// user belongs to every attempt group. An image built before that
+		// membership existed would fail every attempt at staging, so refuse
+		// at boot instead.
+		groups, err := os.Getgroups()
+		if err != nil {
+			return fmt.Errorf("attempt group check: %w", err)
+		}
+		if err := verifyAttemptGroups(groups, cap(s.slots)); err != nil {
+			return err
+		}
 		// Constructed, like every other child: an inherited environment
 		// would republish the supervisor's keys in the probe's own
 		// /proc/<pid>/environ. TMPDIR is the scratch scope it confines.
@@ -1080,7 +1125,7 @@ func (s *Supervisor) renewLeaseLocked() bool {
 // ticks first renews for everyone. A renewal that fails inside the TTL of
 // the last accepted heartbeat is tolerated -- origin blips pass, and until
 // the TTL expires this instance is still provably the only writer. Past the
-// TTL, or the moment a live foreign lease appears, the run is cancelled: an
+// TTL, or the moment a live foreign lease appears, the run is canceled: an
 // instance that cannot prove it is the only writer must not let a model
 // process keep acting under identities that a replacement is about to
 // re-run.
@@ -1102,7 +1147,7 @@ func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.Cance
 					continue
 				}
 				if s.foreignLeaseLive() || s.leaseExpired() {
-					s.errorf("lease lost mid-run -- cancelling the attempt")
+					s.errorf("lease lost mid-run -- canceling the attempt")
 					cancelRun()
 					return
 				}

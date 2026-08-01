@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +61,12 @@ func cmdSandboxExec(args []string) int {
 		return fail(fmt.Errorf("sandbox-exec: uid isolation failed: %w", err))
 	}
 
+	// Everything the model process creates must stay reachable by the
+	// supervisor, which imports staged memory, reads the session record,
+	// and removes the run workspace -- via the attempt's group, which the
+	// agent user belongs to. Keep group bits, drop world.
+	syscall.Umask(0o007)
+
 	bin, err := exec.LookPath(args[0])
 	if err != nil {
 		return fail(err)
@@ -69,6 +76,35 @@ func cmdSandboxExec(args []string) int {
 		return fail(fmt.Errorf("exec %s: %w", args[0], err))
 	}
 	return 0 // unreachable
+}
+
+// cmdSandboxReclaim restores group access on what a model process hid from
+// the supervisor. umask only removes permission bits, so an attempt can still
+// chmod its own files 0600 or 0700 -- and the supervisor, holding no
+// CAP_DAC_OVERRIDE, then cannot delete the run workspace. The runner spawns
+// this capless helper as the attempt identity when cleanup fails; it walks
+// the tree re-opening group bits on paths the identity owns, and skips
+// everything else (supervisor-owned paths were never the problem, and run
+// as an unprivileged identity it cannot touch anything the attempt could
+// not already chmod itself).
+func cmdSandboxReclaim(args []string) int {
+	if len(args) != 1 {
+		return fail(fmt.Errorf("sandbox-reclaim: exactly one root expected"))
+	}
+	_ = filepath.WalkDir(args[0], func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // unreadable subtree: nothing more to reclaim there
+		}
+		if entry.IsDir() {
+			_ = os.Chmod(path, 0o770)
+			return nil
+		}
+		if entry.Type().IsRegular() {
+			_ = os.Chmod(path, 0o660)
+		}
+		return nil
+	})
+	return 0
 }
 
 // cmdSandboxProbe applies a throwaway ruleset to a child-less scratch scope

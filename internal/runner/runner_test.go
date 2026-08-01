@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,25 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
+
+func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
+	// Outside the real image the agent user is not in the manual attempt
+	// group, so the reservation must refuse with the image contract named
+	// -- the same refusal an operator sees on a stale deploy image. The
+	// working path runs in bin/smoke's container stage.
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	_, err := Run(t.TempDir(), "daily", false)
+	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "manual attempt group") {
+		t.Fatalf("manual run error = %v, want fatal manual-identity contract error", err)
+	}
+}
+
+func TestCleanupReportsWorkspaceRemovalFailure(t *testing.T) {
+	staging := &Staging{workspace: "\x00"}
+	if err := staging.Cleanup(); !errors.Is(err, ErrAttemptCleanup) {
+		t.Fatalf("cleanup error = %v, want ErrAttemptCleanup", err)
+	}
+}
 
 func genDef(t *testing.T, meta Meta, fm ...routine.Frontmatter) string {
 	t.Helper()
