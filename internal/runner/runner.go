@@ -59,7 +59,7 @@ type Meta struct {
 	AttemptID      string
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
-	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
+	AttemptUID     uint32 // production-only identity reserved by the supervisor
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -691,6 +691,9 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 // Run executes routine `name` manually. noMemory discards staged memory
 // writes and the run record after the otherwise ordinary run completes.
 func Run(dir, name string, noMemory bool) (*Result, error) {
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+		return nil, fmt.Errorf("%w: routines run cannot execute beside the supervisor -- run it from a local checkout instead", ErrFatal)
+	}
 	agent, err := config.Load(dir)
 	if err != nil {
 		return nil, fmt.Errorf("not an agent repository: %w", err)
@@ -708,14 +711,6 @@ func Run(dir, name string, noMemory bool) (*Result, error) {
 	}
 	defer release()
 	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-		uid, releaseIdentity, err := reserveManualIdentity(dir)
-		if err != nil {
-			return nil, err
-		}
-		defer releaseIdentity()
-		meta.AttemptUID = uid
-	}
 	exec, staging, err := Execute(context.Background(), dir, agent, r, meta)
 	if err != nil {
 		return nil, err

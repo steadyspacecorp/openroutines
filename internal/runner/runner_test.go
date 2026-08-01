@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,14 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
+
+func TestManualRunIsRejectedInsideSupervisorContainer(t *testing.T) {
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	_, err := Run(t.TempDir(), "daily", false)
+	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "supervisor") {
+		t.Fatalf("manual run error = %v, want fatal supervisor-coordination error", err)
+	}
+}
 
 func genDef(t *testing.T, meta Meta, fm ...routine.Frontmatter) string {
 	t.Helper()

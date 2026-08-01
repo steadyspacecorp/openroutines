@@ -237,11 +237,10 @@ step "check rejects framework-version drift"
 # Per-attempt uid isolation must work inside the production container with
 # only the capabilities the template grants: every production gate in the
 # runner is keyed on OPENROUTINES_IN_CONTAINER=1, which the host test suite
-# never sets, so this is the one place the real staging path runs. A manual
-# `routines run` covers both regressions from alpha.38: tree preparation
-# needing capabilities the image never granted, and manual runs having no
-# attempt identity at all. Requires Docker (present in CI); skipped only
-# when the binary is missing entirely.
+# never sets, so this is the one place the real staging path runs. The
+# supervisor exercises its actual reserved identity while a manual run is
+# refused before it can become a second memory-worktree writer. Requires
+# Docker (present in CI); skipped only when the binary is missing entirely.
 if command -v docker >/dev/null 2>&1; then
   ctx="$work/isolation"
   mkdir -p "$ctx"
@@ -249,6 +248,7 @@ if command -v docker >/dev/null 2>&1; then
   cd "$ctx/agent"
   printf 'isolation-agent\nSmoke-tests uid isolation\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
     | "$bin" configure >"$work/out" 2>&1 || die "configure isolation agent"
+  "$bin" sync >"$work/out" 2>&1 || die "materialize isolation memory"
   cat > routines/isolation.md <<'EOF'
 ---
 schedule: "0 9 * * *"
@@ -256,7 +256,14 @@ model: fake/model
 ---
 Record the attempt identity.
 EOF
-  grep -q 'seq 0 32' Dockerfile || die "template Dockerfile does not create the manual attempt identity"
+  mkdir -p memory/state
+  cat > memory/state/isolation.json <<'EOF'
+{"routine":"isolation","watermark":"2026-07-31T00:00:00Z","pending":{"run_id":"run_isolation","scheduled_for":"2026-07-31T09:00:00Z","covered_through":"2026-07-31T09:00:00Z","created_at":"2026-07-31T09:00:00Z","attempts":0}}
+EOF
+  git -C memory add state/isolation.json
+  git -C memory -c user.name=CI -c user.email=ci@example.invalid commit --quiet -m 'Seed isolation smoke run'
+  git worktree remove memory
+  grep -q 'seq 0 31' Dockerfile || die "template Dockerfile does not create the attempt identity pool"
   grep -q -- '-G "${groups#,}" agent' Dockerfile || die "template Dockerfile does not put agent in the attempt groups"
   caps="$(sed -n 's/.*setcap \(cap_[a-z_,]*\)=ep.*/\1/p' Dockerfile)"
   [[ -n "$caps" ]] || die "no setcap line in the template Dockerfile"
@@ -267,15 +274,41 @@ EOF
   docker build --quiet --build-arg "CAPS=$caps" -t openroutines-isolation-smoke "$ctx" >"$work/out" 2>&1 || die "isolation image build"
   docker run --rm openroutines-isolation-smoke sh -c '
     set -e
-    openroutines routines run isolation
+    if openroutines routines run isolation > /tmp/manual.out 2>&1; then
+      echo "manual run unexpectedly started beside the supervisor"
+      exit 1
+    fi
+    grep -q "cannot execute beside the supervisor" /tmp/manual.out
+    openroutines supervise > /tmp/supervise.out 2>&1 &
+    supervisor=$!
+    completed=false
+    for _ in $(seq 1 100); do
+      if git -C /agent show memory:ledgers/isolation.md >/dev/null 2>&1; then
+        completed=true
+        break
+      fi
+      if ! kill -0 "$supervisor" 2>/dev/null; then
+        cat /tmp/supervise.out
+        exit 1
+      fi
+      sleep 0.1
+    done
+    if [ "$completed" != true ]; then
+      echo "supervised isolation run did not complete"
+      cat /tmp/supervise.out
+      exit 1
+    fi
+    kill -TERM "$supervisor"
+    wait "$supervisor"
+    cat /tmp/supervise.out
     git -C /agent show memory:ledgers/isolation.md
     git -C /agent show memory:ledgers/escapee.md >/dev/null
     if ls /tmp | grep -q openroutines-; then echo "run workspace not cleaned"; exit 1; fi
-    if grep -l "^Uid:.20032" /proc/[0-9]*/status 2>/dev/null | grep -q .; then
+    if grep -l "^Uid:.20000" /proc/[0-9]*/status 2>/dev/null | grep -q .; then
       echo "escaped descendant outlived the run"; exit 1
     fi
   ' >"$work/out" 2>&1 || die "in-container isolation run"
-  grep -q 'uid=20032 gid=20032' "$work/out" || die "model process did not run as the manual attempt identity"
+  grep -q 'uid=20000 gid=20000' "$work/out" || die "model process did not run as the supervised attempt identity"
   step "uid isolation works in-container with only the template capabilities"
 else
   step "uid isolation in-container test SKIPPED (docker not installed)"
