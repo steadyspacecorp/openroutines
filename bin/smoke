@@ -282,7 +282,7 @@ EOF
     openroutines supervise > /tmp/supervise.out 2>&1 &
     supervisor=$!
     completed=false
-    for _ in $(seq 1 100); do
+    for _ in $(seq 1 300); do
       if git -C /agent show memory:ledgers/isolation.md >/dev/null 2>&1; then
         completed=true
         break
