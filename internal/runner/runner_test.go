@@ -2,6 +2,9 @@ package runner
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -607,6 +610,41 @@ func TestResolveCredentialsRaw(t *testing.T) {
 	// rather than injecting the stored root secret.
 	if _, err = resolveCredentials(dir, agent, typed, "openai/gpt"); err == nil {
 		t.Fatal("expected derivation failure for an invalid stored key")
+	}
+}
+
+// A resolve that fails partway has already minted whatever came before the
+// failure. That material dies with the abandoned run, so its registration
+// and its revocation must not outlive it -- the registry is bounded by live
+// material, not by history.
+func TestResolveCredentialsReleasesDerivedMaterialOnFailure(t *testing.T) {
+	const bearer = "bearer-of-an-abandoned-run"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"access_token":%q}`, bearer)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.Write(dir, key, map[string]string{"desk": "client-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	agent := &config.Agent{Credentials: map[string]creds.Spec{
+		"desk": {Type: "oauth2_client", TokenURL: server.URL, ClientID: "c", InjectAs: "desk_token"},
+	}}
+	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"desk", "missing_cred"}}}
+
+	if _, err := resolveCredentials(dir, agent, r, "openai/gpt"); err == nil {
+		t.Fatal("declaring an absent credential must fail the run")
+	}
+	if got := scrub.Redacted(bearer); got != bearer {
+		t.Fatalf("the abandoned run's bearer is still registered: %q", got)
 	}
 }
 
