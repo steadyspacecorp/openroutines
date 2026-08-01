@@ -919,6 +919,16 @@ func (s *Supervisor) warnKeyDelivery() {
 		creds.EnvMasterKey, creds.EnvMasterKeyFile, creds.EnvMasterKey)
 }
 
+func verifyAttemptGroups(groups []int, slots int) error {
+	for slot := range slots {
+		gid := attemptUIDBase + slot
+		if !slices.Contains(groups, gid) {
+			return fmt.Errorf("the agent user is not in attempt group %d for run slot %d -- rebuild the deploy image from the current template Dockerfile", gid, slot+1)
+		}
+	}
+	return nil
+}
+
 // verifySandbox enforces the fail-closed policy at boot, not mid-run. Only
 // production (inside the agent image) spawns model processes natively behind
 // the Landlock shim; everywhere else they run in the per-run container, or
@@ -935,8 +945,8 @@ func (s *Supervisor) verifySandbox() error {
 		if err != nil {
 			return fmt.Errorf("attempt group check: %w", err)
 		}
-		if !slices.Contains(groups, attemptUIDBase) {
-			return fmt.Errorf("the agent user is not in the attempt groups -- rebuild the deploy image from the current template Dockerfile")
+		if err := verifyAttemptGroups(groups, cap(s.slots)); err != nil {
+			return err
 		}
 		// Constructed, like every other child: an inherited environment
 		// would republish the supervisor's keys in the probe's own
