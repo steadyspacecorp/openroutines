@@ -155,6 +155,15 @@ type Staging struct {
 // attempt identity itself is asked to reopen its tree, so a leftover cannot
 // outlive the run and be read by the identity's next assignee.
 func (s *Staging) Cleanup() {
+	if s.attemptUID != 0 {
+		// Kill anything still carrying the identity before touching the
+		// tree: an escaped descendant could otherwise race the removal,
+		// re-closing or recreating paths behind it. The identity's owner
+		// reaps again before reuse -- the supervisor poisons a slot whose
+		// reap fails, and a manual reservation re-proves emptiness -- so
+		// this pass only has to make the removal itself trustworthy.
+		_ = sandbox.ReapIdentity(s.attemptUID)
+	}
 	if err := os.RemoveAll(s.workspace); err != nil && s.attemptUID != 0 {
 		reclaimAttemptTrees(s.attemptUID, s.workspace)
 		_ = os.RemoveAll(s.workspace)

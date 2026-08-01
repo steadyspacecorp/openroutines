@@ -15,4 +15,7 @@ mkdir -p .home/locked
 echo hidden > .home/locked/secret
 chmod 600 .home/locked/secret
 chmod 700 .home/locked
+# Escape the run's process group into a new session: cleanup must kill this
+# before it removes the workspace, or the survivor could race the removal.
+setsid sleep 300 </dev/null >/dev/null 2>&1 &
 echo done
