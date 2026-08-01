@@ -94,6 +94,15 @@ func TestAttemptIdentityIsNotReusedWhenWorkspaceCleanupFails(t *testing.T) {
 	}
 }
 
+func TestVerifyAttemptGroupsChecksEveryRunSlot(t *testing.T) {
+	if err := verifyAttemptGroups([]int{20000}, 2); err == nil || !strings.Contains(err.Error(), "20001") {
+		t.Fatalf("group check error = %v, want missing second slot group", err)
+	}
+	if err := verifyAttemptGroups([]int{20000, 20001}, 2); err != nil {
+		t.Fatalf("complete group set rejected: %v", err)
+	}
+}
+
 // fakeOpencode is a stand-in for the real binary: it reads fake-mode from
 // its own directory (the workspace is allow-list built and carries no test
 // scaffolding) to decide whether to succeed (writing memory) or fail. The
