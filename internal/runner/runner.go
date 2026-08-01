@@ -59,7 +59,7 @@ type Meta struct {
 	AttemptID      string
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
-	AttemptUID     uint32 // production-only identity reserved by the supervisor
+	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -370,11 +370,12 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	}
 	attemptHome := filepath.Join(workspace, attemptHomeName)
 	if meta.AttemptUID != 0 && os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-		if err := prepareWorkspaceAccess(workspace); err != nil {
+		// An attempt identity's gid equals its uid (template Dockerfile).
+		if err := prepareWorkspaceAccess(meta.AttemptUID, workspace); err != nil {
 			return nil, fmt.Errorf("preparing read-only attempt workspace: %w", err)
 		}
-		if err := prepareAttemptOwnership(meta.AttemptUID, staging.MemoryDir, runTmp, attemptHome); err != nil {
-			return nil, fmt.Errorf("preparing attempt uid %d: %w", meta.AttemptUID, err)
+		if err := prepareAttemptTrees(meta.AttemptUID, staging.MemoryDir, runTmp, attemptHome); err != nil {
+			return nil, fmt.Errorf("preparing attempt uid %d trees: %w", meta.AttemptUID, err)
 		}
 	}
 
@@ -673,19 +674,27 @@ func Run(dir, name string, noMemory bool) (*Result, error) {
 		return nil, err
 	}
 	defer release()
-	runID := newRunID()
-	exec, staging, err := Execute(context.Background(), dir, agent, r, Meta{RunID: runID, AttemptID: "attempt_01"})
+	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+		uid, releaseIdentity, err := reserveManualIdentity(dir)
+		if err != nil {
+			return nil, err
+		}
+		defer releaseIdentity()
+		meta.AttemptUID = uid
+	}
+	exec, staging, err := Execute(context.Background(), dir, agent, r, meta)
 	if err != nil {
 		return nil, err
 	}
 	defer staging.Cleanup()
 
-	res := &Result{RunID: runID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
+	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
 	if noMemory {
 		return res, nil
 	}
 
-	settlement, err := Settle(dir, r, staging, exec, Meta{RunID: runID, AttemptID: "attempt_01"}, "", nil)
+	settlement, err := Settle(dir, r, staging, exec, meta, "", nil)
 	res.Outcome = settlement.Outcome
 	res.Commit = settlement.Commit
 	res.Conflicted = settlement.Conflicted

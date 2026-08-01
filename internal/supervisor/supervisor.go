@@ -42,7 +42,7 @@ import (
 const (
 	TickInterval   = time.Minute
 	MaxAttempts    = 5
-	attemptUIDBase = 20000
+	attemptUIDBase = sandbox.AttemptUIDBase
 )
 
 // Schedulable reports whether a tick will act on a routine at all. Exported
@@ -917,6 +917,18 @@ func (s *Supervisor) warnKeyDelivery() {
 func (s *Supervisor) verifySandbox() error {
 	switch {
 	case os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
+		// Attempt tree access is granted by group: staging chgrps each run's
+		// trees to the attempt's group, unprivileged only because the agent
+		// user belongs to every attempt group. An image built before that
+		// membership existed would fail every attempt at staging, so refuse
+		// at boot instead.
+		groups, err := os.Getgroups()
+		if err != nil {
+			return fmt.Errorf("attempt group check: %w", err)
+		}
+		if !slices.Contains(groups, attemptUIDBase) {
+			return fmt.Errorf("the agent user is not in the attempt groups -- rebuild the deploy image from the current template Dockerfile")
+		}
 		// Constructed, like every other child: an inherited environment
 		// would republish the supervisor's keys in the probe's own
 		// /proc/<pid>/environ. TMPDIR is the scratch scope it confines.
