@@ -15,11 +15,15 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-func TestManualRunIsRejectedInsideSupervisorContainer(t *testing.T) {
+func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
+	// Outside the real image the agent user is not in the manual attempt
+	// group, so the reservation must refuse with the image contract named
+	// -- the same refusal an operator sees on a stale deploy image. The
+	// working path runs in bin/smoke's container stage.
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
 	_, err := Run(t.TempDir(), "daily", false)
-	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "supervisor") {
-		t.Fatalf("manual run error = %v, want fatal supervisor-coordination error", err)
+	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "manual attempt group") {
+		t.Fatalf("manual run error = %v, want fatal manual-identity contract error", err)
 	}
 }
 

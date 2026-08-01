@@ -2,9 +2,15 @@ package runner
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"syscall"
+
+	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
 // ErrRoutineLocked reports that another process holds the routine's lock --
@@ -35,6 +41,110 @@ func LockRoutine(dir, name string) (release func(), err error) {
 		return nil, err
 	}
 	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
+
+// MemoryLock serializes memory-worktree critical sections across processes:
+// the supervisor's staging snapshots and settlements, and a manual `routines
+// run` executing beside it, all stage from and settle into the same worktree
+// and index. The supervisor's goroutines already serialize in-process through
+// the embedded mutex; the kernel lock underneath extends the same exclusion
+// to other processes, and dies with its holder. The mutex is also what keeps
+// the flock correct here: every goroutine shares one file description, flock
+// on a description that already holds the lock is a no-op, and the first
+// unlock would release it for everyone -- the mutex guarantees strict
+// acquire/release alternation on that description.
+type MemoryLock struct {
+	mu sync.Mutex
+	f  *os.File
+}
+
+// OpenMemoryLock opens the agent's cross-process memory-worktree lock.
+func OpenMemoryLock(dir string) (*MemoryLock, error) {
+	lockDir := filepath.Join(dir, ".openroutines-tmp", "locks")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(lockDir, "memory.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	return &MemoryLock{f: f}, nil
+}
+
+// Lock blocks until this process's goroutines and every other process
+// holding the memory lock have released it.
+func (l *MemoryLock) Lock() {
+	l.mu.Lock()
+	for {
+		err := syscall.Flock(int(l.f.Fd()), syscall.LOCK_EX)
+		if err == nil {
+			return
+		}
+		if err != syscall.EINTR {
+			// Proceeding unserialized is the corruption this lock exists to
+			// prevent; there is no recoverable path from here.
+			panic(fmt.Sprintf("memory worktree lock: %v", err))
+		}
+	}
+}
+
+// Unlock releases the kernel lock, then the in-process mutex.
+func (l *MemoryLock) Unlock() {
+	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
+	l.mu.Unlock()
+}
+
+// reserveManualIdentity reserves the manual attempt identity: the one uid
+// past the supervisor's slot pool, pre-created by the template Dockerfile.
+// Production refuses to spawn a model process without a reserved attempt
+// uid, and only the supervisor holds the slot pool -- so `routines run`
+// inside the container takes this fixed identity instead, serialized by a
+// kernel lock so two manual runs cannot share it.
+func reserveManualIdentity(dir string) (uint32, func(), error) {
+	const uid = uint32(sandbox.AttemptUIDBase + config.MaxConcurrency)
+	// Group membership is how the staged trees are shared with the identity;
+	// checking it here turns an image predating the manual identity into a
+	// named contract violation instead of a bare chgrp error mid-staging.
+	groups, err := os.Getgroups()
+	if err != nil {
+		return 0, nil, err
+	}
+	if !slices.Contains(groups, int(uid)) {
+		return 0, nil, fmt.Errorf("%w: the agent user is not in the manual attempt group %d -- rebuild the deploy image from the current template Dockerfile", ErrFatal, uid)
+	}
+	lockDir := filepath.Join(dir, ".openroutines-tmp", "locks")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		return 0, nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(lockDir, "manual-attempt.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if err == syscall.EWOULDBLOCK {
+			return 0, nil, errors.New("another manual run holds the manual attempt identity -- try again when it finishes")
+		}
+		return 0, nil, err
+	}
+	// Prove the identity is empty before handing it out, not only after: a
+	// previous manual run that died (the kernel dropped its lock) can leave
+	// an escaped descendant that would share -- and be able to inspect --
+	// this run's identity. The release-side reap is best effort because the
+	// lock dies with the process anyway; this acquire-side proof is what the
+	// next run can rely on.
+	if err := sandbox.ReapIdentity(uid); err != nil {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+		return 0, nil, fmt.Errorf("manual attempt identity is not clean -- refusing to reuse it: %w", err)
+	}
+	return uid, func() {
+		if err := sandbox.ReapIdentity(uid); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: manual attempt identity cleanup: %v\n", err)
+		}
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}, nil
