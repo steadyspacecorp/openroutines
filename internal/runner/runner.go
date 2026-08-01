@@ -125,6 +125,11 @@ func authHint(dir, model string, injected bool) string {
 // only asks whether the failure it was handed is one of these.
 var ErrFatal = errors.New("not retryable")
 
+// ErrAttemptCleanup marks a workspace that was not proven discarded. The
+// supervisor must poison the attempt identity instead of returning it to the
+// pool, or its next assignee could read the leftover tree.
+var ErrAttemptCleanup = errors.New("attempt workspace cleanup failed")
+
 // Staging is the attempt's staged memory, awaiting import or discard.
 type Staging struct {
 	MemoryDir string
@@ -154,34 +159,39 @@ type Staging struct {
 // which the capability-less supervisor cannot delete. When that happens the
 // attempt identity itself is asked to reopen its tree, so a leftover cannot
 // outlive the run and be read by the identity's next assignee.
-func (s *Staging) Cleanup() {
+func (s *Staging) Cleanup() error {
 	if s.attemptUID != 0 {
 		// Kill anything still carrying the identity before touching the
 		// tree: an escaped descendant could otherwise race the removal,
-		// re-closing or recreating paths behind it. The identity's owner
-		// reaps again before reuse -- the supervisor poisons a slot whose
-		// reap fails, and a manual reservation re-proves emptiness -- so
-		// this pass only has to make the removal itself trustworthy.
-		_ = sandbox.ReapIdentity(s.attemptUID)
+		// re-closing or recreating paths behind it. The slot owner reaps
+		// again before reuse; this pass makes the removal itself trustworthy.
+		if err := sandbox.ReapIdentity(s.attemptUID); err != nil {
+			return fmt.Errorf("%w: reap uid %d before removal: %w", ErrAttemptCleanup, s.attemptUID, err)
+		}
 	}
-	if err := os.RemoveAll(s.workspace); err != nil && s.attemptUID != 0 {
-		reclaimAttemptTrees(s.attemptUID, s.workspace)
-		_ = os.RemoveAll(s.workspace)
+	if err := os.RemoveAll(s.workspace); err != nil {
+		if s.attemptUID == 0 {
+			return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.workspace, err)
+		}
+		reclaimErr := reclaimAttemptTrees(s.attemptUID, s.workspace)
+		if removeErr := os.RemoveAll(s.workspace); removeErr != nil {
+			return fmt.Errorf("%w: reclaim uid %d tree and remove %s", errors.Join(ErrAttemptCleanup, reclaimErr, removeErr), s.attemptUID, s.workspace)
+		}
 	}
 	if s.BaseDir != "" {
-		os.RemoveAll(s.BaseDir)
+		_ = os.RemoveAll(s.BaseDir)
 	}
+	return nil
 }
 
 // reclaimAttemptTrees spawns the capless helper as the attempt identity to
-// restore group bits on paths that identity owns. Best effort: cleanup
-// retries either way, and a failure leaves nothing worse than the leftover
-// it was trying to remove.
-func reclaimAttemptTrees(uid uint32, root string) {
+// restore group bits on paths that identity owns. Cleanup retries removal
+// either way and includes this error if the retry also fails.
+func reclaimAttemptTrees(uid uint32, root string) error {
 	cmd := exec.Command(sandbox.HelperPath, "sandbox-reclaim", root)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid}}
-	_ = cmd.Run()
+	return cmd.Run()
 }
 
 // Consumed reports whether the routine created the consume marker: its
@@ -297,11 +307,10 @@ type StagedRun struct {
 }
 
 // Discard releases a staged attempt that will not be spawned (for example,
-// because its supervisor lost the lease after staging). It is idempotent with
-// the same best-effort cleanup used after a run.
-func (sr *StagedRun) Discard() {
+// because its supervisor lost the lease after staging).
+func (sr *StagedRun) Discard() error {
 	sr.secrets.release()
-	sr.staging.Cleanup()
+	return sr.staging.Cleanup()
 }
 
 // Stage prepares one attempt without spawning anything. mu is the caller's
@@ -310,7 +319,7 @@ func (sr *StagedRun) Discard() {
 // the network (a github_app derivation is two HTTPS round trips) and must
 // not hold up every other attempt's settlement. On error, everything Stage
 // acquired -- derived credentials, the workspace -- is already released.
-func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (*StagedRun, error) {
+func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (stagedRun *StagedRun, err error) {
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && meta.AttemptUID == 0 {
 		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
 	}
@@ -348,7 +357,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	staging := &Staging{MemoryDir: filepath.Join(workspace, memory.Dir), workspace: workspace}
 	defer func() {
 		if !ok {
-			staging.Cleanup()
+			err = errors.Join(err, staging.Cleanup())
 		}
 	}()
 	if staging.BaseDir, err = os.MkdirTemp("", "openroutines-base-*"); err != nil {
@@ -482,8 +491,8 @@ func frameworkEnv(timezone string, r *routine.Routine, meta Meta) []string {
 // Run spawns the staged attempt's model process and waits it out. Derived
 // credential material is revoked when the attempt ends, success or failure;
 // a fresh attempt derives fresh material. On error the staging is already
-// cleaned, exactly as Execute always behaved.
-func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
+// cleaned, and a cleanup failure is joined to the returned error.
+func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStaging *Staging, err error) {
 	r, meta, staging := sr.r, sr.meta, sr.staging
 	dir := sr.dir
 	workspace, runTmp, env, ocArgs := sr.workspace, sr.runTmp, sr.env, sr.ocArgs
@@ -493,7 +502,7 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 	ok := false
 	defer func() {
 		if !ok {
-			staging.Cleanup()
+			err = errors.Join(err, staging.Cleanup())
 		}
 	}()
 
@@ -690,7 +699,7 @@ func (sr *StagedRun) Run(ctx context.Context) (*ExecResult, *Staging, error) {
 
 // Run executes routine `name` manually. noMemory discards staged memory
 // writes and the run record after the otherwise ordinary run completes.
-func Run(dir, name string, noMemory bool) (*Result, error) {
+func Run(dir, name string, noMemory bool) (result *Result, err error) {
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 		return nil, fmt.Errorf("%w: routines run cannot execute beside the supervisor -- run it from a local checkout instead", ErrFatal)
 	}
@@ -715,7 +724,7 @@ func Run(dir, name string, noMemory bool) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer staging.Cleanup()
+	defer func() { err = errors.Join(err, staging.Cleanup()) }()
 
 	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
 	if noMemory {

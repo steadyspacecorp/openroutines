@@ -23,6 +23,13 @@ func TestManualRunIsRejectedInsideSupervisorContainer(t *testing.T) {
 	}
 }
 
+func TestCleanupReportsWorkspaceRemovalFailure(t *testing.T) {
+	staging := &Staging{workspace: "\x00"}
+	if err := staging.Cleanup(); !errors.Is(err, ErrAttemptCleanup) {
+		t.Fatalf("cleanup error = %v, want ErrAttemptCleanup", err)
+	}
+}
+
 func genDef(t *testing.T, meta Meta, fm ...routine.Frontmatter) string {
 	t.Helper()
 	ws := t.TempDir()
