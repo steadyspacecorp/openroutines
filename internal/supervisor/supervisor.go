@@ -72,9 +72,11 @@ type Supervisor struct {
 	// bookkeeping (sync, trim, scheduling state, intent commit), each
 	// attempt's reserve-and-stage, and each attempt's settlement. Runs
 	// execute in parallel; the ledger they check out from and settle into
-	// takes one writer at a time. Everything below through pollFailed is
-	// touched only under memMu or only by the tick goroutine.
-	memMu sync.Mutex
+	// takes one writer at a time. The lock is kernel-backed, so a manual
+	// `routines run` beside this process serializes through it too instead
+	// of becoming a second uncoordinated writer. Everything below through
+	// pollFailed is touched only under memMu or only by the tick goroutine.
+	memMu *runner.MemoryLock
 
 	// leaseMu guards the lease heartbeat state: in-flight runs heartbeat
 	// concurrently with each other and with the tick. Lease git operations
@@ -140,6 +142,10 @@ func New(dir string) (*Supervisor, error) {
 	}
 	secrets := scrub.NewSet(memory.SupervisorSecrets(dir))
 	mem := memory.At(dir)
+	memMu, err := runner.OpenMemoryLock(dir)
+	if err != nil {
+		return nil, err
+	}
 	slots := make(chan uint32, agent.RunSlots())
 	for i := range agent.RunSlots() {
 		slots <- uint32(attemptUIDBase + i)
@@ -150,6 +156,7 @@ func New(dir string) (*Supervisor, error) {
 		Log:        log.New(scrub.NewSetWriter(os.Stdout, secrets), "", log.LstdFlags|log.LUTC),
 		level:      agent.EffectiveLogLevel(),
 		mem:        mem,
+		memMu:      memMu,
 		leaseTTL:   memory.LeaseTTL,
 		loc:        loc,
 		retention:  retention,
@@ -632,7 +639,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun)
 		defer stopHeartbeat()
 	}
-	staged, err := runner.Stage(s.Dir, agent, r, meta, &s.memMu)
+	staged, err := runner.Stage(s.Dir, agent, r, meta, s.memMu)
 	if errors.Is(err, runner.ErrAttemptCleanup) {
 		cleanupErr = err
 	}

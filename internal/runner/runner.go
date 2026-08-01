@@ -59,7 +59,7 @@ type Meta struct {
 	AttemptID      string
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
-	AttemptUID     uint32 // production-only identity reserved by the supervisor
+	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -265,24 +265,6 @@ func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 	}
 	return timeout
 }
-
-// Execute performs one attempt and returns its result plus the staged memory
-// for the caller to import or discard. The caller must Cleanup() the staging.
-// Canceling ctx kills the attempt's process group (shutdown semantics).
-func Execute(ctx context.Context, dir string, agent *config.Agent, r *routine.Routine, meta Meta) (*ExecResult, *Staging, error) {
-	sr, err := Stage(dir, agent, r, meta, nopLocker{})
-	if err != nil {
-		return nil, nil, err
-	}
-	return sr.Run(ctx)
-}
-
-// nopLocker is the manual-run path's memory lock: a single `routines run`
-// has no concurrent settlements to serialize against.
-type nopLocker struct{}
-
-func (nopLocker) Lock()   {}
-func (nopLocker) Unlock() {}
 
 // StagedRun is a fully prepared attempt: credentials resolved, workspace
 // built, memory snapshotted, inbox and schedule written -- everything that
@@ -699,9 +681,17 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 
 // Run executes routine `name` manually. noMemory discards staged memory
 // writes and the run record after the otherwise ordinary run completes.
+// Inside the production container a manual run reserves the manual attempt
+// identity first, so it can never share a uid with a supervisor slot.
 func Run(dir, name string, noMemory bool) (result *Result, err error) {
+	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-		return nil, fmt.Errorf("%w: routines run cannot execute beside the supervisor -- run it from a local checkout instead", ErrFatal)
+		uid, releaseIdentity, err := reserveManualIdentity(dir)
+		if err != nil {
+			return nil, err
+		}
+		defer releaseIdentity()
+		meta.AttemptUID = uid
 	}
 	agent, err := config.Load(dir)
 	if err != nil {
@@ -719,8 +709,20 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 		return nil, err
 	}
 	defer release()
-	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
-	exec, staging, err := Execute(context.Background(), dir, agent, r, meta)
+	// The cross-process memory lock: a supervisor may be settling runs into
+	// the same worktree beside this process -- in the production container
+	// always, on a host whenever `supervise` runs locally. Staging snapshots
+	// and settlement each take their turn behind the same kernel lock the
+	// supervisor's own critical sections hold.
+	memLock, err := OpenMemoryLock(dir)
+	if err != nil {
+		return nil, err
+	}
+	sr, err := Stage(dir, agent, r, meta, memLock)
+	if err != nil {
+		return nil, err
+	}
+	exec, staging, err := sr.Run(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -731,6 +733,8 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 		return res, nil
 	}
 
+	memLock.Lock()
+	defer memLock.Unlock()
 	settlement, err := Settle(dir, r, staging, exec, meta, "", nil)
 	res.Outcome = settlement.Outcome
 	res.Commit = settlement.Commit
