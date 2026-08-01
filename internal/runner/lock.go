@@ -68,6 +68,17 @@ func reserveManualIdentity(dir string) (uint32, func(), error) {
 		}
 		return 0, nil, err
 	}
+	// Prove the identity is empty before handing it out, not only after: a
+	// previous manual run that died (the kernel dropped its lock) can leave
+	// an escaped descendant that would share -- and be able to inspect --
+	// this run's identity. The release-side reap is best effort because the
+	// lock dies with the process anyway; this acquire-side proof is what the
+	// next run can rely on.
+	if err := sandbox.ReapIdentity(uid); err != nil {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+		return 0, nil, fmt.Errorf("manual attempt identity is not clean -- refusing to reuse it: %w", err)
+	}
 	return uid, func() {
 		if err := sandbox.ReapIdentity(uid); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: manual attempt identity cleanup: %v\n", err)
