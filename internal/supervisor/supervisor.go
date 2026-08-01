@@ -227,7 +227,14 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		s.infof("deploy key configured for memory sync")
 	}
-	if err := s.mem.Ensure(); err != nil {
+	// Under memMu like every other worktree operation: first-boot
+	// materialization racing a manual run's own locked Ensure would have
+	// two processes creating the branch, worktree, and seed commit at once.
+	if err := func() error {
+		s.memMu.Lock()
+		defer s.memMu.Unlock()
+		return s.mem.Ensure()
+	}(); err != nil {
 		return err
 	}
 	if s.noOrigin {
