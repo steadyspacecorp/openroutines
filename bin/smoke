@@ -234,4 +234,47 @@ fi
 grep -q 'Dockerfile version pin does not match' "$work/out" || die "check did not explain the Dockerfile/pin mismatch"
 step "check rejects framework-version drift"
 
+# Per-attempt uid isolation must work inside the production container with
+# only the capabilities the template grants: every production gate in the
+# runner is keyed on OPENROUTINES_IN_CONTAINER=1, which the host test suite
+# never sets, so this is the one place the real staging path runs. A manual
+# `routines run` covers both regressions from alpha.38: tree preparation
+# needing capabilities the image never granted, and manual runs having no
+# attempt identity at all. Requires Docker (present in CI); skipped only
+# when the binary is missing entirely.
+if command -v docker >/dev/null 2>&1; then
+  ctx="$work/isolation"
+  mkdir -p "$ctx"
+  run scaffold "$ctx/agent" || die "scaffold isolation agent"
+  cd "$ctx/agent"
+  printf 'isolation-agent\nSmoke-tests uid isolation\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
+    | "$bin" configure >"$work/out" 2>&1 || die "configure isolation agent"
+  cat > routines/isolation.md <<'EOF'
+---
+schedule: "0 9 * * *"
+model: fake/model
+---
+Record the attempt identity.
+EOF
+  grep -q 'seq 0 32' Dockerfile || die "template Dockerfile does not create the manual attempt identity"
+  grep -q -- '-G "${groups#,}" agent' Dockerfile || die "template Dockerfile does not put agent in the attempt groups"
+  caps="$(sed -n 's/.*setcap \(cap_[a-z_,]*\)=ep.*/\1/p' Dockerfile)"
+  [[ -n "$caps" ]] || die "no setcap line in the template Dockerfile"
+  cp "$repo/testdata/isolation/Dockerfile" "$ctx/Dockerfile"
+  cp "$repo/testdata/isolation/opencode" "$ctx/opencode"
+  arch="$(docker version --format '{{.Server.Arch}}')"
+  (cd "$repo" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$ctx/openroutines" ./cmd/openroutines)
+  docker build --quiet --build-arg "CAPS=$caps" -t openroutines-isolation-smoke "$ctx" >"$work/out" 2>&1 || die "isolation image build"
+  docker run --rm openroutines-isolation-smoke sh -c '
+    set -e
+    openroutines routines run isolation
+    git -C /agent show memory:ledgers/isolation.md
+    if ls /tmp | grep -q openroutines-; then echo "run workspace not cleaned"; exit 1; fi
+  ' >"$work/out" 2>&1 || die "in-container isolation run"
+  grep -q 'uid=20032 gid=20032' "$work/out" || die "model process did not run as the manual attempt identity"
+  step "uid isolation works in-container with only the template capabilities"
+else
+  step "uid isolation in-container test SKIPPED (docker not installed)"
+fi
+
 echo "smoke: OK"

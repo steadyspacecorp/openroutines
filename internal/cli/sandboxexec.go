@@ -60,6 +60,12 @@ func cmdSandboxExec(args []string) int {
 		return fail(fmt.Errorf("sandbox-exec: uid isolation failed: %w", err))
 	}
 
+	// Everything the model process creates must stay reachable by the
+	// supervisor, which imports staged memory, reads the session record,
+	// and removes the run workspace -- via the attempt's group, which the
+	// agent user belongs to. Keep group bits, drop world.
+	syscall.Umask(0o007)
+
 	bin, err := exec.LookPath(args[0])
 	if err != nil {
 		return fail(err)

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Fake opencode for the in-container isolation test: records the identity it
+# runs as into staged memory and leaves the session storage a clean run
+# leaves (the runner reads it to decide the session ended, and to capture
+# token usage).
+mkdir -p .home/.local/share/opencode/storage/message/ses_fake
+printf '{"role":"assistant","modelID":"fake","finish":"stop","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}' \
+  > .home/.local/share/opencode/storage/message/ses_fake/msg_1.json
+mkdir -p memory/ledgers
+echo "uid=$(id -u) gid=$(id -g)" >> memory/ledgers/isolation.md
+echo done

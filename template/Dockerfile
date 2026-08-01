@@ -20,16 +20,23 @@ FROM debian:trixie-slim AS base
 
 # Tools every run can rely on: git, gh for GitHub work, jq for reading JSON APIs,
 # ssh for git-over-ssh memory pushes, curl for the installs below.
+# The attempt identity pool: 32 run-slot identities plus attempt-32, reserved
+# for manual `routines run` inside the container. The agent user joins every
+# attempt group because per-attempt filesystem access is granted on the group
+# axis: the supervisor chgrps the trees it stages (unprivileged for a group it
+# belongs to) instead of chowning them, which would need CAP_CHOWN and friends.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git gh jq openssh-client curl ca-certificates libcap2-bin \
     && rm -rf /var/lib/apt/lists/* \
-    && for i in $(seq 0 31); do \
+    && groups=""; \
+       for i in $(seq 0 32); do \
          uid=$((20000 + i)); \
          groupadd --gid "${uid}" "attempt-${i}"; \
          useradd --no-create-home --uid "${uid}" --gid "${uid}" --shell /usr/sbin/nologin "attempt-${i}"; \
+         groups="${groups},attempt-${i}"; \
        done \
     && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
-    && useradd -m -u 10001 agent
+    && useradd -m -u 10001 -G "${groups#,}" agent
 
 # opencode's installer only targets $HOME, so relocate the binary to the system path.
 ARG OPENCODE_VERSION=1.18.3
