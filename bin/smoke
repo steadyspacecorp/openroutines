@@ -257,6 +257,20 @@ model: fake/model
 ---
 Record the attempt identity.
 EOF
+  # The manual probe is a distinct routine: the settlement commit becomes
+  # visible while the supervised run still holds its routine flock through
+  # cleanup, so a same-routine manual run would race that release. A distinct
+  # routine cannot collide on the routine lock -- what serializes it against
+  # the supervisor is exactly the cross-process memory lock under test.
+  # Inactive so the live supervisor can never dispatch it itself.
+  cat > routines/manual-probe.md <<'EOF'
+---
+schedule: "0 9 * * *"
+active: false
+model: fake/model
+---
+Record the manual attempt identity.
+EOF
   mkdir -p memory/state
   cat > memory/state/isolation.json <<'EOF'
 {"routine":"isolation","watermark":"2026-07-31T00:00:00Z","pending":{"run_id":"run_isolation","scheduled_for":"2026-07-31T09:00:00Z","covered_through":"2026-07-31T09:00:00Z","created_at":"2026-07-31T09:00:00Z","attempts":0}}
@@ -294,7 +308,7 @@ EOF
       cat /tmp/supervise.out
       exit 1
     fi
-    if ! openroutines routines run isolation > /tmp/manual.out 2>&1; then
+    if ! openroutines routines run manual-probe > /tmp/manual.out 2>&1; then
       echo "manual run failed beside the supervisor"
       cat /tmp/manual.out
       exit 1
