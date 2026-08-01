@@ -270,6 +270,9 @@ EOF
     openroutines routines run isolation
     git -C /agent show memory:ledgers/isolation.md
     if ls /tmp | grep -q openroutines-; then echo "run workspace not cleaned"; exit 1; fi
+    if grep -l "^Uid:.20032" /proc/[0-9]*/status 2>/dev/null | grep -q .; then
+      echo "escaped descendant outlived the run"; exit 1
+    fi
   ' >"$work/out" 2>&1 || die "in-container isolation run"
   grep -q 'uid=20032 gid=20032' "$work/out" || die "model process did not run as the manual attempt identity"
   step "uid isolation works in-container with only the template capabilities"
