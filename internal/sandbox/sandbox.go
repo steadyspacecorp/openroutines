@@ -43,9 +43,9 @@ func EnsureAttemptGroups(identities int) error {
 			missing = append(missing, gid)
 		}
 	}
-	if len(missing) == 0 {
-		return nil
-	}
+	// Called even when nothing is missing: setgroups requires cap_setgid no
+	// matter what it sets, so this doubles as the boot-time proof that the
+	// binary can perform the credential transitions every attempt depends on.
 	if err := syscall.Setgroups(append(current, missing...)); err != nil {
 		return fmt.Errorf("joining the attempt groups: %w -- the binary needs cap_setgid; rebuild the deploy image from the current template Dockerfile", err)
 	}
