@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -132,5 +133,163 @@ func TestCaptureViaExport(t *testing.T) {
 	empty := func(...string) ([]byte, error) { return []byte(`[]`), nil }
 	if got := captureSession(ws, empty).Usage; got == nil || got.Input != 9 {
 		t.Fatalf("legacy fallback after empty list failed: %+v", got)
+	}
+}
+
+// stubOpencode answers `session list` with the given ids and `export <id>`
+// from the exports map; a missing id is an export failure.
+func stubOpencode(t *testing.T, list string, exports map[string]string) opencodeExec {
+	t.Helper()
+	return func(args ...string) ([]byte, error) {
+		switch args[0] {
+		case "session":
+			return []byte(list), nil
+		case "export":
+			raw, ok := exports[args[1]]
+			if !ok {
+				return nil, errors.New("no such session")
+			}
+			return []byte(raw), nil
+		}
+		return nil, fmt.Errorf("unexpected opencode call %v", args)
+	}
+}
+
+var testMeta = Meta{RunID: "run_x", AttemptID: "attempt_01"}
+
+func TestExportDisabledWhenUnset(t *testing.T) {
+	t.Setenv(EnvSessionDir, "")
+	oc := func(args ...string) ([]byte, error) {
+		t.Fatalf("no designated session dir must mean no opencode call, got %v", args)
+		return nil, nil
+	}
+	if dir := exportSessions(testMeta, oc); dir != "" {
+		t.Fatalf("export must be a no-op when disabled, got %q", dir)
+	}
+}
+
+func TestExportSavesEverySession(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvSessionDir, root)
+	oc := stubOpencode(t, `[{"id":"ses_a"},{"id":"ses_b"}]`, map[string]string{
+		"ses_a": `{"messages":[1]}`,
+		"ses_b": `{"messages":[2]}`,
+	})
+
+	dir := exportSessions(testMeta, oc)
+	if dir != filepath.Join(root, "run_x.attempt_01") {
+		t.Fatalf("unexpected session dir %q", dir)
+	}
+	for id, want := range map[string]string{"ses_a": `{"messages":[1]}`, "ses_b": `{"messages":[2]}`} {
+		raw, err := os.ReadFile(filepath.Join(dir, id+".json"))
+		if err != nil || string(raw) != want {
+			t.Fatalf("%s.json = %q (%v), want %q", id, raw, err, want)
+		}
+	}
+}
+
+// Exported sessions are verbatim, unscrubbed model history, so what lands
+// is as sensitive as the credentials the routine could see: owner-only.
+func TestExportWritesOwnerOnly(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvSessionDir, root)
+	dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_a"}]`, map[string]string{"ses_a": "{}"}))
+	for path, want := range map[string]os.FileMode{
+		dir:                              0o700,
+		filepath.Join(dir, "ses_a.json"): 0o600,
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s is %o, want %o", path, got, want)
+		}
+	}
+}
+
+func TestExportSkipsWhenAttemptLeftNoSessions(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvSessionDir, root)
+	if dir := exportSessions(testMeta, stubOpencode(t, `[]`, nil)); dir != "" {
+		t.Fatalf("no sessions must mean no session dir, got %q", dir)
+	}
+	if _, err := os.Stat(filepath.Join(root, "run_x.attempt_01")); !os.IsNotExist(err) {
+		t.Fatal("an attempt without sessions must not leave a directory in operator storage")
+	}
+}
+
+// The session store is model-writable, so the ids that come back from it
+// are not trusted as filenames: one that could climb out of the attempt's
+// directory exports nothing.
+func TestExportRefusesUnsafeSessionIDs(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvSessionDir, root)
+	planted := filepath.Join(root, "planted.json")
+	oc := stubOpencode(t, `[{"id":"../planted"}]`, map[string]string{"../planted": "stolen"})
+
+	if dir := exportSessions(testMeta, oc); dir != "" {
+		t.Fatalf("an export that landed nothing must report nothing preserved, got %q", dir)
+	}
+	if _, err := os.Stat(planted); !os.IsNotExist(err) {
+		t.Fatal("an unsafe session id must never name a file outside the attempt's directory")
+	}
+	if _, err := os.Stat(filepath.Join(root, "run_x.attempt_01")); !os.IsNotExist(err) {
+		t.Fatal("an export that landed nothing must not leave a directory in operator storage")
+	}
+}
+
+// An export that fails partway still names its directory: the record points
+// at what survived, and the log carries the warning.
+func TestExportNamesAPartialExport(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvSessionDir, root)
+	oc := stubOpencode(t, `[{"id":"ses_a"},{"id":"ses_gone"}]`, map[string]string{"ses_a": "{}"})
+
+	dir := exportSessions(testMeta, oc)
+	if dir != filepath.Join(root, "run_x.attempt_01") {
+		t.Fatalf("a partial export must still name its directory, got %q", dir)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ses_a.json")); err != nil {
+		t.Fatalf("what did export must still land: %v", err)
+	}
+}
+
+// A canceled or lease-lost attempt hands its number back, so the retry
+// exports into the directory the first attempt already filled. One
+// directory names one attempt's sessions, never two merged.
+func TestExportReplacesAPreviousAttemptsSessions(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvSessionDir, root)
+	if dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_first"}]`, map[string]string{"ses_first": "{}"})); dir == "" {
+		t.Fatal("the first attempt must export cleanly")
+	}
+	dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_second"}]`, map[string]string{"ses_second": "{}"}))
+	if _, err := os.Stat(filepath.Join(dir, "ses_second.json")); err != nil {
+		t.Fatalf("the retry's own sessions must land: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ses_first.json")); !os.IsNotExist(err) {
+		t.Fatal("a retry must not merge the previous attempt's sessions into its own directory")
+	}
+}
+
+func TestExportDegradesWhenStorageUnwritable(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "occupied")
+	if err := os.WriteFile(blocked, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvSessionDir, blocked)
+	oc := stubOpencode(t, `[{"id":"ses_a"}]`, map[string]string{"ses_a": "{}"})
+	if dir := exportSessions(testMeta, oc); dir != "" {
+		t.Fatalf("broken operator storage must degrade to nothing preserved, got %q", dir)
+	}
+}
+
+func TestExportDegradesWhenListingFails(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvSessionDir, root)
+	oc := func(...string) ([]byte, error) { return nil, errors.New("no daemon") }
+	if dir := exportSessions(testMeta, oc); dir != "" {
+		t.Fatalf("an unlistable store must degrade to nothing preserved, got %q", dir)
 	}
 }

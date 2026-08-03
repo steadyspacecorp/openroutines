@@ -12,14 +12,14 @@ import (
 // debug should not need one.
 const EnvLogLevel = "OPENROUTINES_LOG_LEVEL"
 
-// ParseLogLevel maps the agent-wide log_level onto the stdlib's ladder:
-// debug shows the full model-process transcript; info (the default) the
-// rendered, bounded run stream plus supervisor lifecycle lines; warn drops
-// the run stream and lifecycle, keeping degraded-but-running conditions;
-// error keeps failures and held dispatch only. Failed attempts print their
-// output tail at every level -- a failure's last lines are the diagnostic
-// payload, not chatter. See design decision "Run output is rendered,
-// bounded, and leveled".
+// ParseLogLevel maps the agent-wide log_level onto the stdlib's ladder. The
+// level gates the supervisor's own records at the handler and opencode's
+// passed-through diagnostics at their source (each run is asked for this
+// same level) -- and nothing else; run output is never log lines, and
+// stored history is exported sessions in operator storage (design decision
+// "Run history: opencode's log passed through, sessions exported"): info
+// (the default) keeps lifecycle lines; warn keeps degraded-but-running
+// conditions; error keeps failures and held dispatch only.
 //
 // slog.Level is the type throughout rather than a framework-specific enum:
 // it already orders these four levels and is what every log handler

@@ -462,7 +462,7 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 			// settled: the supervisor did not survive them. Settlement is
 			// where a run is normally abandoned, but a run that kills its
 			// container never gets there.
-			s.abandon(r, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), now)
+			s.abandon(r, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), "", now)
 			if err := st.Save(s.stateDir()); err != nil {
 				log.Error("saving scheduling state failed", "error", err)
 			}
@@ -542,8 +542,10 @@ func reserve(p *schedule.Pending, now time.Time) (giveBack func()) {
 // abandon gives up on a pending run: the work becomes a human-owned task (a
 // run that falls over never gets to explain itself, and only a person can
 // act), the watermark advances so the schedule moves on, and the breaker
-// counts the abandonment. The caller saves the state and commits it.
-func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail string, now time.Time) {
+// counts the abandonment. The caller saves the state and commits it, and
+// passes the last attempt's exported sessions when there are any -- the
+// attempt that gives up on a run is the one an operator reads first.
+func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, sessionsDir string, now time.Time) {
 	p := st.Pending
 	date := now.UTC().Format("2006-01-02")
 	_ = s.mem.AppendHumanTask("task-"+p.RunID,
@@ -554,7 +556,7 @@ func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail stri
 		_ = s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown))
 		r.Log().Error("circuit breaker tripped", "cooldown", cooldown)
 	}
-	r.Log().Error("run abandoned", "run_id", p.RunID, "attempts", p.Attempts)
+	r.Log().Error("run abandoned", withSessions(sessionsDir, "run_id", p.RunID, "attempts", p.Attempts)...)
 }
 
 // execute runs one attempt of a pending logical run and settles the outcome.
@@ -678,7 +680,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 			st.RecordSuccess()
 		case fatal, p.Attempts >= MaxAttempts:
 			abandoned = true
-			s.abandon(r, st, fin.Detail, now)
+			s.abandon(r, st, fin.Detail, res.SessionsDir, now)
 		}
 		if err := st.Save(s.stateDir()); err != nil {
 			log.Error("saving scheduling state failed", "error", err)
@@ -712,17 +714,26 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		}
 		return // no push: shutdown's final commit carries the record, and a lease loser must not push
 	case settlement.Outcome == runner.Completed:
-		log.Info("run completed", "duration", res.Duration)
+		log.Info("run completed", withSessions(res.SessionsDir, "duration", res.Duration)...)
 	case abandoned:
 		// abandon() already said so.
 	default:
-		log.Error("attempt failed -- will retry", "detail", settlement.Detail)
+		log.Error("attempt failed -- will retry", withSessions(res.SessionsDir, "detail", settlement.Detail)...)
 	}
 	if !conflictCommitOK {
 		return // keep completion and remediation together on the next successful push
 	}
 	s.pushBestEffort()
 	return
+}
+
+// withSessions completes an outcome record's attributes, naming the
+// attempt's exported sessions only when there are some.
+func withSessions(sessionsDir string, args ...any) []any {
+	if sessionsDir != "" {
+		args = append(args, "sessions", sessionsDir)
+	}
+	return args
 }
 
 func (s *Supervisor) syncOnce() {

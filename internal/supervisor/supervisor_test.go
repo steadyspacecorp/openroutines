@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
 
@@ -87,15 +89,22 @@ func TestVerifyAttemptGroupsChecksEveryRunSlot(t *testing.T) {
 const fakeOpencode = `#!/bin/sh
 d=$(dirname "$0")
 mode=$(cat "$d/fake-mode" 2>/dev/null || echo ok)
-# Every mode leaves the session storage a real opencode leaves in the
-# attempt home -- the surface the runner captures token usage from, and
-# reads how the session ended.
-mkdir -p .home/.local/share/opencode/storage/message/ses_fake
 msg=.home/.local/share/opencode/storage/message/ses_fake/msg_1.json
+# The capture and session-export surface, answered before any run side
+# effect: after the attempt the runner asks for the session list and the
+# export of each session, from the same working directory the run used.
+case "$1" in
+  session) printf '[{"id":"ses_fake"}]'; exit 0 ;;
+  export) printf '{"messages":[{"info":%s}]}' "$(cat "$msg")"; exit 0 ;;
+esac
+# Every run leaves the message record a real opencode persists -- the
+# surface export renders, where the runner reads token usage and how the
+# session ended.
+mkdir -p .home/.local/share/opencode/storage/message/ses_fake
 printf '{"role":"assistant","modelID":"fake","finish":"stop","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}' \
   > "$msg"
 case "$mode" in
-  fail) echo "boom"; exit 1 ;;
+  fail) echo "boom" >&2; exit 1 ;;
   stalled) # The agent loop died on a rejected tool call: the session never
      # finished its turn, no memory was written, and opencode still exits 0.
      printf '{"role":"assistant","modelID":"fake","finish":"tool-calls","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}' \
@@ -333,6 +342,8 @@ func replacementState(t *testing.T, name string) *schedule.State {
 
 func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	dir := fixture(t, "ok")
+	sessionDir := t.TempDir()
+	t.Setenv(runner.EnvSessionDir, sessionDir)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
@@ -363,6 +374,16 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
 	if !strings.Contains(records, `"outcome":"completed"`) {
 		t.Fatalf("run record missing: %q", records)
+	}
+
+	// The attempt's session was exported into its per-attempt directory
+	// under the designated session dir.
+	stored, err := filepath.Glob(filepath.Join(sessionDir, "run_*.attempt_01", "ses_fake.json"))
+	if err != nil || len(stored) != 1 {
+		t.Fatalf("expected one exported session, got %v (%v)", stored, err)
+	}
+	if got := readFile(t, stored[0]); !strings.Contains(got, `"finish":"stop"`) {
+		t.Fatalf("stored session data does not match what the run wrote: %q", got)
 	}
 }
 
@@ -570,6 +591,64 @@ func TestCatchupCollapsesMissedFirings(t *testing.T) {
 	}
 }
 
+// captureStdout collects what fn prints -- the opencode-log passthrough
+// writes to the process's stdout directly, not through the logger.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+	read := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		read <- string(b)
+	}()
+	fn()
+	w.Close()
+	out := <-read
+	r.Close()
+	return out
+}
+
+// A failed attempt must never fail invisibly: opencode's stderr is its
+// diagnostic log, and every line of it passes through to the process log
+// stream decorated with the attempt's identity -- with or without session
+// storage.
+func TestFailedAttemptDiagnosticsPassThrough(t *testing.T) {
+	failOnce := func(t *testing.T) string {
+		t.Helper()
+		s := newSupervisor(t, fixture(t, "fail"))
+		ctx := context.Background()
+		t0 := time.Now().Truncate(time.Minute)
+		s.tickWait(ctx, t0) // register
+		return captureStdout(t, func() { s.tickWait(ctx, t0.Add(time.Minute)) })
+	}
+
+	t.Run("no session storage designated", func(t *testing.T) {
+		t.Setenv(runner.EnvSessionDir, "")
+		if out := failOnce(t); !strings.Contains(out, "boom routine=every-minute run_id=run_") {
+			t.Fatalf("the failing run's diagnostics must land in the log decorated, got %q", out)
+		}
+	})
+
+	t.Run("session storage designated", func(t *testing.T) {
+		sessions := t.TempDir()
+		t.Setenv(runner.EnvSessionDir, sessions)
+		out := failOnce(t)
+		if !strings.Contains(out, "boom routine=every-minute run_id=run_") {
+			t.Fatalf("session storage must not swallow the log passthrough, got %q", out)
+		}
+		stored, err := filepath.Glob(filepath.Join(sessions, "run_*.attempt_01", "ses_fake.json"))
+		if err != nil || len(stored) != 1 {
+			t.Fatalf("the failed attempt's sessions should have landed, got %v (%v)", stored, err)
+		}
+	})
+}
+
 func TestRetrySameRunIDThenAbandon(t *testing.T) {
 	dir := fixture(t, "fail")
 	s := newSupervisor(t, dir)
@@ -613,6 +692,31 @@ func TestRetrySameRunIDThenAbandon(t *testing.T) {
 	if got := strings.Count(records, runID); got != MaxAttempts {
 		t.Fatalf("expected %d attempt records for %s, got %d", MaxAttempts, runID, got)
 	}
+}
+
+// The attempt that abandons a run is the one an operator reads first, so
+// its record names the sessions it left -- the outcome that most needs the
+// directory cannot be the one outcome that never mentions it.
+func TestAbandonedRunNamesItsSessions(t *testing.T) {
+	t.Setenv(runner.EnvSessionDir, t.TempDir())
+	s := newSupervisor(t, fixture(t, "fail"))
+	var out bytes.Buffer
+	logging.Setup(&out, slog.LevelInfo, time.UTC)
+
+	t0 := time.Now().Truncate(time.Minute)
+	s.tickWait(context.Background(), t0) // register
+	driveToAbandonment(t, s, t0)
+
+	for _, line := range strings.Split(out.String(), "\n") {
+		if !strings.Contains(line, "run abandoned") {
+			continue
+		}
+		if !strings.Contains(line, "sessions=") {
+			t.Fatalf("the abandonment record names no sessions: %q", line)
+		}
+		return
+	}
+	t.Fatalf("no abandonment record in the log: %q", out.String())
 }
 
 func TestBackoffHoldsBetweenAttempts(t *testing.T) {
