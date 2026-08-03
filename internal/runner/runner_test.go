@@ -718,3 +718,27 @@ func TestAuthFailurePatternMatchesPassthroughStatusText(t *testing.T) {
 		t.Fatal("bare 'unauthorized' outside an error line should not classify as auth failure")
 	}
 }
+
+// The record carries model, effort, and per-attempt tokens when present,
+// and omits them -- never zeroes -- when the runtime didn't report.
+func TestRecordJSONUsage(t *testing.T) {
+	r := &routine.Routine{Name: "x"}
+	meta := Meta{RunID: "run_1"}
+
+	bare := recordJSON(r, meta, 1, &ExecResult{Outcome: Completed}, false)
+	for _, absent := range []string{"tokens", "model", "effort", "cost_reported"} {
+		if strings.Contains(bare, absent) {
+			t.Fatalf("unreported %s must be omitted, got %s", absent, bare)
+		}
+	}
+
+	res := &ExecResult{Outcome: Completed, Model: "fake/model", Effort: "high",
+		Usage: &Usage{Input: 100, Output: 20, Reasoning: 5, CacheRead: 7, CacheWrite: 3, CostReported: 0.01}}
+	rec := recordJSON(r, meta, 1, res, false)
+	for _, want := range []string{`"model":"fake/model"`, `"effort":"high"`, `"input":100`, `"output":20`,
+		`"reasoning":5`, `"cache_read":7`, `"cache_write":3`, `"cost_reported":0.01`} {
+		if !strings.Contains(rec, want) {
+			t.Fatalf("record missing %s: %s", want, rec)
+		}
+	}
+}
