@@ -42,6 +42,23 @@ func ParseLogLevel(s string) (slog.Level, error) {
 	return slog.LevelInfo, fmt.Errorf("log_level %q is not one of debug, info, warn, error", s)
 }
 
+// IgnoredLogLevel reports an environment override that failed to parse --
+// the one log_level input Problems() never sees, because check runs against
+// the repository, not a container's environment. The process itself has to
+// announce the typo: the variable exists to flip a live container to debug,
+// and an operator whose override is silently ignored concludes the debug
+// lines don't exist and stops looking.
+func IgnoredLogLevel() (string, bool) {
+	v := os.Getenv(EnvLogLevel)
+	if v == "" {
+		return "", false
+	}
+	if _, err := ParseLogLevel(v); err != nil {
+		return v, true
+	}
+	return "", false
+}
+
 // EffectiveLogLevel resolves the level a process runs at: the environment
 // override wins, then log_level in the configuration file, then info.
 // Unrecognized values fall through -- check and Problems() flag them; a
