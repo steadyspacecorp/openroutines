@@ -26,10 +26,11 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 	spec := *r.FM.Trigger
 	interval, _ := spec.IntervalDuration() // validated by the caller
 
+	log := r.Log()
 	if last, ok := s.lastPolled[r.Name]; ok && now.Before(last.Add(interval)) {
+		log.Debug("skipped", "reason", "poll interval not elapsed")
 		return false
 	}
-	log := r.Log()
 	prior, err := trigger.Load(s.stateDir(), r.Name)
 	if err != nil {
 		log.Error("loading trigger state failed", "error", err)
@@ -66,6 +67,7 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 	prior, err := trigger.Load(s.stateDir(), r.Name)
 	if err != nil {
+		r.Log().Warn("could not refresh the trigger baseline", "error", err)
 		return
 	}
 	res, ok := s.poll(r, *r.FM.Trigger, prior, now)
