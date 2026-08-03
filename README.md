@@ -3,6 +3,9 @@
 > **Early alpha:** OpenRoutines is under active development and not ready for production use. APIs, configuration, and behavior may change without notice. We're sharing the work early -- watch the repository for updates.
 
 [![ci](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml/badge.svg)](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/steadyspacecorp/openroutines?include_prereleases)](https://github.com/steadyspacecorp/openroutines/releases)
+[![license](https://img.shields.io/github/license/steadyspacecorp/openroutines)](LICENSE)
+[![openrouter](https://img.shields.io/badge/OpenRouter-OpenRoutines-6467f2)](https://openrouter.ai/apps?url=https%3A%2F%2Fopenroutines.dev)
 
 **The framework for running simple, secure, and durable autonomous AI agents.**
 
