@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 func writeMsg(t *testing.T, dir, name, content string) {
@@ -22,7 +24,7 @@ func writeMsg(t *testing.T, dir, name, content string) {
 // Usage sums assistant messages only; absence is nil, never zero.
 func TestCaptureUsage(t *testing.T) {
 	ws := t.TempDir()
-	if got := captureSession(ws, nil).Usage; got != nil {
+	if got := captureSession(ws, nil, discardLog).Usage; got != nil {
 		t.Fatalf("no store should be nil, got %+v", got)
 	}
 	store := filepath.Join(ws, ".home", ".local", "share", "opencode", "storage", "message", "ses_x")
@@ -30,7 +32,7 @@ func TestCaptureUsage(t *testing.T) {
 	writeMsg(t, store, "msg_2.json", `{"role":"assistant","tokens":{"input":50,"output":10,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.005}`)
 	writeMsg(t, store, "msg_3.json", `{"role":"user","tokens":{"input":999,"output":999}}`)
 	writeMsg(t, store, "msg_4.json", `not json`)
-	u := captureSession(ws, nil).Usage
+	u := captureSession(ws, nil, discardLog).Usage
 	if u == nil {
 		t.Fatal("expected usage")
 	}
@@ -79,7 +81,7 @@ func TestCaptureSessionFailure(t *testing.T) {
 			for i, m := range tc.messages {
 				writeMsg(t, store, fmt.Sprintf("msg_%02d.json", i), m)
 			}
-			got := captureSession(ws, nil).Failure
+			got := captureSession(ws, nil, discardLog).Failure
 			if tc.want == "" && got != "" {
 				t.Fatalf("expected no claim, got %q", got)
 			}
@@ -87,6 +89,22 @@ func TestCaptureSessionFailure(t *testing.T) {
 				t.Fatalf("failure %q should mention %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// The failure claim quotes a model-writable record, and it outlives the
+// mint registration that would otherwise redact it downstream (events, the
+// run record, the manual echo) -- so it must leave the lift already
+// redacted, while the registration is still live.
+func TestCaptureSessionFailureIsRedacted(t *testing.T) {
+	release := scrub.RegisterEphemeral("github_app bearer (gh)", "tok-sensitive-123")
+	defer release()
+	ws := t.TempDir()
+	store := filepath.Join(ws, ".home", ".local", "share", "opencode", "storage", "message", "ses_x")
+	writeMsg(t, store, "msg_00.json", `{"role":"assistant","error":{"name":"ProviderAuthError","data":{"message":"401 for token tok-sensitive-123"}}}`)
+	got := captureSession(ws, nil, discardLog).Failure
+	if strings.Contains(got, "tok-sensitive-123") || !strings.Contains(got, "[REDACTED:") {
+		t.Fatalf("session-derived failure text must be lifted redacted, got %q", got)
 	}
 }
 
@@ -112,7 +130,7 @@ func TestCaptureViaExport(t *testing.T) {
 		t.Fatalf("unexpected call %v", args)
 		return nil, nil
 	}
-	u := captureSession(t.TempDir(), oc).Usage
+	u := captureSession(t.TempDir(), oc, discardLog).Usage
 	if u == nil || u.Input != 300 || u.Output != 40 || u.Reasoning != 8 || u.CacheRead != 11 || u.CacheWrite != 2 {
 		t.Fatalf("export sums wrong: %+v", u)
 	}
@@ -122,7 +140,7 @@ func TestCaptureViaExport(t *testing.T) {
 
 	// Exec failure: fall back to legacy files (none here -> nil), never error.
 	broken := func(...string) ([]byte, error) { return nil, os.ErrPermission }
-	if got := captureSession(t.TempDir(), broken).Usage; got != nil {
+	if got := captureSession(t.TempDir(), broken, discardLog).Usage; got != nil {
 		t.Fatalf("broken exec should degrade to nil, got %+v", got)
 	}
 
@@ -131,7 +149,7 @@ func TestCaptureViaExport(t *testing.T) {
 	store := filepath.Join(ws, ".home", ".local", "share", "opencode", "storage", "message", "ses_x")
 	writeMsg(t, store, "msg_1.json", `{"role":"assistant","tokens":{"input":9,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}`)
 	empty := func(...string) ([]byte, error) { return []byte(`[]`), nil }
-	if got := captureSession(ws, empty).Usage; got == nil || got.Input != 9 {
+	if got := captureSession(ws, empty, discardLog).Usage; got == nil || got.Input != 9 {
 		t.Fatalf("legacy fallback after empty list failed: %+v", got)
 	}
 }
@@ -163,7 +181,7 @@ func TestExportDisabledWhenUnset(t *testing.T) {
 		t.Fatalf("no designated session dir must mean no opencode call, got %v", args)
 		return nil, nil
 	}
-	if dir := exportSessions(testMeta, oc); dir != "" {
+	if dir := exportSessions(testMeta, oc, discardLog); dir != "" {
 		t.Fatalf("export must be a no-op when disabled, got %q", dir)
 	}
 }
@@ -176,7 +194,7 @@ func TestExportSavesEverySession(t *testing.T) {
 		"ses_b": `{"messages":[2]}`,
 	})
 
-	dir := exportSessions(testMeta, oc)
+	dir := exportSessions(testMeta, oc, discardLog)
 	if dir != filepath.Join(root, "run_x.attempt_01") {
 		t.Fatalf("unexpected session dir %q", dir)
 	}
@@ -193,7 +211,7 @@ func TestExportSavesEverySession(t *testing.T) {
 func TestExportWritesOwnerOnly(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)
-	dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_a"}]`, map[string]string{"ses_a": "{}"}))
+	dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_a"}]`, map[string]string{"ses_a": "{}"}), discardLog)
 	for path, want := range map[string]os.FileMode{
 		dir:                              0o700,
 		filepath.Join(dir, "ses_a.json"): 0o600,
@@ -211,7 +229,7 @@ func TestExportWritesOwnerOnly(t *testing.T) {
 func TestExportSkipsWhenAttemptLeftNoSessions(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)
-	if dir := exportSessions(testMeta, stubOpencode(t, `[]`, nil)); dir != "" {
+	if dir := exportSessions(testMeta, stubOpencode(t, `[]`, nil), discardLog); dir != "" {
 		t.Fatalf("no sessions must mean no session dir, got %q", dir)
 	}
 	if _, err := os.Stat(filepath.Join(root, "run_x.attempt_01")); !os.IsNotExist(err) {
@@ -228,7 +246,7 @@ func TestExportRefusesUnsafeSessionIDs(t *testing.T) {
 	planted := filepath.Join(root, "planted.json")
 	oc := stubOpencode(t, `[{"id":"../planted"}]`, map[string]string{"../planted": "stolen"})
 
-	if dir := exportSessions(testMeta, oc); dir != "" {
+	if dir := exportSessions(testMeta, oc, discardLog); dir != "" {
 		t.Fatalf("an export that landed nothing must report nothing preserved, got %q", dir)
 	}
 	if _, err := os.Stat(planted); !os.IsNotExist(err) {
@@ -246,7 +264,7 @@ func TestExportNamesAPartialExport(t *testing.T) {
 	t.Setenv(EnvSessionDir, root)
 	oc := stubOpencode(t, `[{"id":"ses_a"},{"id":"ses_gone"}]`, map[string]string{"ses_a": "{}"})
 
-	dir := exportSessions(testMeta, oc)
+	dir := exportSessions(testMeta, oc, discardLog)
 	if dir != filepath.Join(root, "run_x.attempt_01") {
 		t.Fatalf("a partial export must still name its directory, got %q", dir)
 	}
@@ -261,10 +279,10 @@ func TestExportNamesAPartialExport(t *testing.T) {
 func TestExportReplacesAPreviousAttemptsSessions(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)
-	if dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_first"}]`, map[string]string{"ses_first": "{}"})); dir == "" {
+	if dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_first"}]`, map[string]string{"ses_first": "{}"}), discardLog); dir == "" {
 		t.Fatal("the first attempt must export cleanly")
 	}
-	dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_second"}]`, map[string]string{"ses_second": "{}"}))
+	dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_second"}]`, map[string]string{"ses_second": "{}"}), discardLog)
 	if _, err := os.Stat(filepath.Join(dir, "ses_second.json")); err != nil {
 		t.Fatalf("the retry's own sessions must land: %v", err)
 	}
@@ -280,7 +298,7 @@ func TestExportDegradesWhenStorageUnwritable(t *testing.T) {
 	}
 	t.Setenv(EnvSessionDir, blocked)
 	oc := stubOpencode(t, `[{"id":"ses_a"}]`, map[string]string{"ses_a": "{}"})
-	if dir := exportSessions(testMeta, oc); dir != "" {
+	if dir := exportSessions(testMeta, oc, discardLog); dir != "" {
 		t.Fatalf("broken operator storage must degrade to nothing preserved, got %q", dir)
 	}
 }
@@ -289,7 +307,7 @@ func TestExportDegradesWhenListingFails(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)
 	oc := func(...string) ([]byte, error) { return nil, errors.New("no daemon") }
-	if dir := exportSessions(testMeta, oc); dir != "" {
+	if dir := exportSessions(testMeta, oc, discardLog); dir != "" {
 		t.Fatalf("an unlistable store must degrade to nothing preserved, got %q", dir)
 	}
 }

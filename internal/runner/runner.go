@@ -167,7 +167,9 @@ func (s *Staging) Cleanup() error {
 		}
 	}
 	if s.BaseDir != "" {
-		_ = os.RemoveAll(s.BaseDir)
+		if err := os.RemoveAll(s.BaseDir); err != nil {
+			slog.Warn("could not remove the attempt's memory base snapshot", "path", s.BaseDir, "error", err)
+		}
 	}
 	return nil
 }
@@ -244,15 +246,27 @@ func EffectiveTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 // DeclaredTimeout resolves frontmatter over agent defaults over 5m, before the
 // ceiling applies. `check` reports on it; execution uses EffectiveTimeout.
 func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
-	timeout := 5 * time.Minute
+	timeout, _ := declaredTimeout(agent, r)
+	return timeout
+}
+
+// declaredTimeout is DeclaredTimeout plus the raw value that failed to
+// parse, if any -- "" when every declared value parsed clean. Split out so
+// Stage can warn about the value it silently dropped without duplicating
+// the resolution order.
+func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Duration, badValue string) {
+	timeout = 5 * time.Minute
 	for _, t := range []string{agent.Defaults.Timeout, r.FM.Timeout} {
-		if t != "" {
-			if d, err := time.ParseDuration(t); err == nil {
-				timeout = d
-			}
+		if t == "" {
+			continue
+		}
+		if d, err := time.ParseDuration(t); err == nil {
+			timeout = d
+		} else {
+			badValue = t
 		}
 	}
-	return timeout
+	return timeout, badValue
 }
 
 // StagedRun is a fully prepared attempt: credentials resolved, workspace
@@ -303,7 +317,14 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	if err != nil {
 		return nil, err
 	}
+	declared, badTimeout := declaredTimeout(agent, r)
+	if badTimeout != "" {
+		r.Log().Warn("unparseable timeout ignored -- falling back", "run_id", meta.RunID, "value", badTimeout, "using", declared)
+	}
 	timeout := EffectiveTimeout(agent, r)
+	if timeout != declared {
+		r.Log().Warn("declared timeout capped by max_timeout", "run_id", meta.RunID, "declared", declared, "effective", timeout)
+	}
 	// The harness config is parsed from the agent repository, not the
 	// workspace copy buildWorkspace makes later: MCP permission rules must
 	// never depend on pipeline ordering to see the server list. A file
@@ -581,13 +602,14 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	}
 	cmd.WaitDelay = pipeDrainDeadline
 
+	attemptLog := r.Log().With("run_id", meta.RunID)
 	done := make(chan error, 1)
 	kill := func() {
 		if containerName != "" {
 			stopContainer(containerName)
-			killClient(cmd, containerExitGrace, done)
+			killClient(cmd, containerExitGrace, done, attemptLog)
 		} else {
-			killGroup(cmd, 10*time.Second, done)
+			killGroup(cmd, 10*time.Second, done, attemptLog)
 		}
 	}
 	started := time.Now()
@@ -601,7 +623,9 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		// ErrWaitDelay means the process exited fine but something it left
 		// behind still held the output pipe: the run's outcome is the
 		// process's, not the orphan's -- only the tail of the log is lost.
-		if werr != nil && !errors.Is(werr, exec.ErrWaitDelay) {
+		if errors.Is(werr, exec.ErrWaitDelay) {
+			attemptLog.Warn("run output abandoned after the drain deadline -- a descendant outlived the attempt and the log tail is truncated", "deadline", pipeDrainDeadline)
+		} else if werr != nil {
 			res.Outcome = Crashed
 			var ee *exec.ExitError
 			if errors.As(werr, &ee) {
@@ -638,9 +662,9 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// opencode exits 0 on a session whose agent loop died mid-turn. The
 	// session record is what says whether the run actually finished (design
 	// decision "A run is completed only when its session ended cleanly").
-	session := captureSession(workspace, ocExec)
+	session := captureSession(workspace, ocExec, attemptLog)
 	res.Usage = session.Usage
-	res.SessionsDir = exportSessions(meta, ocExec)
+	res.SessionsDir = exportSessions(meta, ocExec, attemptLog)
 	if res.Outcome == Completed && session.Failure != "" {
 		res.Outcome = Crashed
 		res.Hint = session.Failure
@@ -772,7 +796,9 @@ func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, m
 		}
 	}
 	if s.Outcome != Completed && s.Outcome != Canceled {
-		_ = mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.AttemptID, s.Detail))
+		if err := mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.AttemptID, s.Detail)); err != nil {
+			r.Log().Warn("could not record the failure event -- this log line is the only copy", "run_id", meta.RunID, "error", err)
+		}
 	}
 	if stage != nil {
 		stage(s)
@@ -855,11 +881,13 @@ func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID str
 	if !r.FM.IsConsumer() || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
 		return
 	}
-	_ = memory.At(dir).SaveCursor(r.Name, memory.Cursor{
+	if err := memory.At(dir).SaveCursor(r.Name, memory.Cursor{
 		ConsumedThrough: staging.ConsumerThrough,
 		ByRun:           runID,
 		At:              time.Now().UTC(),
-	})
+	}); err != nil {
+		r.Log().Error("consumer cursor not advanced -- this inbox will be delivered again", "run_id", runID, "through", staging.ConsumerThrough, "error", err)
+	}
 }
 
 // recordJSON formats one run record line for runs.jsonl. Usage fields are
@@ -1219,10 +1247,11 @@ const containerExitGrace = 5 * time.Second
 // writers the output goroutines write to, so returning before Wait would
 // race them. The bound comes from making the process exit, not from walking
 // away.
-func killClient(cmd *exec.Cmd, grace time.Duration, done chan error) {
+func killClient(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Logger) {
 	select {
 	case <-done:
 	case <-time.After(grace):
+		log.Warn("docker client did not exit after the container stopped -- killed", "grace", grace)
 		_ = cmd.Process.Kill()
 		<-done // bounded by WaitDelay now that the process is going away
 	}
@@ -1242,12 +1271,13 @@ func signalTarget(cmd *exec.Cmd) int {
 // killGroup terminates the run's whole process group: SIGTERM, grace, SIGKILL.
 // The waits are bounded by the command's WaitDelay, not by the group's
 // willingness to exit.
-func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error) {
+func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Logger) {
 	target := signalTarget(cmd)
 	_ = syscall.Kill(target, syscall.SIGTERM)
 	select {
 	case <-done:
 	case <-time.After(grace):
+		log.Warn("run did not exit on SIGTERM -- killed", "grace", grace)
 		_ = syscall.Kill(target, syscall.SIGKILL)
 		<-done
 	}

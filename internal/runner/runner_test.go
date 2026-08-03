@@ -3,6 +3,7 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,12 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
+
+// discardLog is the logger tests hand to code that only logs on a failure
+// path they aren't asserting on -- there is no log-capture harness in this
+// package, so tests that do care about a specific line read it from
+// behavior (a returned value, a file on disk), not from log output.
+var discardLog = slog.New(slog.DiscardHandler)
 
 func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
 	// Outside the real image the process is not in the attempt groups and
@@ -664,7 +671,7 @@ func TestKillClientBoundsTheWaitOnAStuckDockerClient(t *testing.T) {
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
-		killClient(cmd, 100*time.Millisecond, done)
+		killClient(cmd, 100*time.Millisecond, done, discardLog)
 	}()
 	select {
 	case <-returned:

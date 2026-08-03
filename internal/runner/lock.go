@@ -3,6 +3,7 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -84,7 +85,10 @@ func (l *MemoryLock) Lock() {
 		}
 		if err != syscall.EINTR {
 			// Proceeding unserialized is the corruption this lock exists to
-			// prevent; there is no recoverable path from here.
+			// prevent; there is no recoverable path from here. Logged before
+			// the panic so the failure has a scrubbed, structured record in
+			// the same stream as everything else.
+			slog.Error("memory worktree lock failed -- refusing to proceed unserialized", "path", l.f.Name(), "error", err)
 			panic(fmt.Sprintf("memory worktree lock: %v", err))
 		}
 	}
@@ -139,7 +143,7 @@ func reserveManualIdentity(dir string) (uint32, func(), error) {
 	}
 	return uid, func() {
 		if err := sandbox.ReapIdentity(uid); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: manual attempt identity cleanup: %v\n", err)
+			slog.Warn("manual attempt identity not proven empty at release", "uid", uid, "error", err)
 		}
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()

@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,7 +52,7 @@ func ensureRuntimeImage(agentDir, tag string) error {
 	imageBuildMu.Lock()
 	defer imageBuildMu.Unlock()
 	if err := exec.Command("docker", "image", "inspect", tag).Run(); err != nil {
-		fmt.Printf("building the local runtime image (first build downloads a Debian base and opencode -- this can take a few minutes)...\n")
+		slog.Info("building the local runtime image (first build downloads a Debian base and opencode -- this can take a few minutes)", "tag", tag)
 	}
 	cmd := exec.Command("docker", "build", "--quiet", "--target", "runtime", "-t", tag, agentDir)
 	out, err := cmd.CombinedOutput()

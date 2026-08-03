@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // Usage is one attempt's token consumption, summed from the assistant
@@ -41,48 +43,65 @@ type Session struct {
 // opencode itself (session list + export -- messages live in its database
 // from 1.18 on). Fallback: the pre-1.18 message JSONs on disk. The store
 // is attempt-scoped either way (the home is fresh per attempt), and an
-// unreadable one says nothing -- bookkeeping must never fail a run.
-func captureSession(workspace string, oc opencodeExec) Session {
+// unreadable one says nothing -- bookkeeping must never fail a run. A
+// capture that fails open is silent by design, but the two things it
+// costs -- usage reporting, and the "did the session end cleanly" check --
+// are worth a line each: log carries what the return value can't.
+func captureSession(workspace string, oc opencodeExec, log *slog.Logger) Session {
 	if oc != nil {
-		if msgs, ok := messagesViaExport(oc); ok {
+		msgs, err := messagesViaExport(oc)
+		switch {
+		case err != nil:
+			log.Warn("session capture unavailable -- no usage recorded and the session-outcome check did not run", "error", err)
+		case len(msgs) > 0:
 			return summarize(msgs)
 		}
+		log.Debug("session capture fell back to on-disk message files")
 	}
-	return summarize(messagesFromLegacyFiles(workspace))
+	msgs := messagesFromLegacyFiles(workspace)
+	if len(msgs) == 0 {
+		log.Debug("attempt session reported no assistant messages")
+	}
+	return summarize(msgs)
 }
 
 // messagesViaExport asks opencode for the attempt's session: the fresh home
 // holds at most one, `session list --format json` names it, and `export`
-// prints {info, messages}. Reports whether the session was read at all --
-// it wasn't when the fallback is worth trying.
-func messagesViaExport(oc opencodeExec) ([]assistantInfo, bool) {
+// prints {info, messages}. A non-nil error means the surface itself
+// couldn't be read -- exec failure or unparseable JSON -- and the fallback
+// is worth trying. No session yet, or a session with no assistant
+// messages, is not an error: (nil, nil).
+func messagesViaExport(oc opencodeExec) ([]assistantInfo, error) {
 	raw, err := oc("session", "list", "--format", "json", "-n", "1")
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	var sessions []struct {
 		ID string `json:"id"`
 	}
-	if json.Unmarshal(raw, &sessions) != nil || len(sessions) == 0 || sessions[0].ID == "" {
-		return nil, false
+	if err := json.Unmarshal(raw, &sessions); err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 || sessions[0].ID == "" {
+		return nil, nil
 	}
 	raw, err = oc("export", sessions[0].ID)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	var export struct {
 		Messages []struct {
 			Info assistantInfo `json:"info"`
 		} `json:"messages"`
 	}
-	if json.Unmarshal(raw, &export) != nil {
-		return nil, false
+	if err := json.Unmarshal(raw, &export); err != nil {
+		return nil, err
 	}
 	msgs := make([]assistantInfo, 0, len(export.Messages))
 	for _, m := range export.Messages {
 		msgs = append(msgs, m.Info)
 	}
-	return msgs, len(msgs) > 0
+	return msgs, nil
 }
 
 // messagesFromLegacyFiles reads the message JSONs opencode wrote before 1.18
@@ -145,6 +164,11 @@ func summarize(msgs []assistantInfo) Session {
 	if s.Failure == "" && lastFinish != "" && !finished {
 		s.Failure = fmt.Sprintf("the model session never finished a turn (last step finished on %q) -- the agent loop stopped on a step it did not come back from", lastFinish)
 	}
+	// The claim quotes a model-writable record and outlives the mint
+	// registration that would otherwise redact it downstream (events, the
+	// run record, the manual echo) -- so it is lifted redacted, while the
+	// registration is still live.
+	s.Failure = scrub.Redacted(s.Failure)
 	return s
 }
 
@@ -228,24 +252,25 @@ var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // directory (the record points at what survived; the log carries the
 // warning), but one that lands no file at all names nothing, because an
 // empty directory is not a record.
-func exportSessions(meta Meta, oc opencodeExec) string {
+func exportSessions(meta Meta, oc opencodeExec, log *slog.Logger) string {
 	root := os.Getenv(EnvSessionDir)
 	if root == "" || oc == nil {
 		return ""
 	}
 	raw, err := oc("session", "list", "--format", "json")
 	if err != nil {
-		slog.Warn("listing the attempt's sessions failed -- sessions not preserved", "error", err)
+		log.Warn("listing the attempt's sessions failed -- sessions not preserved", "error", err)
 		return ""
 	}
 	var sessions []struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(raw, &sessions); err != nil {
-		slog.Warn("unreadable session list -- sessions not preserved", "error", err)
+		log.Warn("unreadable session list -- sessions not preserved", "error", err)
 		return ""
 	}
 	if len(sessions) == 0 {
+		log.Debug("attempt left no sessions to export")
 		return ""
 	}
 	dir := filepath.Join(root, meta.RunID+"."+meta.AttemptID)
@@ -258,7 +283,7 @@ func exportSessions(meta Meta, oc opencodeExec) string {
 	// files. One directory names one attempt's sessions, not two merged.
 	_ = os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		slog.Warn("session dir not writable -- sessions not preserved", "dir", dir, "error", err)
+		log.Warn("session dir not writable -- sessions not preserved", "dir", dir, "error", err)
 		return ""
 	}
 	wrote := false
@@ -273,7 +298,7 @@ func exportSessions(meta Meta, oc opencodeExec) string {
 		wrote = true
 	}
 	if firstErr != nil {
-		slog.Warn("sessions exported incompletely", "dir", dir, "error", firstErr)
+		log.Warn("sessions exported incompletely", "dir", dir, "error", firstErr)
 	}
 	if !wrote {
 		_ = os.RemoveAll(dir)
