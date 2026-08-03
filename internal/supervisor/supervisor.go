@@ -1006,11 +1006,16 @@ func (s *Supervisor) verifySandbox() error {
 			s.infof("filesystem sandbox: %s active for model processes", strings.TrimSpace(string(out)))
 			return nil
 		}
-		if os.Getenv(sandbox.EnvUnsafeOverride) == "1" {
-			s.warnf("WARNING: filesystem sandbox DISABLED by %s -- model processes run unconfined", sandbox.EnvUnsafeOverride)
-			return nil
+		// The probe tolerates Landlock absence, so failure here means the
+		// identity transition itself is broken -- the gating guarantee, which
+		// no override may waive (design: "The required boundary is a
+		// per-attempt UID"). The unsafe override disables only Landlock, in
+		// the shim.
+		var exitErr *exec.ExitError
+		if errors.As(probeErr, &exitErr) && len(exitErr.Stderr) > 0 {
+			return fmt.Errorf("attempt identity probe: %w: %s", probeErr, strings.TrimSpace(string(exitErr.Stderr)))
 		}
-		return fmt.Errorf("filesystem sandbox required but unavailable (host kernel without Landlock?) -- refusing to supervise; set %s=1 to run unconfined deliberately", sandbox.EnvUnsafeOverride)
+		return fmt.Errorf("attempt identity probe: %w -- the binary needs cap_setuid and cap_setgid; rebuild the deploy image from the current template Dockerfile", probeErr)
 	case os.Getenv("OPENROUTINES_NATIVE") == "1":
 		s.warnf("WARNING: OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
 	default:
