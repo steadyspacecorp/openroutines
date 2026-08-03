@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -292,6 +293,10 @@ func (m *Memory) Ensure() error {
 						return fmt.Errorf("origin/%s does not descend from the last accepted tip %s -- memory history was rewritten while this agent was down; refusing to adopt it. Inspect origin/%s, then either restore the branch or move %s to the new tip to accept the rewrite deliberately", Branch, short(accepted), Branch, acceptedRef)
 					}
 				}
+				tip, _ := git(m.repoDir, "rev-parse", "refs/heads/"+Branch)
+				slog.Info("memory: adopted the memory branch from origin", "tip", tip)
+			} else if !strings.Contains(lerr.Error(), "exit status 2") {
+				slog.Warn("memory: could not reach origin to adopt the memory branch -- creating a local root; this will diverge if origin has one", "error", lerr)
 			}
 		}
 	}
@@ -310,6 +315,7 @@ func (m *Memory) Ensure() error {
 		if _, err := git(m.repoDir, "branch", Branch, commit); err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)
 		}
+		slog.Info("memory: created the memory branch", "commit", commit)
 	}
 	if _, err := git(m.repoDir, "worktree", "add", wt, Branch); err != nil {
 		return err
@@ -520,8 +526,12 @@ func (m *Memory) Import(stagingDir, baseDir string) (conflicted []Conflict, err 
 		if berr != nil {
 			return nil // the run never saw this file; it cannot delete it
 		}
-		if cur, cerr := os.ReadFile(path); cerr == nil && bytes.Equal(cur, base) {
+		cur, cerr := os.ReadFile(path)
+		if cerr == nil && bytes.Equal(cur, base) {
 			return os.Remove(path)
+		}
+		if cerr == nil {
+			slog.Debug("memory: kept a file the run deleted -- the worktree moved since its snapshot", "path", rel)
 		}
 		return nil
 	})

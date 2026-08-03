@@ -155,7 +155,7 @@ func TestLandlockConfinement(t *testing.T) {
 func landlockHelper() {
 	ro := filepath.SplitList(os.Getenv(EnvRO))
 	rw := filepath.SplitList(os.Getenv(EnvRW))
-	if _, err := Apply(ro, rw); err != nil {
+	if _, _, err := Apply(ro, rw); err != nil {
 		fmt.Printf("LANDLOCK_UNAVAILABLE: %v\n", err)
 		os.Exit(0)
 	}
@@ -196,4 +196,20 @@ func landlockHelper() {
 	report("read-workspace", tryRead(os.Getenv("LT_SEEDED")))
 	report("read-os", tryRead("/etc/passwd"))
 	os.Exit(0)
+}
+
+// A write grant that never got created (the mkdir failed, or nobody made
+// it) must not vanish from the ruleset without a trace: Apply reports it
+// back as skipped so the shim can name the hole in the confinement.
+func TestExistingReportsSkippedPaths(t *testing.T) {
+	present := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+
+	kept, skipped := existing([]string{present, missing, ""})
+	if len(kept) != 1 || kept[0] != present {
+		t.Fatalf("kept = %v, want [%s]", kept, present)
+	}
+	if len(skipped) != 1 || skipped[0] != missing {
+		t.Fatalf("skipped = %v, want [%s]", skipped, missing)
+	}
 }

@@ -36,12 +36,18 @@ func cmdSandboxExec(args []string) int {
 	// grant what it can't resolve, and once confined nothing can create
 	// them (found live: opencode's first mkdir of ~/.local was denied).
 	for _, p := range rw {
-		if p != "" {
-			_ = os.MkdirAll(p, 0o755)
+		if p == "" {
+			continue
+		}
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "[sandbox: write grant %s could not be created (%v) -- the run will not be able to write there]\n", p, err)
 		}
 	}
 
-	desc, err := sandbox.Apply(ro, rw)
+	desc, skippedRW, err := sandbox.Apply(ro, rw)
+	for _, p := range skippedRW {
+		fmt.Fprintf(os.Stderr, "[sandbox: write grant %s does not exist -- dropped from the ruleset; the run will not be able to write there]\n", p)
+	}
 	switch {
 	case err == nil:
 		fmt.Fprintf(os.Stderr, "[sandbox: %s]\n", desc)
@@ -117,7 +123,7 @@ func cmdSandboxProbe(_ []string) int {
 		return 1
 	}
 	desc := "uid isolation"
-	if landlock, landlockErr := sandbox.Apply([]string{os.TempDir()}, nil); landlockErr == nil {
+	if landlock, _, landlockErr := sandbox.Apply([]string{os.TempDir()}, nil); landlockErr == nil {
 		desc += " + " + landlock
 	}
 	if err := sandbox.DropIdentity(uint32(uid64)); err != nil {

@@ -12,10 +12,13 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // The github_app derived type: the stored value is a GitHub App private key,
@@ -38,7 +41,7 @@ var githubHTTP = &http.Client{
 	},
 }
 
-func deriveGitHubApp(s Spec, stored, apiBase string) (*Derived, error) {
+func deriveGitHubApp(name string, s Spec, stored, apiBase string) (*Derived, error) {
 	jwt, err := githubAppJWT(s.AppID, stored)
 	if err != nil {
 		return nil, err
@@ -78,8 +81,15 @@ func deriveGitHubApp(s Spec, stored, apiBase string) (*Derived, error) {
 	// From here the token is live; a failure must not leave it valid until
 	// its natural expiry.
 	revoke := func() {
-		_ = githubRequest(apiBase, "DELETE", "/installation/token", token.Token, nil, nil)
+		if err := githubRequest(apiBase, "DELETE", "/installation/token", token.Token, nil, nil); err != nil {
+			slog.Warn("github_app installation token revocation failed -- the token stays valid until it expires",
+				"credential", name, "type", "github_app", "error", err)
+		}
 	}
+	// Live means registered: the bot lookup and a failed revocation's
+	// warning both run before Derive registers the returned bearer, and a
+	// GitHub error can quote what was sent to it.
+	release := scrub.RegisterEphemeral("github_app bearer ("+name+")", token.Token)
 
 	var bot struct {
 		ID int64 `json:"id"`
@@ -87,14 +97,19 @@ func deriveGitHubApp(s Spec, stored, apiBase string) (*Derived, error) {
 	botName := inst.AppSlug + "[bot]"
 	if err := githubRequest(apiBase, "GET", "/users/"+inst.AppSlug+"%5Bbot%5D", token.Token, nil, &bot); err != nil {
 		revoke()
+		release()
 		return nil, err
 	}
 	if bot.ID == 0 {
 		revoke()
+		release()
 		return nil, fmt.Errorf("github_app: GitHub did not return the App bot identity")
 	}
 	botEmail := fmt.Sprintf("%d+%s@users.noreply.github.com", bot.ID, botName)
 
+	// Derive registers the returned bearer as the canonical entry; this one
+	// only had to cover the window between minting and returning.
+	release()
 	return &Derived{
 		Env: map[string]string{
 			"GITHUB_TOKEN":        token.Token,
