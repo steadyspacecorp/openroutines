@@ -89,13 +89,14 @@ type Supervisor struct {
 	// Bounded parallelism: slots caps concurrent attempts, inFlight keeps a
 	// routine's next dispatch off state its executing attempt still owns,
 	// runs lets shutdown wait for every settlement.
-	slots      chan uint32
-	runs       sync.WaitGroup
-	inFlightMu sync.Mutex
-	inFlight   map[string]bool
-	waitLogged map[string]bool // pool-full wait already announced (tick only)
-	fatal      chan error      // fail-closed production invariant violation
-	reap       func(uint32) error
+	slots          chan uint32
+	runs           sync.WaitGroup
+	inFlightMu     sync.Mutex
+	inFlight       map[string]bool
+	waitLogged     map[string]bool // pool-full wait already announced (tick only)
+	cooldownWarned map[string]bool // circuit-breaker cool-down already announced (tick only)
+	fatal          chan error      // fail-closed production invariant violation
+	reap           func(uint32) error
 
 	syncBlocked   bool // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool // blocker already raised for the current sync problem
@@ -148,21 +149,22 @@ func New(dir string) (*Supervisor, error) {
 		slots <- uint32(attemptUIDBase + i)
 	}
 	return &Supervisor{
-		Dir:        dir,
-		InstanceID: memory.InstanceID(),
-		mem:        mem,
-		memMu:      memMu,
-		leaseTTL:   memory.LeaseTTL,
-		loc:        loc,
-		retention:  retention,
-		noOrigin:   !mem.HasOrigin(),
-		slots:      slots,
-		inFlight:   map[string]bool{},
-		waitLogged: map[string]bool{},
-		fatal:      make(chan error, 1),
-		reap:       sandbox.ReapIdentity,
-		lastPolled: map[string]time.Time{},
-		pollFailed: map[string]bool{},
+		Dir:            dir,
+		InstanceID:     memory.InstanceID(),
+		mem:            mem,
+		memMu:          memMu,
+		leaseTTL:       memory.LeaseTTL,
+		loc:            loc,
+		retention:      retention,
+		noOrigin:       !mem.HasOrigin(),
+		slots:          slots,
+		inFlight:       map[string]bool{},
+		waitLogged:     map[string]bool{},
+		cooldownWarned: map[string]bool{},
+		fatal:          make(chan error, 1),
+		reap:           sandbox.ReapIdentity,
+		lastPolled:     map[string]time.Time{},
+		pollFailed:     map[string]bool{},
 	}, nil
 }
 
@@ -255,6 +257,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	})
 	for _, d := range due {
 		if ctx.Err() != nil {
+			slog.Debug("skipped", "reason", "shutting down")
 			return // shutting down: stop launching, nothing is reserved yet
 		}
 		release, lockErr := runner.LockRoutine(s.Dir, d.r.Name)
@@ -370,7 +373,13 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 	// Reconcile scheduling state; collect runnable pending runs.
 	var due []dispatch
 	for _, r := range routines {
+		log := r.Log()
 		if !Schedulable(r) {
+			if !r.FM.IsActive() {
+				log.Debug("skipped", "reason", "inactive")
+			} else {
+				log.Debug("skipped", "reason", "no schedule or trigger")
+			}
 			continue
 		}
 		if s.isRunning(r.Name) {
@@ -378,9 +387,9 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 			// settlement owns this routine's state -- reading it here could
 			// only mis-mint, and abandoning it mid-flight would fight the
 			// settlement over the same record.
+			log.Debug("skipped", "reason", "in flight")
 			continue
 		}
-		log := r.Log()
 		var spec *schedule.Spec
 		if r.FM.Schedule != "" {
 			var err error
@@ -413,8 +422,17 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 		}
 		if st.Pending == nil {
 			if st.CoolingDown(now) {
+				// An agent whose breaker has tripped looks idle from outside
+				// for up to 24h, the same blind spot waitLogged solves for a
+				// full run pool -- announce once, not every tick.
+				if !s.cooldownWarned[r.Name] {
+					s.cooldownWarned[r.Name] = true
+					log.Warn("circuit breaker cooling down -- no new runs",
+						"until", st.CooldownUntil, "consecutive_abandons", st.ConsecutiveAbandons)
+				}
 				continue // circuit breaker: no new runs until the cool-down ends
 			}
+			delete(s.cooldownWarned, r.Name)
 			minted := false
 			if spec != nil {
 				first, last, n := schedule.Occurrences(spec, st.Watermark, now)
@@ -450,6 +468,7 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 				}
 			}
 			if !minted {
+				log.Debug("skipped", "reason", "nothing due")
 				continue
 			}
 			if err := st.Save(s.stateDir()); err != nil {
@@ -468,11 +487,14 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 			}
 			continue
 		}
-		if now.Before(schedule.NextRetryAt(st.Pending)) {
+		if next := schedule.NextRetryAt(st.Pending); now.Before(next) {
+			log.Debug("skipped", "reason", "backing off", "next_attempt_at", next)
 			continue // backing off after a failed attempt
 		}
 		due = append(due, dispatch{r, st})
 	}
+
+	slog.Debug("tick", "due", len(due), "routines", len(routines), "slots_free", len(s.slots))
 
 	// This tick's own bookkeeping -- minted pending records, refreshed trigger
 	// baselines, abandonments -- has to be durable before anything acts on it.
@@ -510,7 +532,7 @@ func (s *Supervisor) commitIntent(message string) bool {
 	if err != nil {
 		// Dispatch halts until this clears, and only a person can clear it:
 		// a supervisor that cannot record what it is about to do must not do it.
-		s.blockOnce("commit", "intent commit failed -- runs held: "+err.Error(), &s.commitWarned)
+		s.blockOnce("commit", "intent commit failed -- runs held", err, &s.commitWarned)
 		return false
 	}
 	s.recover("commit", "intent commit recovered -- runs resumed", &s.commitWarned)
@@ -520,7 +542,7 @@ func (s *Supervisor) commitIntent(message string) bool {
 	if err := s.mem.Push(); err != nil {
 		// An identity that isn't durable is how duplicates happen: without
 		// a pushed intent, no new logical run starts.
-		s.blockOnce("push", "intent push failed -- runs held until origin is reachable: "+err.Error(), &s.unreachWarned)
+		s.blockOnce("push", "intent push failed -- runs held until origin is reachable", err, &s.unreachWarned)
 		return false
 	}
 	s.recover("push", "push to origin recovered -- runs resumed", &s.unreachWarned)
@@ -548,13 +570,20 @@ func reserve(p *schedule.Pending, now time.Time) (giveBack func()) {
 func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, sessionsDir string, now time.Time) {
 	p := st.Pending
 	date := now.UTC().Format("2006-01-02")
-	_ = s.mem.AppendHumanTask("task-"+p.RunID,
-		fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, detail, date))
+	taskID := "task-" + p.RunID
+	if err := s.mem.AppendHumanTask(taskID,
+		fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, detail, date)); err != nil {
+		r.Log().Warn("could not record the abandonment task in memory -- this log line is the only copy",
+			"run_id", p.RunID, "task_id", taskID, "error", err)
+	}
 	st.Watermark = p.CoveredThrough
 	st.Pending = nil
 	if cooldown := st.RecordAbandonment(now); cooldown > 0 {
-		_ = s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown))
-		r.Log().Error("circuit breaker tripped", "cooldown", cooldown)
+		if err := s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown)); err != nil {
+			r.Log().Warn("could not record the circuit breaker event in memory -- this log line is the only copy",
+				"run_id", p.RunID, "error", err)
+		}
+		r.Log().Error("circuit breaker tripped", "cooldown", cooldown, "run_id", p.RunID)
 	}
 	r.Log().Error("run abandoned", withSessions(sessionsDir, "run_id", p.RunID, "attempts", p.Attempts)...)
 }
@@ -612,7 +641,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	if !s.noOrigin {
 		// Ownership proof begins once the reservation is durable and remains
 		// live through staging, execution, settlement, and push.
-		stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun)
+		stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun, log)
 		defer stopHeartbeat()
 	}
 	staged, err := runner.Stage(s.Dir, agent, r, meta, s.memMu)
@@ -631,7 +660,8 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		return
 	}
 
-	log.Info("attempt starting", "attempt", meta.AttemptID, "scheduled_for", meta.ScheduledFor)
+	log.Info("attempt starting", "attempt_id", meta.AttemptID, "scheduled_for", meta.ScheduledFor,
+		"timeout", runner.EffectiveTimeout(agent, r))
 
 	var res *runner.ExecResult
 	var staging *runner.Staging
@@ -699,8 +729,12 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		log.Info("discarded staged events.md change (events: false)")
 	}
 	for i, conflict := range settlement.Conflicted {
-		_ = s.mem.AppendHumanTask(fmt.Sprintf("task-%s-memory-conflict-%d", p.RunID, i+1),
-			fmt.Sprintf("Resolve concurrent memory edit from routine %s run %s: canonical %s was left unchanged; competing version saved at %s", r.Name, p.RunID, conflict.Path, conflict.Quarantine))
+		taskID := fmt.Sprintf("task-%s-memory-conflict-%d", p.RunID, i+1)
+		if err := s.mem.AppendHumanTask(taskID,
+			fmt.Sprintf("Resolve concurrent memory edit from routine %s run %s: canonical %s was left unchanged; competing version saved at %s", r.Name, p.RunID, conflict.Path, conflict.Quarantine)); err != nil {
+			log.Warn("could not record the memory conflict task in memory -- this log line is the only copy",
+				"path", conflict.Path, "task_id", taskID, "error", err)
+		}
 		log.Warn("concurrent memory edit quarantined -- canonical memory left unchanged",
 			"path", conflict.Path, "quarantine", conflict.Quarantine)
 	}
@@ -747,11 +781,11 @@ func (s *Supervisor) syncOnce() {
 	switch {
 	case rep.Rewritten:
 		s.syncBlocked = true
-		s.blockOnce("sync", "memory branch history rewritten on origin -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
+		s.blockOnce("sync", "memory branch history rewritten on origin -- sync stopped, running on local state", errors.New(rep.Detail), &s.syncWarned)
 		s.strandBlocked()
 	case rep.Conflict:
 		s.syncBlocked = true
-		s.blockOnce("sync", "memory sync conflict -- sync stopped, running on local state: "+rep.Detail, &s.syncWarned)
+		s.blockOnce("sync", "memory sync conflict -- sync stopped, running on local state", errors.New(rep.Detail), &s.syncWarned)
 		s.strandBlocked()
 	case rep.Unreachable:
 		// Recorded locally, published when origin returns. The tick gives up
@@ -759,13 +793,21 @@ func (s *Supervisor) syncOnce() {
 		// origin -- so nothing downstream will record it, and an outage whose
 		// only trace is a log line in a container that gets replaced is no
 		// trace at all.
-		s.blockOnce("origin", "origin unreachable -- memory is not durable and no new runs start until it returns: "+rep.Detail, &s.originWarned)
+		s.blockOnce("origin", "origin unreachable -- memory is not durable and no new runs start until it returns", errors.New(rep.Detail), &s.originWarned)
+	case rep.Detail != "":
+		// A flagless report with a Detail means Sync could not even read the
+		// local worktree -- it never proved memory is healthy, so an open
+		// blocker must not be resolved on the strength of it.
+		slog.Warn("memory sync did not run", "detail", rep.Detail)
 	default:
 		s.syncBlocked = false
 		s.recover("sync", "memory sync with origin recovered", &s.syncWarned)
 		s.recover("origin", "origin reachable again -- memory sync resumed", &s.originWarned)
 		if rep.Adopted {
 			slog.Info("memory: adopted remote commits")
+		}
+		if rep.RemoteMissing {
+			slog.Debug("memory: origin has no memory branch yet -- the next push creates it")
 		}
 	}
 }
@@ -782,9 +824,12 @@ func (s *Supervisor) syncOnce() {
 func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	failing := map[string]string{}
 	for _, e := range errs {
-		slog.Warn("routine load error", "error", e)
 		var re *routine.Error
 		if !errors.As(e, &re) {
+			// Not about one routine -- a directory that would not read. There
+			// is no stable per-routine identity to dedupe this by, so unlike
+			// the attributed case below it logs on every tick it persists.
+			slog.Warn("routine load error", "error", e)
 			continue
 		}
 		// The path is absolute in the container; the event is read in the
@@ -795,6 +840,7 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	var news []string
 	for _, name := range slices.Sorted(maps.Keys(failing)) {
 		if s.loadFailed[name] != failing[name] {
+			slog.Warn("routine load error", "routine", name, "error", failing[name])
 			news = append(news, fmt.Sprintf("routine %s does not load (%s) -- it will not run until the file is fixed", name, failing[name]))
 		}
 	}
@@ -828,20 +874,39 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 // creation is itself an observable change: a companion event would
 // double-record the same fact. The task id is date-scoped so a supervisor
 // restart doesn't re-record it -- AppendHumanTask skips ids already present.
-func (s *Supervisor) blockOnce(kind, msg string, warned *bool) {
-	// msg can quote raw git errors carrying a tokened origin URL; the log
+// The BLOCKED line is gated on the same warned flag: a blocker that lasts
+// many ticks announces its onset once, like every sibling "persisting
+// condition" mechanism in this file, instead of repeating the same line
+// every minute for its whole duration.
+func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
+	if *warned {
+		return
+	}
+	*warned = true
+	// err can wrap a raw git error carrying a tokened origin URL; the log
 	// writer and the memory-append seam both redact from the scrub registry.
 	// BLOCKED and RECOVERED stay literal, greppable markers: the level says
 	// how bad it is, but only these say that dispatch itself is held.
-	slog.Error("BLOCKED", "reason", msg)
-	if !*warned {
-		*warned = true
-		date := time.Now().UTC().Format("2006-01-02")
-		_ = s.mem.AppendHumanTask("task-"+kind+"-"+time.Now().UTC().Format("20060102"),
-			fmt.Sprintf("%s (source: supervisor; added %s)", msg, date))
-		_, _ = s.mem.Commit("Record supervisor blocker")
-		s.pushBestEffort()
+	slog.Error("BLOCKED", "kind", kind, "reason", reason, "error", err)
+	msg := reason
+	if err != nil {
+		msg = reason + ": " + err.Error()
 	}
+	date := time.Now().UTC().Format("2006-01-02")
+	taskID := "task-" + kind + "-" + time.Now().UTC().Format("20060102")
+	if aerr := s.mem.AppendHumanTask(taskID, fmt.Sprintf("%s (source: supervisor; added %s)", msg, date)); aerr != nil {
+		slog.Warn("could not record the supervisor blocker in memory -- this log line is the only copy",
+			"kind", kind, "task_id", taskID, "error", aerr)
+		*warned = false // retry on the next tick
+		return
+	}
+	if _, cerr := s.mem.Commit("Record supervisor blocker"); cerr != nil {
+		slog.Warn("could not record the supervisor blocker in memory -- this log line is the only copy",
+			"kind", kind, "task_id", taskID, "error", cerr)
+		*warned = false // retry on the next tick
+		return
+	}
+	s.pushBestEffort()
 }
 
 // recover clears a blocker whose condition has healed: any open task-<kind>-*
@@ -853,10 +918,15 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	*warned = false
 	changed, err := s.mem.ResolveHumanTasks("task-"+kind+"-",
 		"done "+time.Now().UTC().Format("2006-01-02")+" -- "+msg)
-	if err != nil || !changed {
+	if err != nil {
+		slog.Warn("could not resolve the supervisor blocker task -- it will read as open until repaired",
+			"kind", kind, "error", err)
 		return
 	}
-	slog.Error("RECOVERED", "reason", msg)
+	if !changed {
+		return
+	}
+	slog.Error("RECOVERED", "kind", kind, "reason", msg)
 	_, _ = s.mem.Commit("Resolve supervisor blocker")
 	s.pushBestEffort()
 }
@@ -892,7 +962,11 @@ func (s *Supervisor) pushBestEffort() {
 // it. Keyed on the memory tip, so a tick that changed nothing pushes nothing.
 func (s *Supervisor) strandBlocked() {
 	tip, err := s.mem.Head()
-	if err != nil || tip == s.blockedTip {
+	if err != nil {
+		slog.Error("could not read the memory tip -- blocked memory not stranded to origin", "error", err)
+		return
+	}
+	if tip == s.blockedTip {
 		return
 	}
 	if err := s.mem.PublishBlocked(); err != nil {
@@ -1125,7 +1199,7 @@ func (s *Supervisor) renewLeaseLocked() bool {
 // instance that cannot prove it is the only writer must not let a model
 // process keep acting under identities that a replacement is about to
 // re-run.
-func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.CancelFunc) (stop func()) {
+func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.CancelFunc, log *slog.Logger) (stop func()) {
 	quit := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -1143,7 +1217,7 @@ func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.Cance
 					continue
 				}
 				if s.foreignLeaseLive() || s.leaseExpired() {
-					slog.Error("lease lost mid-run -- canceling the attempt")
+					log.Error("lease lost mid-run -- canceling the attempt")
 					cancelRun()
 					return
 				}
@@ -1165,11 +1239,12 @@ func (s *Supervisor) foreignLeaseLive() bool {
 }
 
 // holdLease records a successful heartbeat, announcing the recovery when the
-// previous one failed.
+// previous one failed through the same RECOVERED/reason shape as recover(),
+// so grepping msg="RECOVERED" finds every healed blocker, lease included.
 func (s *Supervisor) holdLease(sha string, at time.Time) {
 	if s.leaseWarned {
 		s.leaseWarned = false
-		slog.Error("lease heartbeat recovered -- dispatch resumed")
+		slog.Error("RECOVERED", "kind", "lease", "reason", "lease heartbeat recovered -- dispatch resumed")
 	}
 	s.leaseSHA = sha
 	s.leaseRenewed = at
@@ -1182,7 +1257,7 @@ func (s *Supervisor) holdLease(sha string, at time.Time) {
 func (s *Supervisor) leaseLost(msg string) bool {
 	if !s.leaseWarned {
 		s.leaseWarned = true
-		slog.Error("BLOCKED", "reason", msg)
+		slog.Error("BLOCKED", "kind", "lease", "reason", msg)
 	}
 	return false
 }

@@ -1252,6 +1252,8 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 
 	holder := newSupervisor(t, dir)
 	holder.leaseTTL = 1500 * time.Millisecond
+	var logs bytes.Buffer
+	logging.Setup(&logs, slog.LevelInfo, time.UTC)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 	holder.tickWait(ctx, t0) // register
@@ -1293,6 +1295,21 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")); strings.Contains(got, "ran run_") {
 		t.Fatalf("a canceled run's staged memory must not be imported: %q", got)
+	}
+	// Concurrent attempts lose the lease together and interleave on one
+	// stdout: the cancellation line must say whose attempt it ended.
+	canceled := false
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if !strings.Contains(line, "lease lost mid-run") {
+			continue
+		}
+		canceled = true
+		if !strings.Contains(line, "routine=every-minute") || !strings.Contains(line, "run_id=run_") {
+			t.Fatalf("cancellation must be attributed to its attempt: %s", line)
+		}
+	}
+	if !canceled {
+		t.Fatalf("expected a lease-lost cancellation line, got: %s", logs.String())
 	}
 }
 
@@ -1458,6 +1475,35 @@ func TestFailedIntentCommitHoldsRunsAndRecordsATask(t *testing.T) {
 	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
 	if !strings.Contains(tasks, "intent commit failed") {
 		t.Fatalf("a halted supervisor should hand the blocker to a human: %q", tasks)
+	}
+}
+
+// A blocker that persists across many ticks announces its onset once, like
+// every sibling "persisting condition" mechanism in this file -- not once
+// per minute for the whole outage.
+func TestBlockedLogsOnceAcrossTicks(t *testing.T) {
+	dir := fixture(t, "ok")
+	bare := withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.tickWait(ctx, t0) // register, origin healthy
+
+	gone := bare + ".gone"
+	if err := os.Rename(bare, gone); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Rename(gone, bare)
+
+	var out bytes.Buffer
+	logging.Setup(&out, slog.LevelInfo, time.UTC)
+	for i := 1; i <= 3; i++ {
+		s.tickWait(ctx, t0.Add(time.Duration(i)*time.Minute))
+	}
+
+	if got := strings.Count(out.String(), "kind=origin"); got != 1 {
+		t.Fatalf("BLOCKED should log once across a persisting blocker, got %d: %q", got, out.String())
 	}
 }
 
