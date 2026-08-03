@@ -952,9 +952,14 @@ func (s *Supervisor) verifySandbox() error {
 	case os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
 		// Attempt tree access is granted by group: staging chgrps each run's
 		// trees to the attempt's group, unprivileged only because the agent
-		// user belongs to every attempt group. An image built before that
-		// membership existed would fail every attempt at staging, so refuse
+		// user belongs to every attempt group. Join the groups first --
+		// whether the image's membership reached this process depends on the
+		// init that booted the container -- then verify: an image without the
+		// identities at all would fail every attempt at staging, so refuse
 		// at boot instead.
+		if err := sandbox.EnsureAttemptGroups(config.MaxConcurrency + 1); err != nil {
+			return err
+		}
 		groups, err := os.Getgroups()
 		if err != nil {
 			return fmt.Errorf("attempt group check: %w", err)

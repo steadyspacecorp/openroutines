@@ -4,9 +4,12 @@ package sandbox
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 )
 
 // ErrUnsupported reports that Landlock does not exist on this platform.
@@ -22,6 +25,32 @@ var ErrUnsupported = errors.New("landlock is unavailable on this platform")
 // Dockerfile pre-creates all of them and puts the agent user in each
 // identity's group.
 const AttemptUIDBase = 20000
+
+// EnsureAttemptGroups makes this process a member of every attempt group,
+// joining the missing ones with the binary's cap_setgid. The image grants
+// the membership via useradd -G, but whether it reaches the process depends
+// on the init that booted the container: some call initgroups, others set
+// only uid and gid and clear the supplementary groups. So membership is
+// asserted here, not assumed from /etc/group.
+func EnsureAttemptGroups(identities int) error {
+	current, err := os.Getgroups()
+	if err != nil {
+		return fmt.Errorf("attempt group check: %w", err)
+	}
+	var missing []int
+	for i := range identities {
+		if gid := AttemptUIDBase + i; !slices.Contains(current, gid) {
+			missing = append(missing, gid)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if err := syscall.Setgroups(append(current, missing...)); err != nil {
+		return fmt.Errorf("joining the attempt groups: %w -- the binary needs cap_setgid; rebuild the deploy image from the current template Dockerfile", err)
+	}
+	return nil
+}
 
 // HelperPath is the capless production re-exec target. The supervisor binary
 // is executable only by the agent identity because it carries UID-switching

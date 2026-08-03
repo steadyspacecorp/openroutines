@@ -287,7 +287,13 @@ EOF
   arch="$(docker version --format '{{.Server.Arch}}')"
   (cd "$repo" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$ctx/openroutines" ./cmd/openroutines)
   docker build --quiet --build-arg "CAPS=$caps" -t openroutines-isolation-smoke "$ctx" >"$work/out" 2>&1 || die "isolation image build"
-  docker run --rm openroutines-isolation-smoke sh -c '
+  # Boot the way a minimal container init does: uid and gid set, supplementary
+  # groups cleared, /etc/group never consulted. The binary must assert its
+  # attempt-group membership itself (cap_setgid); membership granted by
+  # useradd -G alone only works under inits that call initgroups, which
+  # Docker does and production platforms may not.
+  docker run --rm --user root openroutines-isolation-smoke \
+    setpriv --reuid agent --regid agent --clear-groups sh -c '
     set -e
     openroutines supervise > /tmp/supervise.out 2>&1 &
     supervisor=$!
