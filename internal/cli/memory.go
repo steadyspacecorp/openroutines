@@ -119,7 +119,7 @@ func syncMemoryForRead(mem *memory.Memory) (string, error) {
 		return "", errors.New(rep.Detail)
 	case rep.Conflict:
 		reportStranded(mem)
-		return "", fmt.Errorf("memory does not reconcile cleanly: %s\n\nresolve inside memory/, commit, then rerun openroutines sync", rep.Detail)
+		return "", fmt.Errorf("memory does not reconcile cleanly: %s\n\nresolve inside memory/, commit, then rerun openroutines memory", rep.Detail)
 	case rep.Detail != "":
 		return "", errors.New(rep.Detail)
 	default:
