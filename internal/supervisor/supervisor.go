@@ -621,6 +621,12 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 	if err == nil && !s.noOrigin && !s.renewLease() {
 		cleanupErr = staged.Discard()
+		s.memMu.Lock()
+		giveBack()
+		if err := st.Save(s.stateDir()); err != nil {
+			log.Error("saving scheduling state failed", "error", err)
+		}
+		s.memMu.Unlock()
 		log.Warn("not started -- lease lost after staging; the current holder will retry it")
 		return
 	}

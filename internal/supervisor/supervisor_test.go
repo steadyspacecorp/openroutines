@@ -18,6 +18,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
@@ -1193,6 +1194,45 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 	<-done
 	if got := strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_"); got != 1 {
 		t.Fatalf("the long run should have completed under the heartbeat, got %d ledger entries", got)
+	}
+}
+
+// A lease lost between staging and start hands the reserved attempt back:
+// no model process ran, so the budget must not move -- a reservation that
+// never becomes a run is given back (docs/design.md), exactly as the
+// settlement-side twin of this branch already does.
+func TestLeaseLostAfterStagingHandsTheAttemptBack(t *testing.T) {
+	dir := fixture(t, "ok")
+	withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+	s.tickWait(ctx, t0) // register; plan's heartbeat writes the lease
+
+	// Drain the pool so the next tick mints the pending record but cannot
+	// dispatch it: the reservation has to happen below, under a lease that
+	// is already lost -- a window plan's own heartbeat cannot see.
+	uid := <-s.slots
+	s.tickWait(ctx, t0.Add(61*time.Second))
+	st := loadState(t, s)
+	if st.Pending == nil {
+		t.Fatal("expected a pending run parked behind the full pool")
+	}
+
+	stopUsurper := usurpLease(t, s)
+	defer stopUsurper()
+
+	r, err := routine.Find(s.Dir, "every-minute")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanupErr := s.execute(ctx, r, st, t0.Add(61*time.Second), uid); cleanupErr != nil {
+		t.Fatal(cleanupErr)
+	}
+
+	after := loadState(t, s)
+	if after.Pending == nil || after.Pending.Attempts != 0 {
+		t.Fatalf("an attempt that never started must be handed back for the lease holder to retry: %+v", after.Pending)
 	}
 }
 
