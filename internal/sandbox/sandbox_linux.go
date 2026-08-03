@@ -128,21 +128,24 @@ func statusIdentity(file *os.File, uid uint32) (matches, zombie bool, err error)
 
 // Apply restricts this process (and all its descendants) to read access on
 // ro paths and read-write on rw paths. Returns a description of the ABI
-// level that took effect. Paths that don't exist are skipped -- Landlock
-// errors on nonexistent rule paths.
-func Apply(ro, rw []string) (string, error) {
-	roRule := landlock.RODirs(existing(ro)...)
-	rwRule := landlock.RWDirs(existing(rw)...)
+// level that took effect, plus any rw paths that don't exist and so were
+// dropped from the ruleset -- Landlock errors on nonexistent rule paths, so
+// the caller can still confine the process, but must say what got left out.
+func Apply(ro, rw []string) (string, []string, error) {
+	roKept, _ := existing(ro)
+	rwKept, rwSkipped := existing(rw)
+	roRule := landlock.RODirs(roKept...)
+	rwRule := landlock.RWDirs(rwKept...)
 	// V2 adds file re-parenting (renames across directories); fall back to
 	// V1 (basic fs) on older kernels. Both are strict: an error means no
 	// confinement took effect, and the caller decides fail-closed policy.
 	if err := landlock.V2.RestrictPaths(roRule, rwRule); err == nil {
-		return "landlock v2", nil
+		return "landlock v2", rwSkipped, nil
 	}
 	if err := landlock.V1.RestrictPaths(roRule, rwRule); err != nil {
-		return "", err
+		return "", rwSkipped, err
 	}
-	return "landlock v1", nil
+	return "landlock v1", rwSkipped, nil
 }
 
 // ProtectProcess marks this process non-dumpable: a same-UID process can no
@@ -155,15 +158,16 @@ func ProtectProcess() error {
 	return unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
 }
 
-func existing(paths []string) []string {
-	out := paths[:0:0]
+func existing(paths []string) (kept, skipped []string) {
 	for _, p := range paths {
 		if p == "" {
 			continue
 		}
 		if _, err := os.Stat(p); err == nil {
-			out = append(out, p)
+			kept = append(kept, p)
+		} else {
+			skipped = append(skipped, p)
 		}
 	}
-	return out
+	return kept, skipped
 }

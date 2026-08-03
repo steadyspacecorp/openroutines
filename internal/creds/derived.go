@@ -133,7 +133,7 @@ func Derive(name string, s Spec, stored string) (*Derived, error) {
 	var err error
 	switch s.Type {
 	case "github_app":
-		d, err = deriveGitHubApp(s, stored, githubAPIBase)
+		d, err = deriveGitHubApp(name, s, stored, githubAPIBase)
 	case "oauth2_client":
 		d, err = deriveOAuth2Client(s, stored)
 	default:

@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/logging"
 )
 
 func TestValidateAcceptsPlainFiles(t *testing.T) {
@@ -366,6 +369,29 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	events, _ := os.ReadFile(filepath.Join(b, "memory", "events.md"))
 	if !strings.Contains(string(events), "generation one fact") {
 		t.Fatalf("adopted events missing: %q", events)
+	}
+}
+
+// A container replaced during a transient origin outage must not mint a
+// local root silently -- the resulting lineage would diverge from origin's
+// with no trace of why. Ensure still self-heals (it must: origin may never
+// come back), but it says so.
+func TestEnsureWarnsWhenOriginUnreachable(t *testing.T) {
+	dir := t.TempDir()
+	gitT(t, dir, "init", "-q", "-b", "main", dir)
+	gitT(t, dir, "remote", "add", "origin", filepath.Join(dir, "does-not-exist.git"))
+
+	var out bytes.Buffer
+	logging.Setup(&out, slog.LevelInfo, nil)
+
+	if err := At(dir).Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "could not reach origin") {
+		t.Fatalf("expected a could-not-reach-origin warning, got %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "memory", ".git")); err != nil {
+		t.Fatalf("memory worktree not created despite the unreachable origin: %v", err)
 	}
 }
 
