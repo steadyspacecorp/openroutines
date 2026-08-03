@@ -702,7 +702,11 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 	if err != nil {
 		return nil, err
 	}
-	logging.Setup(os.Stdout, agent.EffectiveLogLevel(), loc)
+	level := agent.EffectiveLogLevel()
+	logging.Setup(os.Stdout, level, loc)
+	if v, ok := config.IgnoredLogLevel(); ok {
+		slog.Warn("ignoring an unrecognized log level", "env", config.EnvLogLevel, "value", v, "using", level)
+	}
 
 	r, err := routine.Find(dir, name)
 	if err != nil {

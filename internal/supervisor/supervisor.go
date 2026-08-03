@@ -138,7 +138,11 @@ func New(dir string) (*Supervisor, error) {
 	// One logger per process, installed here: the supervisor is the process,
 	// and everything it spawns or calls logs through slog's default rather
 	// than being handed one.
-	logging.Setup(os.Stdout, agent.EffectiveLogLevel(), loc)
+	level := agent.EffectiveLogLevel()
+	logging.Setup(os.Stdout, level, loc)
+	if v, ok := config.IgnoredLogLevel(); ok {
+		slog.Warn("ignoring an unrecognized log level", "env", config.EnvLogLevel, "value", v, "using", level)
+	}
 	mem := memory.At(dir)
 	memMu, err := runner.OpenMemoryLock(dir)
 	if err != nil {

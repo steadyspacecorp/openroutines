@@ -29,6 +29,23 @@ func TestEffectiveLogLevel(t *testing.T) {
 	}
 }
 
+// The environment override is the one log_level input Problems() never
+// sees, so the process announces a rejected value itself -- this is what
+// the announcement keys on.
+func TestIgnoredLogLevel(t *testing.T) {
+	if v, ok := IgnoredLogLevel(); ok {
+		t.Fatalf("unset %s reported as ignored: %q", EnvLogLevel, v)
+	}
+	t.Setenv(EnvLogLevel, "warn")
+	if v, ok := IgnoredLogLevel(); ok {
+		t.Fatalf("valid %s reported as ignored: %q", EnvLogLevel, v)
+	}
+	t.Setenv(EnvLogLevel, "verbose")
+	if v, ok := IgnoredLogLevel(); !ok || v != "verbose" {
+		t.Fatalf("a typo'd %s must be reported, got %q, %v", EnvLogLevel, v, ok)
+	}
+}
+
 // An invalid log_level is a configuration problem named with the accepted set.
 func TestLogLevelValidation(t *testing.T) {
 	a := Agent{
