@@ -93,12 +93,33 @@ func (o *OpenCode) Drift(modelPrefixes []string) []string {
 	}
 	if providers, ok := o.cfg["provider"].(map[string]any); ok {
 		for _, id := range slices.Sorted(maps.Keys(providers)) {
-			if !slices.Contains(modelPrefixes, id) {
+			if !slices.Contains(modelPrefixes, id) && !decorationOnly(providers[id]) {
 				warnings = append(warnings, fmt.Sprintf("provider %q in opencode.json is not referenced by any model in openroutines.yml defaults or routine frontmatter", id))
 			}
 		}
 	}
 	return warnings
+}
+
+// decorationOnly reports whether a provider entry merely tunes a built-in
+// provider: nothing but an options block, and no endpoint of its own. The
+// scaffold's OpenRouter attribution headers are the motivating case --
+// harmless while no model routes there, live the moment one does. An empty
+// entry, a baseURL, models, or a package are real wiring, so an unreferenced
+// id still reads as a typo and warns.
+func decorationOnly(entry any) bool {
+	m, ok := entry.(map[string]any)
+	if !ok || len(m) == 0 {
+		return false
+	}
+	for key := range m {
+		if key != "options" {
+			return false
+		}
+	}
+	options, _ := m["options"].(map[string]any)
+	_, hasBaseURL := options["baseURL"]
+	return !hasBaseURL
 }
 
 // mcpEntry renders a declared server as the opencode.json entry a person

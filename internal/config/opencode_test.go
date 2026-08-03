@@ -64,7 +64,12 @@ func TestOpenCodeDrift(t *testing.T) {
 		"mcp": {"steady": {"type": "remote"}},
 		"model": "anthropic/claude-sonnet-5",
 		"agent": {"title": {"disable": true}, "build": {"model": "anthropic/claude-sonnet-5"}},
-		"provider": {"anthropic": {}, "openai": {}}
+		"provider": {
+			"anthropic": {},
+			"openai": {},
+			"openrouter": {"options": {"headers": {"HTTP-Referer": "https://openroutines.dev"}}},
+			"my_gateway": {"options": {"baseURL": "https://gw.example.test/v1"}}
+		}
 	}`)
 	oc, err := LoadOpenCode(dir)
 	if err != nil {
@@ -75,12 +80,15 @@ func TestOpenCodeDrift(t *testing.T) {
 		`opencode.json contains "model"`,
 		`agent "build" in opencode.json sets a model`,
 		`provider "openai" in opencode.json is not referenced`,
+		`provider "my_gateway" in opencode.json is not referenced`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("drift missing %q:\n%s", want, got)
 		}
 	}
-	for _, quiet := range []string{`"title"`, `provider "anthropic"`, `"$schema"`, `"permission"`, `"mcp"`} {
+	// An options-only block with no endpoint (the scaffold's attribution
+	// headers) is decoration, not a dangling definition.
+	for _, quiet := range []string{`"title"`, `provider "anthropic"`, `provider "openrouter"`, `"$schema"`, `"permission"`, `"mcp"`} {
 		if strings.Contains(got, quiet) {
 			t.Fatalf("drift wrongly flags %s:\n%s", quiet, got)
 		}

@@ -10,5 +10,16 @@
     "title": {
       "disable": true
     }
+  },
+  "provider": {
+    "openrouter": {
+      "options": {
+        "headers": {
+          "HTTP-Referer": "https://openroutines.dev",
+          "X-OpenRouter-Title": "OpenRoutines",
+          "X-Title": "OpenRoutines"
+        }
+      }
+    }
   }
 }
