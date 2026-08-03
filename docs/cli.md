@@ -9,6 +9,7 @@ openroutines scaffold <path>      create a new agent repository
 openroutines configure            fill in openroutines.yml, generate the master key
 openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
+openroutines memory               sync and show the agent's working memory (--json)
 openroutines usage                token use and reported cost per routine (--json)
 openroutines sync                 pull the agent's latest memory from origin (--push)
 openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
@@ -71,6 +72,19 @@ openroutines usage [--json]
 ```
 
 Token use and reported cost per routine. `--json` emits the machine-readable form for scripts and monitors.
+
+## memory
+
+```
+openroutines memory [--no-sync] [--tasks] [--events] [--context] [--ledger <routine>] [--json]
+openroutines teamwork [same options]
+```
+
+Fetches and reconciles the `memory` branch, then shows the agent's current working memory as tasks, recent events, shared context, and per-routine state. `teamwork` is an exact alias. The format examples at the top of newly seeded memory files are omitted from the display; the records themselves remain Markdown and are not reinterpreted by the CLI.
+
+Use the section flags separately or together to narrow the display. `--ledger <routine>` may be repeated. `--no-sync` reads the local memory worktree without contacting origin. `--json` emits the same selected sections as strings and a map of routine names to ledger contents, with no sync progress on stdout.
+
+The command never publishes local memory. It refuses rewritten history and conflicts under the same rules as `openroutines sync`; use `openroutines sync --push` when you intend to publish human curation.
 
 ## sync
 
