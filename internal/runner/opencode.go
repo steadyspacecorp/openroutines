@@ -16,10 +16,11 @@ import (
 // session data readable after the container exits.
 const attemptHomeName = ".home"
 
-// opencodeExec runs one opencode subcommand in the attempt's context --
-// the caller decides where opencode exists (on PATH in the production
-// container, via the runtime image for local runs, nowhere in native dev
-// mode) and returns its stdout.
+// opencodeExec runs one opencode subcommand in the attempt's context after
+// the model process exits -- session capture and export reach opencode
+// through it. The spawn path decides where opencode exists (on PATH in the
+// production container and in native dev mode, via the runtime image for
+// local runs) and returns its stdout.
 type opencodeExec func(args ...string) ([]byte, error)
 
 // captureTimeout bounds each capture exec: a hung docker or opencode must
@@ -101,6 +102,24 @@ func hostOpencodeExec(workspace string) opencodeExec {
 			"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 			"XDG_DATA_HOME=" + dataHome,
 		}
+		return cmd.Output()
+	}
+}
+
+// nativeOpencodeExec runs the developer's own opencode against their own
+// session store -- OPENROUTINES_NATIVE=1, where the run itself used the
+// real HOME. The store holds the developer's whole history, but opencode
+// scopes `session list` to the working directory a session ran in, and the
+// workspace is this attempt's alone, so only this attempt's sessions are
+// reachable. No capture-home hygiene either: the run already executed
+// unconfined with this same HOME, so there is nothing left to deny it.
+func nativeOpencodeExec(workspace string) opencodeExec {
+	return func(args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "opencode", args...)
+		cmd.Dir = workspace
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
 		return cmd.Output()
 	}
 }

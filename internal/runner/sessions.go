@@ -1,14 +1,18 @@
 // The attempt's sessions are opencode's own record of the run. After the
-// model process exits, captureSession folds that record into what the
-// attempt records: token usage, and whether the session ended cleanly.
+// model process exits, that record is read twice: captureSession folds it
+// into what the attempt records (token usage, whether the session ended
+// cleanly), and exportSessions saves its replayable form into operator
+// storage when one is designated.
 
 package runner
 
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 )
 
 // Usage is one attempt's token consumption, summed from the assistant
@@ -196,4 +200,98 @@ func (m assistantInfo) addTo(u *Usage) bool {
 	u.CacheWrite += m.Tokens.Cache.Write
 	u.CostReported += m.Cost
 	return true
+}
+
+// EnvSessionDir designates operator storage for session history. When set,
+// the attempt's sessions are exported when the attempt ends, whatever the
+// outcome: `opencode session list` names them, `opencode export` renders
+// each, and the output lands at `<dir>/<run_id>.<attempt_id>/<session_id>.json`
+// (design decision "Run history: opencode's log passed through, sessions
+// exported"). Unset means nothing is written. An env var rather than
+// configuration for the same reason as the log-level override: storage --
+// typically a mounted volume -- is wired up where the container is defined,
+// not in the repo.
+const EnvSessionDir = "OPENROUTINES_SESSION_DIR"
+
+// sessionIDPattern is the shape of an id worth using as a filename. The ids
+// come back from a session store the model process could write, so an id
+// that could climb out of the attempt's directory names no file.
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// exportSessions saves the attempt's session history into operator storage
+// and returns the directory it landed in -- "" when no session dir is
+// designated, the attempt left no sessions, or storage is broken. The
+// exports run in the supervisor's process after the attempt ends: the model
+// process never touches the volume, so no sandbox grant or container mount
+// ever exposes it. Best-effort throughout -- broken operator storage must
+// never fail the run. An export that fails partway still names its
+// directory (the record points at what survived; the log carries the
+// warning), but one that lands no file at all names nothing, because an
+// empty directory is not a record.
+func exportSessions(meta Meta, oc opencodeExec) string {
+	root := os.Getenv(EnvSessionDir)
+	if root == "" || oc == nil {
+		return ""
+	}
+	raw, err := oc("session", "list", "--format", "json")
+	if err != nil {
+		slog.Warn("listing the attempt's sessions failed -- sessions not preserved", "error", err)
+		return ""
+	}
+	var sessions []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &sessions); err != nil {
+		slog.Warn("unreadable session list -- sessions not preserved", "error", err)
+		return ""
+	}
+	if len(sessions) == 0 {
+		return ""
+	}
+	dir := filepath.Join(root, meta.RunID+"."+meta.AttemptID)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	// A retried attempt reuses its identity -- giveBack() hands the attempt
+	// number back when a run is canceled or its lease is lost, after this
+	// export already ran -- so the directory can hold a previous attempt's
+	// files. One directory names one attempt's sessions, not two merged.
+	_ = os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		slog.Warn("session dir not writable -- sessions not preserved", "dir", dir, "error", err)
+		return ""
+	}
+	wrote := false
+	var firstErr error
+	for _, s := range sessions {
+		if err := exportSession(oc, s.ID, dir); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		wrote = true
+	}
+	if firstErr != nil {
+		slog.Warn("sessions exported incompletely", "dir", dir, "error", firstErr)
+	}
+	if !wrote {
+		_ = os.RemoveAll(dir)
+		return ""
+	}
+	return dir
+}
+
+// exportSession writes one session's export into the attempt's directory.
+// Owner-only: verbatim, unscrubbed sessions are as sensitive as the
+// credentials the routine could see.
+func exportSession(oc opencodeExec, id, dir string) error {
+	if !sessionIDPattern.MatchString(id) {
+		return fmt.Errorf("session id %q is not a safe filename", id)
+	}
+	raw, err := oc("export", id)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, id+".json"), raw, 0o600)
 }

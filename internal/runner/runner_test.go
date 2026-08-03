@@ -700,14 +700,14 @@ func TestAuthHintNamesProviderEndpointAndCredential(t *testing.T) {
 	}
 }
 
-// opencode passes some providers' status text through verbatim -- "Error:
-// Unauthorized: Unauthorized" carries no key-shaped phrase, and unmatched it
-// reports as a bare crash (#60).
-func TestAuthFailurePatternMatchesPassthroughStatusText(t *testing.T) {
+// Some providers' status text carries no key-shaped phrase -- the session
+// record's failure reads "...ended on an error: Unauthorized" -- and
+// unmatched it reports as a bare crash (#60).
+func TestAuthFailurePatternMatchesBareStatusText(t *testing.T) {
 	for _, line := range []string{
-		"Error: Unauthorized: Unauthorized",
+		"the model session ended on an error: Unauthorized",
 		"error: unauthorized",
-		"Error: invalid bearer token",
+		"the model session ended on an error: invalid bearer token",
 		"API key is invalid.",
 	} {
 		if !authFailurePattern.MatchString(line) {

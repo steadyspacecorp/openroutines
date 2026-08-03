@@ -10,7 +10,6 @@
 package runner
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	_ "embed"
@@ -68,36 +67,23 @@ type Meta struct {
 // failure (currently: provider authentication) so it surfaces as a
 // configuration problem instead of an opaque crash.
 type ExecResult struct {
-	Outcome  Outcome
-	ExitCode int
-	Duration time.Duration
-	Hint     string
-	Model    string // the resolved model this attempt ran with
-	Effort   string // frontmatter reasoning effort, when set
-	Usage    *Usage // token consumption; nil when the surface was unavailable
+	Outcome     Outcome
+	ExitCode    int
+	Duration    time.Duration
+	Hint        string
+	Model       string // the resolved model this attempt ran with
+	Effort      string // frontmatter reasoning effort, when set
+	Usage       *Usage // token consumption; nil when the surface was unavailable
+	SessionsDir string // the attempt's exported sessions, "" when no session dir is designated
 }
 
-// tailBuffer keeps the last max bytes written -- enough to classify a
-// failure from the end of the run's output without holding all of it.
-type tailBuffer struct {
-	buf []byte
-	max int
-}
-
-func (t *tailBuffer) Write(p []byte) (int, error) {
-	t.buf = append(t.buf, p...)
-	if len(t.buf) > t.max {
-		t.buf = t.buf[len(t.buf)-t.max:]
-	}
-	return len(p), nil
-}
-
-// authFailurePattern matches provider authentication errors in run output.
-// A bad or missing API key otherwise reports as a bare "crashed" -- and in
-// production burns five attempts and trips the circuit breaker before a
-// human learns the cause was configuration. The `error:` forms are opencode
-// passing a provider's status text through verbatim ("Error: Unauthorized"),
-// which carries no key-shaped phrase to match on.
+// authFailurePattern matches provider authentication errors in the session
+// record's failure text. A bad or missing API key otherwise reports as a
+// bare "crashed" -- and in production burns five attempts and trips the
+// circuit breaker before a human learns the cause was configuration. The
+// `error:` forms cover a provider's bare status text passed through
+// verbatim ("... ended on an error: Unauthorized"), which carries no
+// key-shaped phrase to match on.
 var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key|error:\s*unauthorized|invalid bearer token`)
 
 // authHint names what the framework knows about an authentication failure
@@ -211,13 +197,14 @@ func (s *Staging) Consumed() bool {
 
 // Result is a completed manual run (routines run).
 type Result struct {
-	RunID      string
-	Outcome    Outcome
-	ExitCode   int
-	Duration   time.Duration
-	Commit     string            // memory commit hash, when one was made
-	Hint       string            // classified failure cause, when one was recognized
-	Conflicted []memory.Conflict // semantic edits preserved outside the canonical file
+	RunID       string
+	Outcome     Outcome
+	ExitCode    int
+	Duration    time.Duration
+	Commit      string            // memory commit hash, when one was made
+	Hint        string            // classified failure cause, when one was recognized
+	SessionsDir string            // the run's exported sessions, "" when no session dir is designated
+	Conflicted  []memory.Conflict // semantic edits preserved outside the canonical file
 }
 
 const runIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -288,13 +275,11 @@ type StagedRun struct {
 	env       []string
 	ocArgs    []string
 
-	// Run-output verbosity, derived once from log_level (design decision
-	// "Run output is rendered, bounded, and leveled"). The run stream is the
-	// model process's own bytes, not log records, so its shape is pipeline
-	// configuration fixed at staging: transcript streams opencode's raw
-	// output (debug), streamed lets the rendered stream reach stdout (info).
-	transcript bool
-	streamed   bool
+	// echo, when set, receives the run's scrubbed stdout live -- the manual
+	// `routines run` terminal. The supervisor never sets it: run output is
+	// never log lines (design decision "Run history: opencode's log passed
+	// through, sessions exported").
+	echo io.Writer
 }
 
 // Discard releases a staged attempt that will not be spawned (for example,
@@ -438,37 +423,32 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		env = append(env, strings.ToUpper(k)+"="+agent.Variables[k])
 	}
 
-	level := agent.EffectiveLogLevel()
-	transcript := level <= slog.LevelDebug
-	// The opencode invocation is identical across spawn paths.
-	ocArgs := []string{"run", "--agent", "routine", "-m", model}
+	// The opencode invocation is identical across spawn paths. opencode
+	// keeps its own diagnostic log at the level this process already runs
+	// at and prints it to stderr, where Run passes it into the log stream.
+	// Its --log-level flag takes the same four names slog renders.
+	ocArgs := []string{
+		"--print-logs", "--log-level=" + agent.EffectiveLogLevel().String(),
+		"run", "--agent", "routine", "-m", model,
+	}
 	if r.FM.Effort != "" {
 		ocArgs = append(ocArgs, "--variant", r.FM.Effort)
-	}
-	if transcript {
-		// The full formatted transcript, plus opencode's own diagnostics.
-		ocArgs = append(ocArgs, "--print-logs", "--log-level", "DEBUG")
-	} else {
-		// Raw JSON events, rendered into the bounded run log below.
-		ocArgs = append(ocArgs, "--format", "json")
 	}
 	ocArgs = append(ocArgs, r.Body)
 
 	ok = true
 	return &StagedRun{
-		dir:        dir,
-		r:          r,
-		meta:       meta,
-		model:      model,
-		timeout:    timeout,
-		secrets:    secrets,
-		staging:    staging,
-		workspace:  workspace,
-		runTmp:     runTmp,
-		env:        env,
-		ocArgs:     ocArgs,
-		transcript: transcript,
-		streamed:   level <= slog.LevelInfo,
+		dir:       dir,
+		r:         r,
+		meta:      meta,
+		model:     model,
+		timeout:   timeout,
+		secrets:   secrets,
+		staging:   staging,
+		workspace: workspace,
+		runTmp:    runTmp,
+		env:       env,
+		ocArgs:    ocArgs,
 	}, nil
 }
 
@@ -504,7 +484,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// production image or when a contributor opts out.
 	var cmd *exec.Cmd
 	containerName := ""
-	var ocExec opencodeExec // how capture reaches opencode after the run; nil in native dev mode
+	var ocExec opencodeExec // how capture and session export reach opencode after the run
 	if nativeMode() {
 		if _, err := exec.LookPath("opencode"); err != nil {
 			return nil, nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
@@ -537,7 +517,12 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		} else {
 			// OPENROUTINES_NATIVE=1: an explicit, unconfined dev opt-in
 			// (local user runs are confined by the run container instead).
-			// The developer's real HOME stays: their opencode auth lives there.
+			// The developer's real HOME stays: their opencode auth lives
+			// there -- which also means the session lands in their own
+			// store, reached after the run by working directory (opencode
+			// scopes `session list` to the directory a session ran in, and
+			// the workspace is this attempt's alone).
+			ocExec = nativeOpencodeExec(workspace)
 			cmd = exec.Command("opencode", ocArgs...)
 			cmd.Env = slices.Concat(env, []string{
 				"PATH=" + os.Getenv("PATH"),
@@ -578,41 +563,21 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		ocExec = containerOpencodeExec(workspace, image)
 		cmd = containerCmd(containerName, workspace, image, env, ocArgs)
 	}
-	// The run log is leveled (design decision "Run output is rendered,
-	// bounded, and leveled"): debug streams the formatted transcript as-is,
-	// info renders the JSON event stream into bounded lines, warn and error
-	// keep the stream out of the log entirely. The tail always captures what
-	// the level would have logged -- failure classification and the failure
-	// tail below read it.
-	tail := &tailBuffer{max: 4096}
-	// Log lines are attributed to their routine: runs execute concurrently
-	// and share one stdout. The prefix lands downstream of scrubbing and
-	// beside -- never in front of -- the tail buffer, which classification
-	// and the failure tail read raw.
-	var flush func()
-	if sr.transcript {
-		pw := newPrefixWriter(os.Stdout, r.Name)
-		scrubber := scrub.NewWriter(io.MultiWriter(pw, tail))
-		cmd.Stdout, cmd.Stderr = scrubber, scrubber
-		flush = func() { scrubber.Flush(); pw.Flush() }
-	} else {
-		sink := io.Writer(os.Stdout)
-		if !sr.streamed {
-			sink = io.Discard
-		}
-		pw := newPrefixWriter(sink, r.Name)
-		// The two renderers land on one destination from os/exec's two drain
-		// goroutines; syncWriter keeps a line whole through the prefix
-		// buffer and the tail.
-		dst := &syncWriter{w: io.MultiWriter(pw, tail)}
-		// Renderers scrub before they truncate -- the ordering that keeps a
-		// truncation boundary from splitting a secret past the exact-value
-		// matcher. stderr is not part of the event stream; its renderer just
-		// passes lines through, bounded.
-		rout := newRenderer(dst)
-		rerr := newRenderer(dst)
-		cmd.Stdout, cmd.Stderr = rout, rerr
-		flush = func() { rout.Flush(); rerr.Flush(); pw.Flush() }
+	// stderr is opencode's own diagnostic log (--print-logs): each line
+	// passes through to the log stream with the attempt's identity
+	// appended, scrubbed first -- and with it every failure's diagnostics,
+	// so a failed attempt is never invisible. Run output (stdout) never
+	// enters the log stream: it echoes to the terminal on the interactive
+	// path and is otherwise discarded -- the run's record is its session
+	// (design decision "Run history: opencode's log passed through,
+	// sessions exported").
+	oclog := logging.NewPassthrough(os.Stdout, slog.String("routine", r.Name), slog.String("run_id", meta.RunID))
+	errOut := scrub.NewWriter(oclog)
+	cmd.Stderr = errOut
+	var out *scrub.Writer
+	if sr.echo != nil {
+		out = scrub.NewWriter(sr.echo)
+		cmd.Stdout = out
 	}
 	cmd.WaitDelay = pipeDrainDeadline
 
@@ -662,7 +627,11 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		kill()
 	}
 	res.Duration = time.Since(started).Round(time.Millisecond)
-	flush()
+	if out != nil {
+		out.Flush()
+	}
+	errOut.Flush()
+	oclog.Flush()
 	res.Model = model
 	res.Effort = r.FM.Effort
 	// Exit code alone is too weak a success signal for an agentic runtime:
@@ -671,25 +640,15 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// decision "A run is completed only when its session ended cleanly").
 	session := captureSession(workspace, ocExec)
 	res.Usage = session.Usage
+	res.SessionsDir = exportSessions(meta, ocExec)
 	if res.Outcome == Completed && session.Failure != "" {
 		res.Outcome = Crashed
 		res.Hint = session.Failure
 	}
-	if res.Outcome == Crashed && authFailurePattern.Match(tail.buf) {
+	if res.Outcome == Crashed && authFailurePattern.MatchString(session.Failure) {
 		provider := strings.SplitN(model, "/", 2)[0]
 		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
 		res.Hint = authHint(dir, model, injected)
-	}
-	if !sr.streamed && (res.Outcome == Crashed || res.Outcome == Timeout) && len(tail.buf) > 0 {
-		// A failed attempt's last output is the diagnostic payload, not
-		// chatter: it escapes the level gate, or a warn/error production
-		// agent fails invisibly. It stays raw model output rather than log
-		// records -- the supervisor logs the failure itself, and this is the
-		// evidence under that line -- so it carries the same routine prefix
-		// every other run line does.
-		pw := newPrefixWriter(os.Stdout, r.Name)
-		_, _ = fmt.Fprintf(pw, "%s %s -- last output:\n%s\n", meta.RunID, res.Outcome, bytes.TrimSpace(tail.buf))
-		pw.Flush()
 	}
 	ok = true
 	return res, staging, nil
@@ -714,9 +673,7 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 		return nil, fmt.Errorf("not an agent repository: %w", err)
 	}
 	// A manual run is the whole process, so it installs the logger the same
-	// way the supervisor does -- otherwise log_level would mean nothing here
-	// and `OPENROUTINES_LOG_LEVEL=debug openroutines routines run` would not
-	// stream the transcript it exists to show.
+	// way the supervisor does -- otherwise log_level would mean nothing here.
 	loc, err := time.LoadLocation(agent.Timezone)
 	if err != nil {
 		return nil, err
@@ -748,13 +705,16 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// The interactive path: the run's scrubbed output echoes to the terminal
+	// as it streams; the supervisor's staged runs stay silent.
+	sr.echo = os.Stdout
 	exec, staging, err := sr.Run(context.Background())
 	if err != nil {
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, staging.Cleanup()) }()
 
-	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
+	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint, SessionsDir: exec.SessionsDir}
 	if noMemory {
 		return res, nil
 	}
@@ -1255,9 +1215,10 @@ const containerExitGrace = 5 * time.Second
 // may never return. The container can outlive the run; a stuck daemon is the
 // operator's problem, but it must not become the supervisor's.
 //
-// Waiting for Wait to return is not optional: the caller reads the tail
-// buffer the output goroutines write to, so returning before Wait would race
-// them. The bound comes from making the process exit, not from walking away.
+// Waiting for Wait to return is not optional: the caller flushes the stream
+// writers the output goroutines write to, so returning before Wait would
+// race them. The bound comes from making the process exit, not from walking
+// away.
 func killClient(cmd *exec.Cmd, grace time.Duration, done chan error) {
 	select {
 	case <-done:
