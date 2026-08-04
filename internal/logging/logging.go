@@ -11,13 +11,23 @@ package logging
 import (
 	"io"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
+// The load-time default: scrubbed logfmt on stderr at info. Anything that
+// logs before the CLI dispatch configures the process -- or from a path
+// that never does -- gets a safe stream instead of slog's stock unscrubbed
+// handler.
+func init() {
+	Setup(os.Stderr, slog.LevelInfo, nil)
+}
+
 // Setup installs the process-wide logger, writing scrubbed logfmt to w.
-// There is one per process -- a supervisor, or a single manual run.
+// The CLI dispatch calls it once per process, from the agent's
+// configuration; no other production code does.
 //
 // loc renders timestamps in the agent's timezone, the zone its schedule is
 // a wall-clock promise in (design decision "Cron is evaluated in the
