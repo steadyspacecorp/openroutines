@@ -1057,6 +1057,52 @@ func buildWorkspace(dir, workspace, name string) error {
 	return nil
 }
 
+// copyDeclaredSkills places exactly the routine's declared skills into the
+// workspace at opencode's discovery path (.opencode/skills/). Undeclared
+// skills are not merely permission-denied -- they are not present at all.
+func copyDeclaredSkills(dir, workspace string, names []string) error {
+	for _, name := range names {
+		// Grammar before path use: a frontmatter name like "../../x" would
+		// otherwise read outside skills/ and write outside the workspace.
+		if !skill.NamePattern.MatchString(name) {
+			return fmt.Errorf("declared skill %q is not a valid Agent Skills name", name)
+		}
+		found, err := skill.Find(dir, name)
+		if err != nil {
+			// Pass the real cause through: a duplicate global name reported
+			// as "not found" sends the reader to the wrong directory.
+			return fmt.Errorf("declared skill unavailable: %w", err)
+		}
+		src := found.Dir
+		dest := filepath.Join(workspace, ".opencode", "skills", name)
+		err = filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(src, path)
+			target := filepath.Join(dest, rel)
+			if d.IsDir() {
+				return os.MkdirAll(target, 0o755)
+			}
+			if !d.Type().IsRegular() {
+				return nil
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(target, raw, 0o755)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // applyDeclaredMCP rewrites the workspace's opencode.json so its mcp block
 // holds only the servers the routine declared. Enforcement is unchanged -- the
 // generated definition's deny rules and the withheld credentials close an
@@ -1113,52 +1159,6 @@ func applyDeclaredMCP(workspace string, granted []string) error {
 		return err
 	}
 	return os.WriteFile(path, append(out, '\n'), 0o644)
-}
-
-// copyDeclaredSkills places exactly the routine's declared skills into the
-// workspace at opencode's discovery path (.opencode/skills/). Undeclared
-// skills are not merely permission-denied -- they are not present at all.
-func copyDeclaredSkills(dir, workspace string, names []string) error {
-	for _, name := range names {
-		// Grammar before path use: a frontmatter name like "../../x" would
-		// otherwise read outside skills/ and write outside the workspace.
-		if !skill.NamePattern.MatchString(name) {
-			return fmt.Errorf("declared skill %q is not a valid Agent Skills name", name)
-		}
-		found, err := skill.Find(dir, name)
-		if err != nil {
-			// Pass the real cause through: a duplicate global name reported
-			// as "not found" sends the reader to the wrong directory.
-			return fmt.Errorf("declared skill unavailable: %w", err)
-		}
-		src := found.Dir
-		dest := filepath.Join(workspace, ".opencode", "skills", name)
-		err = filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(src, path)
-			target := filepath.Join(dest, rel)
-			if d.IsDir() {
-				return os.MkdirAll(target, 0o755)
-			}
-			if !d.Type().IsRegular() {
-				return nil
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			return os.WriteFile(target, raw, 0o755)
-		})
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // The standing instruction lives in instruction.md -- editable prose,
