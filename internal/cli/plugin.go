@@ -167,6 +167,10 @@ func pluginAdd(args []string) int {
 	for _, s := range pendingStubs {
 		stepf("seed %s after the memory worktree exists (first run creates it)", s)
 	}
+	for _, s := range p.Bin {
+		script := filepath.Join("plugins", p.Manifest.Name, s)
+		stepf("review %s, then chmod +x %s to use it  # runs un-sandboxed as you; updates reset it to non-executable", script, script)
+	}
 	stepf("openroutines check")
 	if len(p.Routines) > 0 {
 		stepf("review the routine and skill contents, then activate wanted routines with openroutines routines activate <name>")

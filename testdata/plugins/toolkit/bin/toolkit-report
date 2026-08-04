@@ -1,0 +1,4 @@
+#!/bin/sh
+# Synthetic fixture: the bin/ payload class -- an operator convenience
+# wrapper, installed non-executable, run by hand after review.
+exec openroutines routines list

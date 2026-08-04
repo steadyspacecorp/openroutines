@@ -59,4 +59,4 @@ mcp:
     credential: steady_token
 ```
 
-To author one, copy a reference plugin from the [openroutines-plugins](https://github.com/steadyspacecorp/openroutines-plugins) repository and edit: the `PLUGIN.md` manifest names the bundle and the credentials, variables, and MCP servers it needs; `routines/`, `skills/`, and `memory/ledgers/` stubs are the payload.
+To author one, copy a reference plugin from the [openroutines-plugins](https://github.com/steadyspacecorp/openroutines-plugins) repository and edit: the `PLUGIN.md` manifest names the bundle and the credentials, variables, and MCP servers it needs; `routines/`, `skills/`, `bin/` operator scripts, and `memory/ledgers/` stubs are the payload. A `bin/` script is a convenience wrapper the person runs by hand (say, a manual routine's invocation with its display pipeline): it installs non-executable and stays off PATH -- review it, then `chmod +x plugins/<name>/bin/<script>` to adopt it; every plugin update resets it to non-executable.

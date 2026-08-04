@@ -81,6 +81,7 @@ type Plugin struct {
 	Routines []*routine.Routine
 	Skills   []*skill.Skill
 	Stubs    []string // memory/ledgers/<name>.md, relative to Dir
+	Bin      []string // bin/<name> operator scripts, relative to Dir
 }
 
 // benignRoot are repository housekeeping files tolerated (never copied) at
@@ -209,7 +210,7 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		}
 		switch {
 		case rel == FileName || benignRoot[rel]:
-		case rel == "routines" || rel == "skills" || rel == "memory" || rel == filepath.Join("memory", "ledgers"):
+		case rel == "routines" || rel == "skills" || rel == "bin" || rel == "memory" || rel == filepath.Join("memory", "ledgers"):
 			// structural directories
 		case strings.HasPrefix(rel, "routines"+string(filepath.Separator)):
 			if d.IsDir() {
@@ -228,6 +229,19 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 					return filepath.SkipDir
 				}
 			}
+		case strings.HasPrefix(rel, "bin"+string(filepath.Separator)):
+			// Operator scripts: reviewed like everything else, installed
+			// non-executable, run un-sandboxed only after the person makes
+			// them executable. Flat files with plain names, so what the
+			// grant summary prints is the whole surface.
+			if d.IsDir() || !skill.NamePattern.MatchString(d.Name()) {
+				badf("%s: bin/ holds flat lowercase-hyphen scripts only", rel)
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+			} else {
+				p.Bin = append(p.Bin, rel)
+			}
 		case strings.HasPrefix(rel, filepath.Join("memory", "ledgers")+string(filepath.Separator)):
 			base := strings.TrimSuffix(d.Name(), ".md")
 			if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") || !routine.NamePattern.MatchString(base) {
@@ -238,7 +252,7 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		case strings.HasPrefix(rel, "memory"+string(filepath.Separator)):
 			badf("%s: plugins may seed only memory/ledgers/ stubs, never shared memory files", rel)
 		default:
-			badf("%s: not part of a plugin -- the payload is allow-listed (PLUGIN.md, routines/, skills/, memory/ledgers/)", rel)
+			badf("%s: not part of a plugin -- the payload is allow-listed (PLUGIN.md, routines/, skills/, bin/, memory/ledgers/)", rel)
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -272,8 +286,8 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		badf("%v", e)
 	}
 
-	if len(p.Routines) == 0 && len(p.Skills) == 0 && len(p.Stubs) == 0 {
-		badf("nothing to install: a plugin bundles at least one routine, skill, or ledger stub")
+	if len(p.Routines) == 0 && len(p.Skills) == 0 && len(p.Stubs) == 0 && len(p.Bin) == 0 {
+		badf("nothing to install: a plugin bundles at least one routine, skill, operator script, or ledger stub")
 	}
 
 	// Internal consistency: no dangling grants, and the manifest tells the
@@ -408,6 +422,12 @@ func (p *Plugin) Summary() string {
 			names = append(names, s.Name)
 		}
 		w("Skills: %s\n", strings.Join(names, ", "))
+	}
+	// Operator scripts are the one payload class that runs outside every
+	// sandbox -- as the person, with their environment -- so the summary
+	// names each one and the terms plainly.
+	for _, s := range p.Bin {
+		w("Operator script: %s -- runs un-sandboxed as you; installs non-executable, chmod +x after review\n", s)
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.Credentials)) {
 		c := p.Manifest.Credentials[name]

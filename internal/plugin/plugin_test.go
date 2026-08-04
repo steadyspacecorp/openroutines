@@ -49,8 +49,13 @@ func TestLoadFixturePlugins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("toolkit: %v", err)
 	}
-	if len(toolkit.Routines) != 0 || len(toolkit.Skills) != 1 {
-		t.Fatalf("toolkit shape: %d routines, %d skills", len(toolkit.Routines), len(toolkit.Skills))
+	if len(toolkit.Routines) != 0 || len(toolkit.Skills) != 1 || len(toolkit.Bin) != 1 {
+		t.Fatalf("toolkit shape: %d routines, %d skills, %d bin scripts", len(toolkit.Routines), len(toolkit.Skills), len(toolkit.Bin))
+	}
+	// An operator script is the payload class that runs un-sandboxed as the
+	// person; the summary must say so -- it is the review gate.
+	if sum := toolkit.Summary(); !strings.Contains(sum, "Operator script: bin/toolkit-report") || !strings.Contains(sum, "un-sandboxed") {
+		t.Fatalf("toolkit summary must name the operator script and its terms:\n%s", sum)
 	}
 
 	// The grant summary must state the authorities the bundle asks for.
@@ -101,6 +106,8 @@ func TestLoadRefusals(t *testing.T) {
 		"legacy openroutines.yaml": {map[string]string{"openroutines.yaml": "name: x"}, "belongs to the agent"},
 		"legacy agent.yaml":        {map[string]string{"agent.yaml": "name: x"}, "belongs to the agent"},
 		"install hook":             {map[string]string{"install.sh": "#!/bin/sh\n"}, "allow-listed"},
+		"bin subdirectory":         {map[string]string{"bin/sub/x": "#!/bin/sh\n"}, "flat lowercase-hyphen scripts"},
+		"bin bad name":             {map[string]string{"bin/Setup.sh": "#!/bin/sh\n"}, "flat lowercase-hyphen scripts"},
 		"shared memory":            {map[string]string{"memory/events.md": "- sneaky\n"}, "never shared memory"},
 		"master key":               {map[string]string{"master.key": "k"}, "key material"},
 		"nested git":               {map[string]string{"skills/demo-skill/.git/config": "bad"}, "nested .git"},
@@ -229,7 +236,12 @@ func TestPrepareInstallAndApply(t *testing.T) {
 	src := write(t, map[string]string{
 		"skills/demo-skill/SKILL.md": "---\nname: demo-skill\ndescription: d\n---\nHow.\n",
 		"memory/ledgers/demo.md":     "# demo ledger\n",
+		"bin/demo-report":            "#!/bin/sh\necho demo\n",
 	})
+	// A cloned plugin repo can carry the executable bit; install must strip it.
+	if err := os.Chmod(filepath.Join(src, "bin", "demo-report"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	agent := t.TempDir()
 	inst, err := PrepareInstall(agent, src, testSource)
 	if err != nil {
@@ -248,6 +260,13 @@ func TestPrepareInstallAndApply(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(agent, rel)); err != nil {
 			t.Fatalf("%s not installed: %v", rel, err)
 		}
+	}
+	// Operator scripts land inert: present, but never executable, whatever
+	// mode the source carried. Making one runnable is the person's act.
+	if fi, err := os.Stat(filepath.Join(agent, "plugins", "demo", "bin", "demo-report")); err != nil {
+		t.Fatalf("bin script not installed: %v", err)
+	} else if fi.Mode()&0o111 != 0 {
+		t.Fatalf("bin script installed executable (%v); it must land inert", fi.Mode())
 	}
 	raw, err := os.ReadFile(filepath.Join(agent, "plugins", "demo", "routines", "demo.md"))
 	if err != nil || !strings.Contains(string(raw), "active: false") {
