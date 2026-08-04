@@ -169,7 +169,7 @@ func pluginAdd(args []string) int {
 	}
 	for _, s := range p.Bin {
 		script := filepath.Join("plugins", p.Manifest.Name, s)
-		stepf("review %s, then chmod +x %s to use it  # runs un-sandboxed as you; updates reset it to non-executable", script, script)
+		stepf("review %s -- it is ready to run, un-sandboxed, as you", script)
 	}
 	stepf("openroutines check")
 	if len(p.Routines) > 0 {

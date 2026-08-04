@@ -238,10 +238,6 @@ func TestPrepareInstallAndApply(t *testing.T) {
 		"memory/ledgers/demo.md":     "# demo ledger\n",
 		"bin/demo-report":            "#!/bin/sh\necho demo\n",
 	})
-	// A cloned plugin repo can carry the executable bit; install must strip it.
-	if err := os.Chmod(filepath.Join(src, "bin", "demo-report"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	agent := t.TempDir()
 	inst, err := PrepareInstall(agent, src, testSource)
 	if err != nil {
@@ -261,12 +257,13 @@ func TestPrepareInstallAndApply(t *testing.T) {
 			t.Fatalf("%s not installed: %v", rel, err)
 		}
 	}
-	// Operator scripts land inert: present, but never executable, whatever
-	// mode the source carried. Making one runnable is the person's act.
+	// Operator scripts land ready to run: they never travel into a run
+	// workspace (the runner's allow-list test holds that side), so the only
+	// party who can execute one is the person, by path.
 	if fi, err := os.Stat(filepath.Join(agent, "plugins", "demo", "bin", "demo-report")); err != nil {
 		t.Fatalf("bin script not installed: %v", err)
-	} else if fi.Mode()&0o111 != 0 {
-		t.Fatalf("bin script installed executable (%v); it must land inert", fi.Mode())
+	} else if fi.Mode()&0o111 == 0 {
+		t.Fatalf("bin script installed with mode %v; it must land executable", fi.Mode())
 	}
 	raw, err := os.ReadFile(filepath.Join(agent, "plugins", "demo", "routines", "demo.md"))
 	if err != nil || !strings.Contains(string(raw), "active: false") {

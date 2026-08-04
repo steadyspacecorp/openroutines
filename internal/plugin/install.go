@@ -168,6 +168,16 @@ func copyFile(src, dest string) error {
 	return writeFileExclusive(dest, raw)
 }
 
+// binScriptMode reports whether rel is a bin/ operator script, which
+// installs executable: it never travels into a run workspace, so the only
+// party who can execute it is the person, deliberately, by path.
+func binScriptMode(rel string) fs.FileMode {
+	if strings.HasPrefix(rel, "bin"+string(filepath.Separator)) {
+		return 0o755
+	}
+	return 0o644
+}
+
 func writeFileExclusive(dest string, raw []byte) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
@@ -223,7 +233,10 @@ func copyTreeExclusive(src, dest string) error {
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("%s: not a regular file", path)
 		}
-		return copyFile(path, target)
+		if err := copyFile(path, target); err != nil {
+			return err
+		}
+		return os.Chmod(target, binScriptMode(rel))
 	})
 	if err != nil {
 		return err

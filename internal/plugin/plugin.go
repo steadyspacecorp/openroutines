@@ -230,10 +230,10 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 				}
 			}
 		case strings.HasPrefix(rel, "bin"+string(filepath.Separator)):
-			// Operator scripts: reviewed like everything else, installed
-			// non-executable, run un-sandboxed only after the person makes
-			// them executable. Flat files with plain names, so what the
-			// grant summary prints is the whole surface.
+			// Operator scripts: reviewed like everything else, never part
+			// of a run workspace, executed only by the person, by path.
+			// Flat files with plain names, so what the grant summary
+			// prints is the whole surface.
 			if d.IsDir() || !skill.NamePattern.MatchString(d.Name()) {
 				badf("%s: bin/ holds flat lowercase-hyphen scripts only", rel)
 				if d.IsDir() {
@@ -427,7 +427,7 @@ func (p *Plugin) Summary() string {
 	// sandbox -- as the person, with their environment -- so the summary
 	// names each one and the terms plainly.
 	for _, s := range p.Bin {
-		w("Operator script: %s -- runs un-sandboxed as you; installs non-executable, chmod +x after review\n", s)
+		w("Operator script: %s -- runs un-sandboxed as you when you invoke it; never available to routines\n", s)
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.Credentials)) {
 		c := p.Manifest.Credentials[name]

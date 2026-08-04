@@ -312,7 +312,7 @@ func mergeTrees(base, ours, theirs, dest string) ([]string, error) {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(target, out, 0o644); err != nil {
+		if err := os.WriteFile(target, out, binScriptMode(rel)); err != nil {
 			return nil, err
 		}
 	}

@@ -149,6 +149,7 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 		"opencode.json":                         "{}",
 		"routines/daily.md":                     "---\nschedule: \"0 9 * * *\"\n---\nwork",
 		"plugins/demo/routines/plugin-daily.md": "---\nschedule: \"0 10 * * *\"\n---\nplugin work",
+		"plugins/demo/bin/demo-report":          "#!/bin/sh\necho operator-only\n",
 		"credentials.yml.enc":                   "ORV1:ciphertext",
 		"master.key":                            "hex",
 		"agent_deploy_key":                      "PRIVATE KEY",
