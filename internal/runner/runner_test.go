@@ -172,7 +172,7 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 		}
 	}
 	workspace := t.TempDir()
-	if err := buildWorkspace(dir, workspace, "daily", nil); err != nil {
+	if err := buildWorkspace(dir, workspace, "daily"); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"openroutines.yml", "opencode.json", "routines/daily.md", "routines/plugin-daily.md"} {
@@ -216,7 +216,7 @@ func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 	}
 
 	workspace := t.TempDir()
-	if err := buildWorkspace(dir, workspace, "daily", nil); err != nil {
+	if err := buildWorkspace(dir, workspace, "daily"); err != nil {
 		t.Fatalf("a sibling's parse error must not fail this routine's run: %v", err)
 	}
 	for _, f := range []string{"routines/daily.md", "routines/plugged.md"} {
@@ -230,12 +230,12 @@ func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 		}
 	}
 
-	if err := buildWorkspace(dir, t.TempDir(), "typo", nil); err == nil {
+	if err := buildWorkspace(dir, t.TempDir(), "typo"); err == nil {
 		t.Error("the broken routine's own run must fail")
 	} else if !strings.Contains(err.Error(), "frontmatter") {
 		t.Errorf("want the parse error, got %v", err)
 	}
-	if err := buildWorkspace(dir, t.TempDir(), "twin", nil); err == nil {
+	if err := buildWorkspace(dir, t.TempDir(), "twin"); err == nil {
 		t.Error("a routine party to a name collision must fail")
 	} else if !strings.Contains(err.Error(), "duplicate routine") {
 		t.Errorf("want the collision error, got %v", err)
@@ -246,7 +246,7 @@ func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 // opencode.json: the run's opencode never contacts it, so an ungranted run
 // cannot probe the endpoint or log its needs_auth refusal. Granted entries
 // and every other block pass through.
-func TestBuildWorkspaceFiltersUngrantedMCPServers(t *testing.T) {
+func TestApplyDeclaredMCPFiltersUngrantedServers(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
 		"openroutines.yml":  "name: t\n",
@@ -276,7 +276,10 @@ func TestBuildWorkspaceFiltersUngrantedMCPServers(t *testing.T) {
 	}
 
 	workspace := t.TempDir()
-	if err := buildWorkspace(dir, workspace, "daily", []string{"steady"}); err != nil {
+	if err := buildWorkspace(dir, workspace, "daily"); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyDeclaredMCP(workspace, []string{"steady"}); err != nil {
 		t.Fatal(err)
 	}
 	cfg := load(workspace)
@@ -292,7 +295,10 @@ func TestBuildWorkspaceFiltersUngrantedMCPServers(t *testing.T) {
 	}
 
 	bare := t.TempDir()
-	if err := buildWorkspace(dir, bare, "daily", nil); err != nil {
+	if err := buildWorkspace(dir, bare, "daily"); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyDeclaredMCP(bare, nil); err != nil {
 		t.Fatal(err)
 	}
 	cfg = load(bare)
