@@ -696,18 +696,6 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("not an agent repository: %w", err)
 	}
-	// A manual run is the whole process, so it installs the logger the same
-	// way the supervisor does -- otherwise log_level would mean nothing here.
-	loc, err := time.LoadLocation(agent.Timezone)
-	if err != nil {
-		return nil, err
-	}
-	level := agent.EffectiveLogLevel()
-	logging.Setup(os.Stdout, level, loc)
-	if v, ok := config.IgnoredLogLevel(); ok {
-		slog.Warn("ignoring an unrecognized log level", "env", config.EnvLogLevel, "value", v, "using", level)
-	}
-
 	r, err := routine.Find(dir, name)
 	if err != nil {
 		return nil, err
