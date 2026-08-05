@@ -1,8 +1,8 @@
-// The attempt's sessions are opencode's own record of the run. After the
-// model process exits, that record is read twice: captureSession folds it
-// into what the attempt records (token usage, whether the session ended
-// cleanly), and exportSessions saves its replayable form into operator
-// storage when one is designated.
+// The attempt's sessions are opencode's own record of the run, read twice
+// after the model process exits. captureSessions distills them into what
+// the run record keeps -- a Capture: token usage, and whether the run
+// really finished. exportSessions preserves them verbatim into operator
+// storage when one is designated. Capture reshapes; export copies.
 
 package runner
 
@@ -30,49 +30,47 @@ type Usage struct {
 	CostReported float64 `json:"-"`
 }
 
-// Session is what opencode's own record says about one attempt: what it
-// consumed, and whether it ended the way a finished run ends. Usage is nil
-// when the runtime didn't report -- never zero. Failure is empty unless the
-// record positively says the session ended badly.
-type Session struct {
+// Capture is what the run record keeps from the attempt's sessions -- not
+// a session, but what their messages add up to: token consumption, and
+// whether they ended the way a finished run ends. Usage is nil when the
+// runtime didn't report -- never zero. Failure is empty unless the record
+// positively says the session ended badly.
+type Capture struct {
 	Usage   *Usage
 	Failure string
 }
 
-// captureSession reads the attempt's session. Preferred surface: ask
-// opencode itself (session list + export -- messages live in its database
-// from 1.18 on). Fallback: the pre-1.18 message JSONs on disk. The store
-// is attempt-scoped either way (the home is fresh per attempt), and an
-// unreadable one says nothing -- bookkeeping must never fail a run. A
-// capture that fails open is silent by design, but the two things it
-// costs -- usage reporting, and the "did the session end cleanly" check --
-// are worth a line each: log carries what the return value can't.
-func captureSession(workspace string, oc opencodeExec, log *slog.Logger) Session {
-	if oc != nil {
-		msgs, err := messagesViaExport(oc)
-		switch {
-		case err != nil:
-			log.Warn("session capture unavailable -- no usage recorded and the session-outcome check did not run", "error", err)
-		case len(msgs) > 0:
-			return summarize(msgs)
-		}
-		log.Debug("session capture fell back to on-disk message files")
+// captureSessions distills the attempt's sessions. The store is
+// attempt-scoped (the home is fresh per attempt), and an unreadable one
+// says nothing -- bookkeeping must never fail a run. A capture that fails
+// open is silent by design, but the two things it costs -- usage
+// reporting, and the "did the session end cleanly" check -- are worth a
+// line: log carries what the return value can't.
+func captureSessions(oc opencodeExec, log *slog.Logger) Capture {
+	sessions, err := sessionMessages(oc)
+	if err != nil {
+		log.Warn("session capture unavailable -- no usage recorded and the session-outcome check did not run", "error", err)
+	} else if len(sessions) == 0 {
+		log.Debug("attempt left no sessions")
 	}
-	msgs := messagesFromLegacyFiles(workspace)
-	if len(msgs) == 0 {
-		log.Debug("attempt session reported no assistant messages")
-	}
-	return summarize(msgs)
+	return summarize(sessions)
 }
 
-// messagesViaExport asks opencode for the attempt's session: the fresh home
-// holds at most one, `session list --format json` names it, and `export`
-// prints {info, messages}. A non-nil error means the surface itself
-// couldn't be read -- exec failure or unparseable JSON -- and the fallback
-// is worth trying. No session yet, or a session with no assistant
-// messages, is not an error: (nil, nil).
-func messagesViaExport(oc opencodeExec) ([]assistantInfo, error) {
-	raw, err := oc("session", "list", "--format", "json", "-n", "1")
+// sessionMessages asks opencode for the attempt's sessions: `session
+// list --format json` names them, and `export` prints {info, messages}
+// for each, returned one message group per session in list order. The
+// list is ordered most-recently-updated first (verified against the
+// pinned 1.18.3), so the first group belongs to the session that acted
+// last. The fresh home normally holds exactly one session -- the run's
+// own -- but reading every listed one keeps the sum honest if it ever
+// holds more. The list surfaces top-level sessions only (`svc.list({roots:
+// true})`), so a subagent's child session is invisible here -- its
+// consumption is not capturable through the CLI, and no child can dilute
+// the session-outcome check either. A non-nil error means the surface
+// itself couldn't be read -- exec failure or unparseable JSON. No sessions
+// yet is not an error: (nil, nil).
+func sessionMessages(oc opencodeExec) ([][]assistantInfo, error) {
+	raw, err := oc("session", "list", "--format", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -82,47 +80,30 @@ func messagesViaExport(oc opencodeExec) ([]assistantInfo, error) {
 	if err := json.Unmarshal(raw, &sessions); err != nil {
 		return nil, err
 	}
-	if len(sessions) == 0 || sessions[0].ID == "" {
-		return nil, nil
-	}
-	raw, err = oc("export", sessions[0].ID)
-	if err != nil {
-		return nil, err
-	}
-	var export struct {
-		Messages []struct {
-			Info assistantInfo `json:"info"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(raw, &export); err != nil {
-		return nil, err
-	}
-	msgs := make([]assistantInfo, 0, len(export.Messages))
-	for _, m := range export.Messages {
-		msgs = append(msgs, m.Info)
-	}
-	return msgs, nil
-}
-
-// messagesFromLegacyFiles reads the message JSONs opencode wrote before 1.18
-// moved persistence into its database. Also the seam the fake opencode in
-// tests writes to.
-func messagesFromLegacyFiles(workspace string) []assistantInfo {
-	pattern := filepath.Join(workspace, attemptHomeName, ".local", "share", "opencode", "storage", "message", "*", "*.json")
-	files, _ := filepath.Glob(pattern)
-	var msgs []assistantInfo
-	for _, f := range files {
-		raw, err := os.ReadFile(f)
+	var groups [][]assistantInfo
+	for _, s := range sessions {
+		if s.ID == "" {
+			continue
+		}
+		raw, err := oc("export", s.ID)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		var msg assistantInfo
-		if json.Unmarshal(raw, &msg) != nil {
-			continue
+		var export struct {
+			Messages []struct {
+				Info assistantInfo `json:"info"`
+			} `json:"messages"`
 		}
-		msgs = append(msgs, msg)
+		if err := json.Unmarshal(raw, &export); err != nil {
+			return nil, err
+		}
+		msgs := make([]assistantInfo, len(export.Messages))
+		for i, m := range export.Messages {
+			msgs[i] = m.Info
+		}
+		groups = append(groups, msgs)
 	}
-	return msgs
+	return groups, nil
 }
 
 // finishStop is the finish reason opencode records for an assistant message
@@ -130,39 +111,27 @@ func messagesFromLegacyFiles(workspace string) []assistantInfo {
 // ended a step to call tools and never came back.
 const finishStop = "stop"
 
-// summarize folds the session's assistant messages into what the attempt
-// records: token sums, and whether the session ended the way a finished run
-// ends. The failure claim rests on positive evidence only -- an errored
-// message, or a runtime that reported finish reasons and never reported a
-// finished turn. A record that says nothing about how it ended (an older
-// opencode, a field that moves) leaves the process's own verdict standing,
-// because a capture that failed open costs one confusing run record while
-// one that failed closed would fail every run on the agent.
-func summarize(msgs []assistantInfo) Session {
-	var s Session
+// summarize folds the sessions into the Capture. Usage sums every
+// session's assistant messages -- a partial sum is a silently wrong usage
+// record -- but the outcome is judged from the most significant session
+// alone, the first-listed one that acted last: a clean ending in some
+// older session must not vouch for the session that actually held the run.
+func summarize(sessions [][]assistantInfo) Capture {
+	var s Capture
 	var u Usage
-	tokens, finished := false, false
-	lastFinish := ""
-	for _, m := range msgs {
-		if m.Role != "assistant" {
-			continue
-		}
-		if m.addTo(&u) {
-			tokens = true
-		}
-		if m.Error != nil && s.Failure == "" {
-			s.Failure = "the model session ended on an error: " + m.Error.describe()
-		}
-		if m.Finish != "" {
-			lastFinish = m.Finish
-			finished = finished || (m.Finish == finishStop && m.Error == nil)
+	tokens := false
+	for _, msgs := range sessions {
+		for _, m := range msgs {
+			if m.Role == "assistant" && m.addTo(&u) {
+				tokens = true
+			}
 		}
 	}
 	if tokens {
 		s.Usage = &u
 	}
-	if s.Failure == "" && lastFinish != "" && !finished {
-		s.Failure = fmt.Sprintf("the model session never finished a turn (last step finished on %q) -- the agent loop stopped on a step it did not come back from", lastFinish)
+	if len(sessions) > 0 {
+		s.Failure = judge(sessions[0])
 	}
 	// The claim quotes a model-writable record and outlives the mint
 	// registration that would otherwise redact it downstream (events, the
@@ -172,8 +141,36 @@ func summarize(msgs []assistantInfo) Session {
 	return s
 }
 
+// judge reads whether one session ended the way a finished run ends. The
+// failure claim rests on positive evidence only -- an errored message, or
+// a runtime that reported finish reasons and never reported a finished
+// turn. A record that says nothing about how it ended (an older opencode,
+// a field that moves) leaves the process's own verdict standing, because a
+// capture that failed open costs one confusing run record while one that
+// failed closed would fail every run on the agent.
+func judge(msgs []assistantInfo) string {
+	finished := false
+	lastFinish := ""
+	for _, m := range msgs {
+		if m.Role != "assistant" {
+			continue
+		}
+		if m.Error != nil {
+			return "the model session ended on an error: " + m.Error.describe()
+		}
+		if m.Finish != "" {
+			lastFinish = m.Finish
+			finished = finished || m.Finish == finishStop
+		}
+	}
+	if lastFinish != "" && !finished {
+		return fmt.Sprintf("the model session never finished a turn (last step finished on %q) -- the agent loop stopped on a step it did not come back from", lastFinish)
+	}
+	return ""
+}
+
 // assistantInfo is the slice of an opencode message record the capture
-// reads -- identical in the export payload and the legacy files. Field
+// reads from the export payload. Field
 // names are measured against the real runtime, not just its schema: across
 // 227 assistant messages written by opencode 1.18.3, `finish` was present
 // on 224 (values `stop` and `tool-calls`) and `error` on 3, always shaped
@@ -254,7 +251,7 @@ var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // empty directory is not a record.
 func exportSessions(meta Meta, oc opencodeExec, log *slog.Logger) string {
 	root := os.Getenv(EnvSessionDir)
-	if root == "" || oc == nil {
+	if root == "" {
 		return ""
 	}
 	raw, err := oc("session", "list", "--format", "json")

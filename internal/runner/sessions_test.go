@@ -21,18 +21,30 @@ func writeMsg(t *testing.T, dir, name, content string) {
 	}
 }
 
+// sessionOf answers the capture surface with one session holding the given
+// message records.
+func sessionOf(t *testing.T, msgs ...string) opencodeExec {
+	t.Helper()
+	infos := make([]string, len(msgs))
+	for i, m := range msgs {
+		infos[i] = `{"info":` + m + `}`
+	}
+	return stubOpencode(t, `[{"id":"ses_x"}]`, map[string]string{
+		"ses_x": `{"messages":[` + strings.Join(infos, ",") + `]}`,
+	})
+}
+
 // Usage sums assistant messages only; absence is nil, never zero.
 func TestCaptureUsage(t *testing.T) {
-	ws := t.TempDir()
-	if got := captureSession(ws, nil, discardLog).Usage; got != nil {
-		t.Fatalf("no store should be nil, got %+v", got)
+	if got := captureSessions(stubOpencode(t, `[]`, nil), discardLog).Usage; got != nil {
+		t.Fatalf("no sessions should be nil, got %+v", got)
 	}
-	store := filepath.Join(ws, ".home", ".local", "share", "opencode", "storage", "message", "ses_x")
-	writeMsg(t, store, "msg_1.json", `{"role":"assistant","modelID":"m","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":7,"write":3}},"cost":0.01}`)
-	writeMsg(t, store, "msg_2.json", `{"role":"assistant","tokens":{"input":50,"output":10,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.005}`)
-	writeMsg(t, store, "msg_3.json", `{"role":"user","tokens":{"input":999,"output":999}}`)
-	writeMsg(t, store, "msg_4.json", `not json`)
-	u := captureSession(ws, nil, discardLog).Usage
+	oc := sessionOf(t,
+		`{"role":"assistant","modelID":"m","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":7,"write":3}},"cost":0.01}`,
+		`{"role":"assistant","tokens":{"input":50,"output":10,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.005}`,
+		`{"role":"user","tokens":{"input":999,"output":999}}`,
+	)
+	u := captureSessions(oc, discardLog).Usage
 	if u == nil {
 		t.Fatal("expected usage")
 	}
@@ -76,12 +88,7 @@ func TestCaptureSessionFailure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ws := t.TempDir()
-			store := filepath.Join(ws, ".home", ".local", "share", "opencode", "storage", "message", "ses_x")
-			for i, m := range tc.messages {
-				writeMsg(t, store, fmt.Sprintf("msg_%02d.json", i), m)
-			}
-			got := captureSession(ws, nil, discardLog).Failure
+			got := captureSessions(sessionOf(t, tc.messages...), discardLog).Failure
 			if tc.want == "" && got != "" {
 				t.Fatalf("expected no claim, got %q", got)
 			}
@@ -99,58 +106,66 @@ func TestCaptureSessionFailure(t *testing.T) {
 func TestCaptureSessionFailureIsRedacted(t *testing.T) {
 	release := scrub.RegisterEphemeral("github_app bearer (gh)", "tok-sensitive-123")
 	defer release()
-	ws := t.TempDir()
-	store := filepath.Join(ws, ".home", ".local", "share", "opencode", "storage", "message", "ses_x")
-	writeMsg(t, store, "msg_00.json", `{"role":"assistant","error":{"name":"ProviderAuthError","data":{"message":"401 for token tok-sensitive-123"}}}`)
-	got := captureSession(ws, nil, discardLog).Failure
+	oc := sessionOf(t, `{"role":"assistant","error":{"name":"ProviderAuthError","data":{"message":"401 for token tok-sensitive-123"}}}`)
+	got := captureSessions(oc, discardLog).Failure
 	if strings.Contains(got, "tok-sensitive-123") || !strings.Contains(got, "[REDACTED:") {
 		t.Fatalf("session-derived failure text must be lifted redacted, got %q", got)
 	}
 }
 
-// The export path: ask opencode for the session, sum its assistant
-// messages; any exec failure falls back to the legacy files.
-func TestCaptureViaExport(t *testing.T) {
-	calls := [][]string{}
-	oc := func(args ...string) ([]byte, error) {
-		calls = append(calls, args)
-		switch args[0] {
-		case "session":
-			return []byte(`[{"id":"ses_abc","title":"t"}]`), nil
-		case "export":
-			if args[1] != "ses_abc" {
-				t.Fatalf("export called with %q", args[1])
-			}
-			return []byte(`{"info":{"id":"ses_abc"},"messages":[
-				{"info":{"role":"user"}},
-				{"info":{"role":"assistant","tokens":{"input":200,"output":30,"reasoning":8,"cache":{"read":11,"write":2}},"cost":0.02}},
-				{"info":{"role":"assistant","tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.01}}
-			]}`), nil
-		}
-		t.Fatalf("unexpected call %v", args)
-		return nil, nil
-	}
-	u := captureSession(t.TempDir(), oc, discardLog).Usage
-	if u == nil || u.Input != 300 || u.Output != 40 || u.Reasoning != 8 || u.CacheRead != 11 || u.CacheWrite != 2 {
-		t.Fatalf("export sums wrong: %+v", u)
-	}
-	if len(calls) != 2 {
-		t.Fatalf("expected list then export, got %v", calls)
-	}
-
-	// Exec failure: fall back to legacy files (none here -> nil), never error.
+// A broken capture surface degrades to an empty record -- no usage, no
+// outcome claim -- never an error: bookkeeping must not fail a run.
+func TestCaptureFailsOpen(t *testing.T) {
 	broken := func(...string) ([]byte, error) { return nil, os.ErrPermission }
-	if got := captureSession(t.TempDir(), broken, discardLog).Usage; got != nil {
-		t.Fatalf("broken exec should degrade to nil, got %+v", got)
-	}
 
-	// Empty session list (no session survived): legacy fallback still works.
-	ws := t.TempDir()
-	store := filepath.Join(ws, ".home", ".local", "share", "opencode", "storage", "message", "ses_x")
-	writeMsg(t, store, "msg_1.json", `{"role":"assistant","tokens":{"input":9,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}`)
-	empty := func(...string) ([]byte, error) { return []byte(`[]`), nil }
-	if got := captureSession(ws, empty, discardLog).Usage; got == nil || got.Input != 9 {
-		t.Fatalf("legacy fallback after empty list failed: %+v", got)
+	s := captureSessions(broken, discardLog)
+
+	if s.Usage != nil {
+		t.Fatalf("broken exec should degrade to nil usage, got %+v", s.Usage)
+	}
+	if s.Failure != "" {
+		t.Fatalf("broken exec must claim nothing about the outcome, got %q", s.Failure)
+	}
+}
+
+// The capture must sum every session the attempt left, not only the most
+// recent: the fresh home normally holds exactly one, but nothing enforces
+// that, and a partial sum is a silently wrong usage record.
+func TestCaptureSumsEverySession(t *testing.T) {
+	oc := stubOpencode(t, `[{"id":"ses_a"},{"id":"ses_b"}]`, map[string]string{
+		"ses_a": `{"messages":[{"info":{"role":"assistant","tokens":{"input":100,"output":20,"reasoning":6,"cache":{"read":9,"write":4}},"cost":0.01}}]}`,
+		"ses_b": `{"messages":[{"info":{"role":"assistant","tokens":{"input":50,"output":10,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.005}}]}`,
+	})
+
+	s := captureSessions(oc, discardLog)
+
+	if s.Failure != "" {
+		t.Fatalf("unexpected failure: %q", s.Failure)
+	}
+	u := s.Usage
+	if u == nil || u.Input != 150 || u.Output != 30 || u.Reasoning != 6 || u.CacheRead != 9 || u.CacheWrite != 4 {
+		t.Fatalf("capture must sum every session, got %+v", u)
+	}
+}
+
+// The outcome is judged from the most significant session alone: the first
+// listed, which `session list` orders most-recently-updated first, is the
+// session that acted last. A clean ending in some older session must not
+// vouch for the one that actually held the run -- while usage still sums
+// them all.
+func TestCaptureJudgesTheMostRecentSession(t *testing.T) {
+	oc := stubOpencode(t, `[{"id":"ses_live"},{"id":"ses_side"}]`, map[string]string{
+		"ses_live": `{"messages":[{"info":{"role":"assistant","tokens":{"input":100,"output":20,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.01,"finish":"tool-calls"}}]}`,
+		"ses_side": `{"messages":[{"info":{"role":"assistant","tokens":{"input":50,"output":10,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.005,"finish":"stop"}}]}`,
+	})
+
+	s := captureSessions(oc, discardLog)
+
+	if !strings.Contains(s.Failure, "tool-calls") {
+		t.Fatalf("an older session's clean end must not mask the latest session's unfinished turn, got %q", s.Failure)
+	}
+	if u := s.Usage; u == nil || u.Input != 150 || u.Output != 30 {
+		t.Fatalf("usage must still sum every session, got %+v", u)
 	}
 }
 
