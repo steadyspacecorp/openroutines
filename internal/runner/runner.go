@@ -366,6 +366,9 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	if err := copyDeclaredSkills(dir, workspace, r.FM.Skills); err != nil {
 		return nil, err
 	}
+	if err := applyDeclaredMCP(workspace, r.FM.MCP); err != nil {
+		return nil, err
+	}
 	// The worktree-reading section, under the caller's memory lock: the
 	// snapshot and cursor an attempt starts from must never be a
 	// settlement-in-progress halfway through writing. One read of the
@@ -1098,6 +1101,64 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 		}
 	}
 	return nil
+}
+
+// applyDeclaredMCP rewrites the workspace's opencode.json so its mcp block
+// holds only the servers the routine declared. Enforcement is unchanged -- the
+// generated definition's deny rules and the withheld credentials close an
+// ungranted server's surface either way; removing the entry keeps the run's
+// opencode from contacting the server at all, so an ungranted run neither
+// probes a remote endpoint it holds no credential for nor logs that
+// endpoint's needs_auth refusal. A config without an mcp block, or a run
+// granted every configured server, travels byte-for-byte as written. Raw JSON
+// values keep unrelated configuration from passing through interface{} and
+// losing its original scalar representation while the block is filtered.
+func applyDeclaredMCP(workspace string, granted []string) error {
+	path := filepath.Join(workspace, config.OpenCodeFileName)
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		// Stage's LoadOpenCode already failed the attempt for this; on any
+		// other path the file just travels as written.
+		return nil
+	}
+	mcpRaw, ok := cfg["mcp"]
+	if !ok {
+		return nil
+	}
+	var mcp map[string]json.RawMessage
+	if err := json.Unmarshal(mcpRaw, &mcp); err != nil || len(mcp) == 0 {
+		return nil
+	}
+	filtered := map[string]json.RawMessage{}
+	for _, name := range granted {
+		if entry, ok := mcp[name]; ok {
+			filtered[name] = entry
+		}
+	}
+	if len(filtered) == len(mcp) {
+		return nil
+	}
+	if len(filtered) == 0 {
+		delete(cfg, "mcp")
+	} else {
+		filteredRaw, err := json.Marshal(filtered)
+		if err != nil {
+			return err
+		}
+		cfg["mcp"] = filteredRaw
+	}
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
 // The standing instruction lives in instruction.md -- editable prose,

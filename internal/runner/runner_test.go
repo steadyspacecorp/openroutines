@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -238,6 +239,74 @@ func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 		t.Error("a routine party to a name collision must fail")
 	} else if !strings.Contains(err.Error(), "duplicate routine") {
 		t.Errorf("want the collision error, got %v", err)
+	}
+}
+
+// An ungranted MCP server's entry does not travel into the workspace's
+// opencode.json: the run's opencode never contacts it, so an ungranted run
+// cannot probe the endpoint or log its needs_auth refusal. Granted entries
+// and every other block pass through.
+func TestApplyDeclaredMCPFiltersUngrantedServers(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"openroutines.yml":  "name: t\n",
+		"opencode.json":     `{"mcp":{"steady":{"type":"remote","url":"https://example.com/mcp"},"other":{"type":"remote","url":"https://example.org/mcp"}},"provider":{"openrouter":{"options":{"baseURL":"https://example.net/v1"}}}}`,
+		"routines/daily.md": "---\nschedule: \"0 9 * * *\"\n---\nwork",
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	load := func(workspace string) map[string]any {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(workspace, "opencode.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+
+	workspace := t.TempDir()
+	if err := buildWorkspace(dir, workspace, "daily"); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyDeclaredMCP(workspace, []string{"steady"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := load(workspace)
+	mcp, _ := cfg["mcp"].(map[string]any)
+	if _, ok := mcp["steady"]; !ok {
+		t.Error("the granted server must travel into the workspace config")
+	}
+	if _, ok := mcp["other"]; ok {
+		t.Error("an ungranted server must not travel into the workspace config")
+	}
+	if _, ok := cfg["provider"]; !ok {
+		t.Error("blocks other than mcp must pass through")
+	}
+
+	bare := t.TempDir()
+	if err := buildWorkspace(dir, bare, "daily"); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyDeclaredMCP(bare, nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg = load(bare)
+	if _, ok := cfg["mcp"]; ok {
+		t.Error("a run with no MCP grants gets no mcp block at all")
+	}
+	if _, ok := cfg["provider"]; !ok {
+		t.Error("blocks other than mcp must pass through")
 	}
 }
 
