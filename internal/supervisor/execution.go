@@ -14,7 +14,7 @@ import (
 )
 
 // Runs one attempt of a pending logical run and settles the outcome.
-func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) (cleanupErr error) {
+func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time) (cleanupErr error) {
 	// Attempts interleave on one stdout, so the identity travels with the
 	// logger.
 	log := r.Log().With("run_id", st.Pending.RunID)
@@ -54,7 +54,6 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		Number:         pending.Attempts,
 		ScheduledFor:   pending.ScheduledFor,
 		CoveredThrough: pending.CoveredThrough,
-		AttemptUID:     attemptUID,
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()

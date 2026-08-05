@@ -3,6 +3,7 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,7 +13,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
-	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
 // Classifies how an attempt ended.
@@ -32,7 +32,6 @@ type Attempt struct {
 	Number         int
 	ScheduledFor   time.Time
 	CoveredThrough time.Time
-	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
 	Rehearsal      string // fixture path; set only for manual rehearsal runs
 	SnapshotDir    string // immutable knowledge tree supplied by a read-only CLI view
 	ReadOnly       bool   // deny acting and writing tools; no settlement path exists
@@ -62,9 +61,7 @@ type AttemptResult struct {
 // run; the supervisor only asks.
 var ErrFatal = errors.New("not retryable")
 
-// Marks a workspace that was not proven discarded. The
-// supervisor must poison the attempt identity instead of returning it to the
-// pool, or its next assignee could read the leftover tree.
+// Marks a workspace that was not proven discarded.
 var ErrAttemptCleanup = errors.New("attempt workspace cleanup failed")
 
 // Fixes the knowledge range prepared for a reporting routine.
@@ -81,39 +78,46 @@ type AttemptWorkspace struct {
 	// concurrent settlements compose.
 	BaseDir string
 	root    string
-	// Set when the workspace was prepared for an attempt
-	// identity: Cleanup may then need that identity's help to reclaim
-	// paths the model process chmodded away from the group.
-	attemptUID uint32
 
 	Delivery DeliveryBoundary
 }
 
-// Discards the whole run workspace, staging and base included. A
-// model process can chmod its own files away from the group, so removal may
-// need the attempt identity's own help (see removeAttemptTree).
+// Discards the whole run workspace, staging and base included. A run
+// keeps the supervisor's own uid, so everything the model process created is
+// owned by this process: no identity to negotiate with, and no mode a run can
+// set that the supervisor cannot set back.
 func (s *AttemptWorkspace) Cleanup() error {
-	if s.attemptUID != 0 {
-		// Kill anything still carrying the identity first: an escaped
-		// descendant could otherwise race the removal.
-		if err := sandbox.ReapIdentity(s.attemptUID); err != nil {
-			return fmt.Errorf("%w: reap uid %d before removal: %w", ErrAttemptCleanup, s.attemptUID, err)
-		}
-	}
-	if err := removeAttemptTree(s.attemptUID, s.root); err != nil {
+	if err := removeTree(s.root); err != nil {
 		return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.root, err)
 	}
 	if s.BaseDir != "" {
-		if err := os.RemoveAll(s.BaseDir); err != nil {
+		if err := removeTree(s.BaseDir); err != nil {
 			slog.Warn("could not remove the attempt's knowledge base snapshot", "path", s.BaseDir, "error", err)
 		}
 	}
 	return nil
 }
 
+// Deletes a tree a run may have chmodded shut behind itself. Owning every file
+// means the supervisor is *allowed* to restore the modes it needs, not that
+// os.RemoveAll does: a 0000 directory stops its walk with EACCES. One retry
+// pass is enough because WalkDir visits a directory before reading it.
+func removeTree(path string) error {
+	if err := os.RemoveAll(path); err == nil {
+		return nil
+	}
+	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(path)
+}
+
 // Reports whether the routine created the consume marker. The staged
-// knowledge directory is canonical (the one sandbox-writable workspace path);
-// the workspace root is still accepted for unsandboxed runs.
+// knowledge directory is canonical -- writable to the run in every isolation
+// shape; the workspace root is still accepted for unconfined runs.
 func (s *AttemptWorkspace) Consumed() bool {
 	if _, err := os.Stat(filepath.Join(s.KnowledgeDir, knowledge.ConsumeMarker)); err == nil {
 		return true

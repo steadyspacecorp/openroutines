@@ -1,10 +1,9 @@
 #!/bin/sh
-# Fake opencode for the in-container isolation test. A model run records the
-# identity it runs as into staged knowledge; capture calls (`session list`,
-# `export`) answer with the clean session record a finished run leaves --
-# and, like the real opencode, install files under HOME with modes that
-# deny the group (dirs 0755, files 0644), so the smoke run proves
-# capture-home cleanup reclaims and removes what the attempt identity left.
+# Fake opencode for the in-container isolation test. A model run records what
+# the sandbox does and does not let it reach; capture calls (`session list`,
+# `export`) answer with the clean session record a finished run leaves, and
+# install files under HOME the way the real opencode does, so the smoke run
+# proves the capture home is removed with what was left in it.
 case "$1" in
 session)
   umask 022
@@ -18,20 +17,39 @@ export)
   exit 0
   ;;
 esac
+
 mkdir -p knowledge/ledgers
-echo "uid=$(id -u) gid=$(id -g)" >> knowledge/ledgers/isolation.md
-# The umask keeps default modes group-accessible, but a model process can
-# still chmod its own files closed. Leave a locked tree in the attempt home
-# so the smoke run proves cleanup reclaims and removes it anyway.
+{
+  echo "uid=$(id -u) gid=$(id -g)"
+  # Where the sandbox can mount its own procfs the supervisor is not listed
+  # at all; where /proc is shared the process list leaks. Either way the thing
+  # that matters -- the environment holding the master key -- stays
+  # unreadable. Record both.
+  echo "visible-commands=$(cat /proc/[0-9]*/comm 2>/dev/null | sort -u | tr '\n' ' ')"
+  sup=$(grep -l '^Name:.openroutines' /proc/[0-9]*/status 2>/dev/null | head -1 | sed 's#/proc/##;s#/status##')
+  if [ -n "$sup" ]; then
+    echo "supervisor-environ=$(head -c 40 /proc/$sup/environ 2>&1 >/dev/null | sed 's/.*: //')"
+  else
+    echo "supervisor-environ=Permission denied (not even listed)"
+  fi
+  # The agent repository, the knowledge git worktree, and the supervisor's ssh
+  # key are outside what this sandbox grants.
+  echo "agent-repo=$(cat /agent/openroutines.yml 2>&1 >/dev/null | sed 's/.*: //')"
+  # The workspace this run was staged from is read-only; only staged knowledge,
+  # the run tmp, and this home are writable.
+  echo "workspace-write=$( (echo x > ./tampered) 2>&1 | sed 's/.*: //')"
+} >> knowledge/ledgers/isolation.md
+# A model process can chmod its own files closed. It blocks nothing -- the run
+# holds the supervisor's own uid -- but leave a locked tree behind so cleanup
+# is exercised against one.
 mkdir -p .home/locked
 echo hidden > .home/locked/secret
 chmod 600 .home/locked/secret
 chmod 700 .home/locked
-# Escape the run's process group into a new session: cleanup must kill this
-# before it removes the workspace, or the survivor could race the removal.
-# The escapee proves it started by writing to staged knowledge before sleeping
-# -- the record imports, so the smoke test can tell a killed survivor from
-# one that never existed.
+# Escape the run's process group into a new session: where the sandbox has a
+# pid namespace this must not outlive the run. The escapee proves it started
+# by writing to staged knowledge before sleeping -- the record imports, so the
+# smoke test can tell a killed survivor from one that never existed.
 setsid sh -c 'echo "escaped pid=$$" > knowledge/ledgers/escapee.md; exec sleep 300' </dev/null >/dev/null 2>&1 &
 while [ ! -s knowledge/ledgers/escapee.md ]; do sleep 0.1; done
 echo done
