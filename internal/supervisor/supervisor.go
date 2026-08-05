@@ -721,7 +721,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		s.errorf("%s: %s settle: %v", r.Name, p.RunID, serr)
 	}
 	if settlement.Discarded {
-		s.infof("%s: discarded staged events.md change (events: false)", r.Name)
+		s.infof("%s: discarded staged events.md change (teamwork: off)", r.Name)
 	}
 	for i, conflict := range settlement.Conflicted {
 		_ = s.mem.AppendHumanTask(fmt.Sprintf("task-%s-memory-conflict-%d", p.RunID, i+1),

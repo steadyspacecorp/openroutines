@@ -718,7 +718,7 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 func TestConsumerCursorAdvances(t *testing.T) {
 	dir := fixture(t, "consume")
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
-		"---\nschedule: \"* * * * *\"\nevents: false\nconsumes: memory\n---\nReport the fake thing.\n"), 0o644)
+		"---\nschedule: \"* * * * *\"\nteamwork: off\nconsumes: memory\n---\nReport the fake thing.\n"), 0o644)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)

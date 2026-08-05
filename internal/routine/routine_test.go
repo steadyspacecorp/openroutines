@@ -25,32 +25,46 @@ func TestParse(t *testing.T) {
 	if r.FM.Schedule != "0 9 * * 1" || r.Body != "Do the thing." {
 		t.Fatalf("unexpected parse: %+v body=%q", r.FM, r.Body)
 	}
-	if !r.FM.IsActive() || !r.FM.RecordsEvents() || !r.FM.Forecasts() {
-		t.Fatal("defaults should be active=true events=true forecast=true")
+	if !r.FM.IsActive() || !r.FM.RecordsEvents() || !r.FM.FullTeamwork() {
+		t.Fatal("defaults should be active=true teamwork=full")
 	}
 	if got := r.FM.EffectiveURL(); got != "https://example.com/agent" {
 		t.Fatalf("effective URL = %q, want declared URL", got)
 	}
 }
 
-func TestFrontmatterForecastDefaultsAndEventsFalseImpliesFalse(t *testing.T) {
-	on, off := true, false
+func TestFrontmatterTeamworkLadder(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		fm   Frontmatter
-		want bool
+		teamwork string
+		records  bool
+		full     bool
 	}{
-		{name: "default", fm: Frontmatter{}, want: true},
-		{name: "explicit true", fm: Frontmatter{Forecast: &on}, want: true},
-		{name: "explicit false", fm: Frontmatter{Forecast: &off}, want: false},
-		{name: "events false", fm: Frontmatter{Events: &off}, want: false},
-		{name: "events false overrides explicit true", fm: Frontmatter{Events: &off, Forecast: &on}, want: false},
+		{teamwork: "", records: true, full: true},
+		{teamwork: TeamworkFull, records: true, full: true},
+		{teamwork: TeamworkEvents, records: true, full: false},
+		{teamwork: TeamworkOff, records: false, full: false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.fm.Forecasts(); got != tc.want {
-				t.Fatalf("Forecasts() = %v, want %v", got, tc.want)
-			}
-		})
+		fm := Frontmatter{Teamwork: tc.teamwork}
+		if got := fm.RecordsEvents(); got != tc.records {
+			t.Errorf("teamwork %q: RecordsEvents() = %v, want %v", tc.teamwork, got, tc.records)
+		}
+		if got := fm.FullTeamwork(); got != tc.full {
+			t.Errorf("teamwork %q: FullTeamwork() = %v, want %v", tc.teamwork, got, tc.full)
+		}
+	}
+}
+
+func TestParseRejectsUnknownTeamworkValue(t *testing.T) {
+	_, err := Parse(writeTemp(t, "---\nschedule: \"0 9 * * *\"\nteamwork: quiet\n---\nBody.\n"))
+	if err == nil || !strings.Contains(err.Error(), "must be full, events, or off") {
+		t.Fatalf("expected teamwork value error, got %v", err)
+	}
+}
+
+func TestParseRejectsRetiredEventsKey(t *testing.T) {
+	_, err := Parse(writeTemp(t, "---\nschedule: \"0 9 * * *\"\nevents: false\n---\nBody.\n"))
+	if err == nil || !strings.Contains(err.Error(), `"teamwork: off"`) {
+		t.Fatalf("expected retired-key error carrying the mapping, got %v", err)
 	}
 }
 

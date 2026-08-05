@@ -193,9 +193,6 @@ func cmdCheck(args []string) int {
 		if r.FM.Consumes != "" && r.FM.Consumes != "memory" {
 			errs = append(errs, fmt.Sprintf("consumes %q: the only supported feed is \"memory\"", r.FM.Consumes))
 		}
-		if r.FM.Events != nil && !*r.FM.Events && r.FM.Forecast != nil && *r.FM.Forecast {
-			errs = append(errs, "forecast: true contradicts events: false -- a routine that does not record work cannot forecast it")
-		}
 		for _, c := range r.FM.Credentials {
 			switch {
 			case !creds.NamePattern.MatchString(c):

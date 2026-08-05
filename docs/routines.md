@@ -28,7 +28,6 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 | `timeout` | Per-run timeout (default from `openroutines.yml`'s `defaults:`). On expiry the whole process group is killed and the outcome recorded. Every run ends with its process group either way, expiry or not: a tool the run backgrounded is killed with it, unless it detached into a session of its own. The ceiling is the agent's `max_timeout` in `openroutines.yml` (6h when unset) -- a runaway-spend guard, not a system limit; a larger declared value is capped at the ceiling and `check` warns. |
 | `url` | A canonical URL for external records this routine creates. It arrives as `$OPENROUTINES_URL`; the default is `https://openroutines.dev`. |
 | `active` | `false` parks the routine; the supervisor skips it. `routines activate` / `deactivate` flip it. |
-| `forecast` | `false` lists scheduled fires in `schedule.md` as facts rather than forecast work. Runs still record what they do. Defaults to `true`; `events: false` implies `false`. |
 | `skills` | The skills this routine may load -- and only these. See [Extending your agent](extending.md). |
 | `credentials` | The credentials injected into this run's environment -- and only these. `steady_token` arrives as `$STEADY_TOKEN`. |
 | `webfetch` | `true` grants the webfetch tool. Denied by default: fetched pages become model context, making web access a prompt-injection vector you opt into per routine. |
@@ -36,7 +35,7 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 | `mcp` | Names of MCP servers (defined in `opencode.json`) whose tools this routine may call. Denied by default: a server's tool descriptions are third-party text entering model context -- a grant to review like a skill or credential. See [MCP servers](#mcp-servers). |
 | `model` | Provider/model override of the agent default, e.g. `anthropic/claude-sonnet-5`. |
 | `effort` | Provider-specific reasoning effort. |
-| `events` | `false` opts this routine out of recording events -- for reporting routines, where checking in is not work. See [Your agent on the team](teamwork.md). |
+| `teamwork` | Participation in the teamwork loop. `full` (default): runs are recorded as events, and scheduled fires fill `schedule.md`'s tables. `events`: runs are still recorded, but fires appear as `fact:` lines -- the work still happens on schedule, it just isn't advertised. `off`: neither -- for reporting routines, where checking in is not work. See [Your agent on the team](teamwork.md). |
 | `consumes` | `memory`: this routine consumes the memory change feed -- it receives an inbox of everything since it last reported. See [Your agent on the team](teamwork.md). |
 
 ## Scheduling

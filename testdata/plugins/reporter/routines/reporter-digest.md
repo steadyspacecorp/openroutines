@@ -2,7 +2,7 @@
 schedule: "0 9 * * 1-5"
 timeout: 5m
 active: true
-events: false
+teamwork: off
 consumes: memory
 skills: [reporter-format]
 credentials: [reporter_token]

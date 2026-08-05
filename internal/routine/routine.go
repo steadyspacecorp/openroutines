@@ -40,25 +40,42 @@ type Frontmatter struct {
 	Skills      []string      `yaml:"skills"`
 	Credentials []string      `yaml:"credentials"`
 	Model       string        `yaml:"model,omitempty"`
-	Effort      string        `yaml:"effort,omitempty"` // provider-specific reasoning effort (opencode --variant)
-	Events      *bool         `yaml:"events,omitempty"`
-	Forecast    *bool         `yaml:"forecast,omitempty"`
+	Effort      string        `yaml:"effort,omitempty"`    // provider-specific reasoning effort (opencode --variant)
+	Teamwork    string        `yaml:"teamwork,omitempty"`  // participation ladder: "full" (default), "events", "off"
 	Consumes    string        `yaml:"consumes,omitempty"`  // "memory": this routine consumes the memory change feed
 	Webfetch    bool          `yaml:"webfetch,omitempty"`  // grants the webfetch tool; external content is an injection vector, so off by default
 	Websearch   bool          `yaml:"websearch,omitempty"` // grants the websearch tool (and enables its search backend)
 	MCP         []string      `yaml:"mcp,omitempty"`       // grants a configured MCP server's tools; third-party tool text is an injection vector, so none by default
+
+	// Events is retired, replaced by Teamwork. It is parsed only so Parse can
+	// reject it with the migration mapping: strict decoding alone would call
+	// it an unknown field, which reads as a typo rather than a rename.
+	Events *bool `yaml:"events,omitempty"`
 }
+
+// The teamwork ladder: each value names the highest tier of the teamwork
+// loop the routine participates in. Strictly ordered -- a routine whose
+// fires fill the schedule's tables must record what its runs do -- so of
+// the underlying states only these three are legal, and the contradiction
+// is unrepresentable.
+const (
+	TeamworkFull   = "full"   // default: runs recorded as events, fires fill the schedule's tables
+	TeamworkEvents = "events" // runs recorded as events; fires appear as fact lines only
+	TeamworkOff    = "off"    // invisible to the team: checking in is not work
+)
 
 // IsActive applies the default: routines are active unless explicitly not.
 func (f Frontmatter) IsActive() bool { return f.Active == nil || *f.Active }
 
-// RecordsEvents applies the default: runs record events unless opted out.
-func (f Frontmatter) RecordsEvents() bool { return f.Events == nil || *f.Events }
+// RecordsEvents reports whether runs land in the shared record: every
+// teamwork tier except off.
+func (f Frontmatter) RecordsEvents() bool { return f.Teamwork != TeamworkOff }
 
-// Forecasts applies the default and the events implication: a routine that
-// does not record work cannot present its scheduled fire as forecast work.
-func (f Frontmatter) Forecasts() bool {
-	return f.RecordsEvents() && (f.Forecast == nil || *f.Forecast)
+// FullTeamwork reports whether the routine participates fully in the
+// teamwork loop: its runs are recorded and its scheduled fires fill the
+// schedule's tables rather than its fact lines.
+func (f Frontmatter) FullTeamwork() bool {
+	return f.Teamwork == "" || f.Teamwork == TeamworkFull
 }
 
 // IsConsumer reports whether the routine declared itself a memory consumer.
@@ -118,6 +135,14 @@ func Parse(path string) (*Routine, error) {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 			return nil, fmt.Errorf("frontmatter: url %q must be an absolute http(s) URL without credentials", fm.URL)
 		}
+	}
+	switch fm.Teamwork {
+	case "", TeamworkFull, TeamworkEvents, TeamworkOff:
+	default:
+		return nil, fmt.Errorf("frontmatter: teamwork %q must be full, events, or off", fm.Teamwork)
+	}
+	if fm.Events != nil {
+		return nil, errors.New(`frontmatter: the events key is retired -- "events: false" is now "teamwork: off"; "events: true" was the default, so delete the line`)
 	}
 	body := ""
 	if bodyStart := end + len("\n---\n"); bodyStart <= len(rest) {

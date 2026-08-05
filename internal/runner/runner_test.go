@@ -293,7 +293,6 @@ func TestInstructionRendering(t *testing.T) {
 	}
 
 	agent.Variables = map[string]string{"product_repo": "acme/widgets", "docs_url": "https://docs.example.com"}
-	off := false
 	full := render(routine.Frontmatter{Consumes: "memory"})
 	for _, want := range []string{
 		"You are test-agent",
@@ -321,7 +320,7 @@ func TestInstructionRendering(t *testing.T) {
 	if strings.Contains(full, "does not record events") {
 		t.Fatalf("no-events rule rendered for an events-recording routine:\n%s", full)
 	}
-	plain := render(routine.Frontmatter{Events: &off})
+	plain := render(routine.Frontmatter{Teamwork: routine.TeamworkOff})
 	for _, banned := range []string{"Every run appends", "Delivery inbox", "append an event to memory/events.md"} {
 		if strings.Contains(plain, banned) {
 			t.Fatalf("conditional block %q rendered when its flag was off:\n%s", banned, plain)
@@ -329,7 +328,7 @@ func TestInstructionRendering(t *testing.T) {
 	}
 	for _, want := range []string{"does not record events", "never write to memory/events.md"} {
 		if !strings.Contains(plain, want) {
-			t.Fatalf("events: false instruction missing %q:\n%s", want, plain)
+			t.Fatalf("teamwork: off instruction missing %q:\n%s", want, plain)
 		}
 	}
 	agent.Variables = nil
@@ -338,7 +337,7 @@ func TestInstructionRendering(t *testing.T) {
 	}
 }
 
-// events: false is enforced at import, not just instructed: a staged change
+// teamwork: off is enforced at import, not just instructed: a staged change
 // to events.md is discarded (worktree copy wins) while the rest imports.
 func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 	setup := func(t *testing.T) (string, *Staging) {
@@ -358,9 +357,8 @@ func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 		return dir, staging
 	}
 
-	off := false
 	dir, staging := setup(t)
-	r := &routine.Routine{Name: "quiet", FM: routine.Frontmatter{Events: &off}}
+	r := &routine.Routine{Name: "quiet", FM: routine.Frontmatter{Teamwork: routine.TeamworkOff}}
 	discarded, _, err := importMemory(dir, r, staging)
 	if err != nil || !discarded {
 		t.Fatalf("discarded=%v err=%v, want true nil", discarded, err)
