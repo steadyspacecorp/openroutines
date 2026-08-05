@@ -98,6 +98,8 @@ case "$1" in
   session) printf '[{"id":"ses_fake"}]'; exit 0 ;;
   export) printf '{"messages":[{"info":%s}]}' "$(cat "$msg")"; exit 0 ;;
 esac
+# A run invocation: record the argv the runner spawned it with.
+printf '%s\n' "$@" > "$d/argv"
 # Every run leaves the message record a real opencode persists -- the
 # surface export renders, where the runner reads token usage and how the
 # session ended.
@@ -339,6 +341,23 @@ func replacementState(t *testing.T, name string) *schedule.State {
 		t.Fatal(err)
 	}
 	return st
+}
+
+// An unattended run must ask opencode for JSON events: the default
+// progress rendering arrives on stderr, where it would masquerade as
+// passed-through log lines. (A manual run keeps the rendering -- that is
+// the one place run output reaches a person.)
+func TestSupervisedRunAsksForJSONEvents(t *testing.T) {
+	dir := fixture(t, "ok")
+	s := newSupervisor(t, dir)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(61*time.Second))
+	argv := readFile(t, filepath.Join(fakeBinDir(), "argv"))
+	if !strings.Contains(argv, "--format\njson") {
+		t.Fatalf("supervised runs must pass --format json, argv:\n%s", argv)
+	}
 }
 
 func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
