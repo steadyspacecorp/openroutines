@@ -71,14 +71,12 @@ func TestCaptureUsage(t *testing.T) {
 		`{"role":"user","tokens":{"input":999,"output":999}}`,
 	)
 	u := captureVia(t, oc).Usage
-	if u == nil {
+	switch {
+	case u == nil:
 		t.Fatal("expected usage")
-		return
-	}
-	if u.Input != 150 || u.Output != 30 || u.Reasoning != 5 || u.CacheRead != 7 || u.CacheWrite != 3 {
+	case u.Input != 150 || u.Output != 30 || u.Reasoning != 5 || u.CacheRead != 7 || u.CacheWrite != 3:
 		t.Fatalf("sums wrong: %+v", u)
-	}
-	if u.CostReported < 0.0149 || u.CostReported > 0.0151 {
+	case u.CostReported < 0.0149 || u.CostReported > 0.0151:
 		t.Fatalf("cost wrong: %v", u.CostReported)
 	}
 }
