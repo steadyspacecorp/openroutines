@@ -1,11 +1,23 @@
 #!/bin/sh
-# Fake opencode for the in-container isolation test: records the identity it
-# runs as into staged knowledge and leaves the session storage a clean run
-# leaves (the runner reads it to decide the session ended, and to capture
-# token usage).
-mkdir -p .home/.local/share/opencode/storage/message/ses_fake
-printf '{"role":"assistant","modelID":"fake","finish":"stop","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}' \
-  > .home/.local/share/opencode/storage/message/ses_fake/msg_1.json
+# Fake opencode for the in-container isolation test. A model run records the
+# identity it runs as into staged knowledge; capture calls (`session list`,
+# `export`) answer with the clean session record a finished run leaves --
+# and, like the real opencode, install files under HOME with modes that
+# deny the group (dirs 0755, files 0644), so the smoke run proves
+# capture-home cleanup reclaims and removes what the attempt identity left.
+case "$1" in
+session)
+  umask 022
+  mkdir -p "$HOME/.cache/opencode"
+  echo cached > "$HOME/.cache/opencode/state"
+  printf '[{"id":"ses_fake"}]\n'
+  exit 0
+  ;;
+export)
+  printf '{"messages":[{"info":{"role":"assistant","modelID":"fake","finish":"stop","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}}]}\n'
+  exit 0
+  ;;
+esac
 mkdir -p knowledge/ledgers
 echo "uid=$(id -u) gid=$(id -g)" >> knowledge/ledgers/isolation.md
 # The umask keeps default modes group-accessible, but a model process can

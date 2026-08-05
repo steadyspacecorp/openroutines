@@ -158,14 +158,8 @@ func (s *Staging) Cleanup() error {
 			return fmt.Errorf("%w: reap uid %d before removal: %w", ErrAttemptCleanup, s.attemptUID, err)
 		}
 	}
-	if err := os.RemoveAll(s.workspace); err != nil {
-		if s.attemptUID == 0 {
-			return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.workspace, err)
-		}
-		reclaimErr := reclaimAttemptTrees(s.attemptUID, s.workspace)
-		if removeErr := os.RemoveAll(s.workspace); removeErr != nil {
-			return fmt.Errorf("%w: reclaim uid %d tree and remove %s", errors.Join(ErrAttemptCleanup, reclaimErr, removeErr), s.attemptUID, s.workspace)
-		}
+	if err := removeAttemptTree(s.attemptUID, s.workspace); err != nil {
+		return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.workspace, err)
 	}
 	if s.BaseDir != "" {
 		if err := os.RemoveAll(s.BaseDir); err != nil {
@@ -173,16 +167,6 @@ func (s *Staging) Cleanup() error {
 		}
 	}
 	return nil
-}
-
-// reclaimAttemptTrees spawns the capless helper as the attempt identity to
-// restore group bits on paths that identity owns. Cleanup retries removal
-// either way and includes this error if the retry also fails.
-func reclaimAttemptTrees(uid uint32, root string) error {
-	cmd := exec.Command(sandbox.HelperPath, "sandbox-reclaim", root)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid}}
-	return cmd.Run()
 }
 
 // Consumed reports whether the routine created the consume marker: its
