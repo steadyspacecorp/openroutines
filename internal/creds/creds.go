@@ -100,16 +100,6 @@ func LoadKey(dir string) ([]byte, error) {
 	return key, nil
 }
 
-// Reports whether the master key *value* is present in this
-// process's environment (visible to platform introspection, crash dumps,
-// anything running as root) rather than only reachable via a file path.
-// Checks the variable directly rather than which delivery LoadKey resolved,
-// since a deployment that switched to file delivery but left the old
-// variable set still exposes the value.
-func KeyValueInEnv() bool {
-	return os.Getenv(EnvMasterKey) != ""
-}
-
 func seal(key, plaintext []byte) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {

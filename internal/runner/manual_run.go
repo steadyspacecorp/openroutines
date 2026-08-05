@@ -8,7 +8,6 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/lock"
-	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/run"
 )
@@ -40,19 +39,11 @@ Follow the routine below exactly, under these restraints.
 
 `
 
-// Executes routine name manually. Rehearsals always discard knowledge.
-// In the production container a manual run reserves the manual attempt
-// identity, so it can never share a uid with a supervisor slot.
+// Executes routine name manually; rehearsals always discard knowledge.
+// In the production container it needs no reservation of its own: its
+// sandbox is built from its own workspace, like every other run's.
 func RunManual(dir, name string, options ManualOptions) (result *ManualResult, err error) {
 	attempt := Attempt{RunID: run.NewID(), Number: 1, Rehearsal: options.Fixture}
-	if mode.Current() == mode.DeployedContainer {
-		uid, releaseIdentity, err := reserveManualIdentity(dir)
-		if err != nil {
-			return nil, err
-		}
-		defer releaseIdentity()
-		attempt.AttemptUID = uid
-	}
 	agent, err := config.Load(dir)
 	if err != nil {
 		return nil, fmt.Errorf("not an agent repository: %w", err)

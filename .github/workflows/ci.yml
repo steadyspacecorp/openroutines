@@ -52,8 +52,24 @@ jobs:
       - name: check
         run: make check
 
+      # The runner restricts unprivileged user namespaces through AppArmor,
+      # on the runner itself and equally inside Docker, where no
+      # --security-opt lifts it. Left alone, CI would cover no bubblewrap rung
+      # at all -- so lift it, which is exactly what docs/operating.md tells an
+      # operator to do on such a host.
+      - name: bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: permit unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # REQUIRE_SANDBOX turns "no sandbox here" from a skip into a failure, so
+      # a rung that stops being reachable is a red build rather than a quiet
+      # lapse in coverage of the boundary production depends on.
       - name: test
         run: make test-race
+        env:
+          OPENROUTINES_REQUIRE_SANDBOX: 1
 
       - name: smoke
         run: make smoke

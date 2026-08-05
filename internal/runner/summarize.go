@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
-	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/run"
 )
@@ -49,14 +48,6 @@ func SummarizeKnowledge(dir, snapshotDir, commit string, since, through time.Tim
 		Body: knowledgeSummaryPrompt + fmt.Sprintf("\n\nSummary window: %s through %s.\nSnapshot commit: %s", since.Format(time.RFC3339), through.Format(time.RFC3339), commit),
 	}
 	attempt := Attempt{RunID: run.NewID(), Number: 1, SnapshotDir: snapshotDir, ReadOnly: true}
-	if mode.Current() == mode.DeployedContainer {
-		uid, releaseIdentity, err := reserveManualIdentity(dir)
-		if err != nil {
-			return nil, err
-		}
-		defer releaseIdentity()
-		attempt.AttemptUID = uid
-	}
 	prepared, err := Stage(dir, agent, r, attempt, &sync.Mutex{})
 	if err != nil {
 		return nil, err

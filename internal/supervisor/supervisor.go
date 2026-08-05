@@ -17,16 +17,13 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/lock"
-	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
-	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
 // Scheduling constants: the tick cadence and the per-run attempt cap.
 const (
-	TickInterval   = time.Minute
-	MaxAttempts    = 5
-	attemptUIDBase = sandbox.AttemptUIDBase
+	TickInterval = time.Minute
+	MaxAttempts  = 5
 )
 
 // Reports whether a tick will act on a routine at all. Exported
@@ -57,14 +54,12 @@ type Supervisor struct {
 }
 
 type runPool struct {
-	slots          chan uint32
+	slots          chan struct{}
 	runs           sync.WaitGroup
 	inFlightMu     sync.Mutex
 	inFlight       map[string]bool
 	waitLogged     map[string]bool
 	cooldownWarned map[string]bool
-	fatal          chan error
-	reap           func(uint32) error
 }
 
 type blockerTracker struct {
@@ -103,9 +98,9 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	slots := make(chan uint32, agent.RunSlots())
-	for i := range agent.RunSlots() {
-		slots <- uint32(attemptUIDBase + i)
+	slots := make(chan struct{}, agent.RunSlots())
+	for range agent.RunSlots() {
+		slots <- struct{}{}
 	}
 	return &Supervisor{
 		Dir:         dir,
@@ -123,8 +118,6 @@ func New(dir string) (*Supervisor, error) {
 			inFlight:       map[string]bool{},
 			waitLogged:     map[string]bool{},
 			cooldownWarned: map[string]bool{},
-			fatal:          make(chan error, 1),
-			reap:           sandbox.ReapIdentity,
 		},
 		blockers: blockerTracker{loadFailed: map[string]string{}},
 		triggers: triggerTracker{
@@ -144,10 +137,15 @@ func (s *Supervisor) InstanceID() string { return s.lease.instanceID }
 func (s *Supervisor) Run(ctx context.Context) error {
 	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
 	// same-UID model processes -- set before any child exists.
-	if err := sandbox.ProtectProcess(); err != nil {
+	if err := protectSelf(); err != nil {
 		slog.Warn("could not mark the supervisor non-dumpable", "error", err)
 	}
-	s.warnKeyDelivery()
+	// Before the deploy key is materialized, the lease is taken, or anything
+	// touches git: a key the runs could read is worth failing on while the
+	// deployment has changed nothing yet.
+	if err := verifyKeyDelivery(); err != nil {
+		return err
+	}
 	if configured, err := knowledge.ConfigureDeployKey(); err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	} else if configured {
@@ -174,7 +172,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		defer func() { s.store.ReleaseLease(s.lease.sha) }()
 	}
 	slog.Info("supervising", "dir", s.Dir, "instance", s.lease.instanceID, "tick", TickInterval)
-	if err := s.verifySandbox(); err != nil {
+	if err := s.verifyIsolation(); err != nil {
 		return err
 	}
 
@@ -191,11 +189,6 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			s.pool.runs.Wait()
 			s.shutdown()
 			return nil
-		case err := <-s.pool.fatal:
-			cancelRuns()
-			s.pool.runs.Wait()
-			s.shutdown()
-			return err
 		case <-ticker.C:
 		}
 	}
@@ -233,9 +226,8 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			}
 			continue
 		}
-		var attemptUID uint32
 		select {
-		case attemptUID = <-s.pool.slots:
+		case <-s.pool.slots:
 		default:
 			release()
 			// warn, not info: due work parked behind a full pool looks idle
@@ -250,34 +242,19 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		delete(s.pool.waitLogged, planned.routine.Name)
 		s.setRunning(planned.routine.Name, true)
 		s.pool.runs.Add(1)
-		go func(run dueRun, uid uint32, release func()) {
+		go func(run dueRun, release func()) {
 			defer s.pool.runs.Done()
 			defer release()
 			defer s.setRunning(run.routine.Name, false)
-			cleanupErr := s.execute(ctx, run.routine, run.state, now, uid)
-			if !s.releaseIdentity(uid, cleanupErr) {
-				return
+			// A failed workspace cleanup is an operator-visible fault rather
+			// than a fatal one: the next attempt gets a fresh workspace and a
+			// fresh sandbox, and nothing of this run's is reused.
+			if err := s.execute(ctx, run.routine, run.state, now); err != nil {
+				run.routine.Log().Error("attempt workspace cleanup failed -- a stale run directory was left behind", "error", err)
 			}
-		}(planned, attemptUID, release)
+			s.pool.slots <- struct{}{}
+		}(planned, release)
 	}
-}
-
-func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
-	err := cleanupErr
-	if mode.Current() == mode.DeployedContainer {
-		err = errors.Join(err, s.pool.reap(uid))
-	}
-	if err != nil {
-		fatal := fmt.Errorf("attempt uid %d cleanup failed -- refusing to reuse identity: %w", uid, err)
-		slog.Error("attempt uid cleanup failed -- refusing to reuse identity", "uid", uid, "error", err)
-		select {
-		case s.pool.fatal <- fatal:
-		default:
-		}
-		return false // poisoned: never return this identity to the pool
-	}
-	s.pool.slots <- uid
-	return true
 }
 
 func (s *Supervisor) shutdown() {

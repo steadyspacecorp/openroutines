@@ -2,7 +2,6 @@ package supervisor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,69 +16,9 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
+	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
-
-func TestAttemptIdentityIsNotReusedWhenCleanupFails(t *testing.T) {
-	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
-	s := &Supervisor{
-		pool: runPool{
-			slots: make(chan uint32, 1),
-			fatal: make(chan error, 1),
-			reap: func(uid uint32) error {
-				return fmt.Errorf("pid escaped uid %d", uid)
-			},
-		},
-	}
-	if s.releaseIdentity(20000, nil) {
-		t.Fatal("cleanup failure returned the identity to the pool")
-	}
-	if len(s.pool.slots) != 0 {
-		t.Fatal("poisoned identity is available for reuse")
-	}
-	select {
-	case err := <-s.pool.fatal:
-		if !strings.Contains(err.Error(), "refusing to reuse identity") {
-			t.Fatalf("fatal error = %v", err)
-		}
-	default:
-		t.Fatal("cleanup failure did not stop supervision")
-	}
-}
-
-func TestAttemptIdentityIsNotReusedWhenWorkspaceCleanupFails(t *testing.T) {
-	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
-	s := &Supervisor{
-		pool: runPool{
-			slots: make(chan uint32, 1),
-			fatal: make(chan error, 1),
-			reap:  func(uint32) error { return nil },
-		},
-	}
-	if s.releaseIdentity(20000, errors.New("attempt workspace still exists")) {
-		t.Fatal("workspace cleanup failure returned the identity to the pool")
-	}
-	if len(s.pool.slots) != 0 {
-		t.Fatal("poisoned identity is available for reuse")
-	}
-	select {
-	case err := <-s.pool.fatal:
-		if !strings.Contains(err.Error(), "attempt workspace still exists") {
-			t.Fatalf("fatal error = %v", err)
-		}
-	default:
-		t.Fatal("workspace cleanup failure did not stop supervision")
-	}
-}
-
-func TestVerifyAttemptGroupsChecksEveryRunSlot(t *testing.T) {
-	if err := verifyAttemptGroups([]int{20000}, 2); err == nil || !strings.Contains(err.Error(), "20001") {
-		t.Fatalf("group check error = %v, want missing second slot group", err)
-	}
-	if err := verifyAttemptGroups([]int{20000, 20001}, 2); err != nil {
-		t.Fatalf("complete group set rejected: %v", err)
-	}
-}
 
 // A stand-in for the real binary: it reads fake-mode from
 // its own directory (the workspace is allow-list built and carries no test
@@ -1191,7 +1130,7 @@ func TestLeaseLostAfterStagingHandsTheAttemptBack(t *testing.T) {
 	// Drain the pool so the next tick mints the pending record but cannot
 	// dispatch it: the reservation has to happen below, under a lease that
 	// is already lost -- a window plan's own heartbeat cannot see.
-	uid := <-s.pool.slots
+	<-s.pool.slots
 	s.tickWait(ctx, t0.Add(61*time.Second))
 	st := loadState(t, s)
 	if st.Pending == nil {
@@ -1205,7 +1144,7 @@ func TestLeaseLostAfterStagingHandsTheAttemptBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cleanupErr := s.execute(ctx, r, st, t0.Add(61*time.Second), uid); cleanupErr != nil {
+	if cleanupErr := s.execute(ctx, r, st, t0.Add(61*time.Second)); cleanupErr != nil {
 		t.Fatal(cleanupErr)
 	}
 
@@ -1536,23 +1475,26 @@ func TestRunRecordCarriesUsage(t *testing.T) {
 	}
 }
 
-// Env delivery of the master key stays supported -- some platforms cannot
-// mount a file -- but boot names it as the weaker choice, because a
-// deployment that picked it once is never told again.
-func TestBootWarnsOnEnvDeliveredMasterKey(t *testing.T) {
-	dir := fixture(t, "ok")
-	s := newSupervisor(t, dir)
+// Env delivery stays supported -- some platforms cannot mount a file -- but
+// boot names it as the weaker choice, because a deployment that picked it once
+// is never told again.
+func TestBootWarnsOnEnvDeliveredKeys(t *testing.T) {
 	logs := logtest.Capture(t)
 
 	t.Setenv(creds.EnvMasterKey, creds.GenerateKey())
-	s.warnKeyDelivery()
+	t.Setenv(knowledge.EnvDeployKey, "PRIVATE KEY") // gitleaks:allow -- a placeholder, not a key
+	if err := verifyKeyDelivery(); err != nil {
+		t.Fatal(err)
+	}
 	if got := logs.String(); got != "" {
-		t.Errorf("outside the container there is nothing to warn about: %q", got)
+		t.Errorf("outside production there is nothing to warn about: %q", got)
 	}
 
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
-	s.warnKeyDelivery()
-	logs.Expect(creds.EnvMasterKeyFile)
+	if err := verifyKeyDelivery(); err != nil {
+		t.Fatal(err)
+	}
+	logs.Expect(creds.EnvMasterKeyFile, knowledge.EnvDeployKeyFile)
 
 	keyFile := filepath.Join(t.TempDir(), "master.key")
 	if err := os.WriteFile(keyFile, []byte(creds.GenerateKey()), 0o600); err != nil {
@@ -1560,15 +1502,82 @@ func TestBootWarnsOnEnvDeliveredMasterKey(t *testing.T) {
 	}
 	t.Setenv(creds.EnvMasterKeyFile, keyFile)
 	logs.Reset()
-	s.warnKeyDelivery()
-	if !strings.Contains(logs.String(), creds.EnvMasterKey) {
-		t.Errorf("a leftover variable still publishes the value, file delivery or not: %q", logs.String())
+	if err := verifyKeyDelivery(); err != nil {
+		t.Fatal(err)
 	}
+	logs.Expect(creds.EnvMasterKey)
 
 	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(knowledge.EnvDeployKey, "")
 	logs.Reset()
-	s.warnKeyDelivery()
+	if err := verifyKeyDelivery(); err != nil {
+		t.Fatal(err)
+	}
 	if got := logs.String(); got != "" {
 		t.Errorf("file delivery with no leftover variable is the recommended path: %q", got)
+	}
+}
+
+// A host where no rung works would leave an operator with no agent at all, so
+// there is a way out -- visible in the log every boot, because it is the one
+// shape where a routine can reach another routine's credentials.
+func TestBootRunsUnconfinedWhenTheOperatorDisablesTheSandbox(t *testing.T) {
+	logs := logtest.Capture(t)
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(sandbox.EnvDisable, "1")
+
+	if err := (&Supervisor{}).verifyIsolation(); err != nil {
+		t.Fatalf("the hatch should let a supervisor start where nothing can confine a run: %v", err)
+	}
+	logs.Expect("WARN", sandbox.EnvDisable)
+
+	// And the checks that exist to protect the grant list stop applying, rather
+	// than refusing a deployment over the smaller version of a tradeoff its
+	// operator already made.
+	t.Setenv(creds.EnvMasterKeyFile, "/usr/local/etc/master.key")
+	if err := verifyKeyDelivery(); err != nil {
+		t.Errorf("with no sandbox there is no grant list to sit outside of: %v", err)
+	}
+}
+
+// File delivery keeps a key out of every environment but moves the question to
+// where the file sits: a run shares the supervisor's uid, so a key under a
+// granted path is readable at any mode. Fatal rather than a warning -- unlike
+// env delivery it is reachable by the very thing the sandbox contains.
+func TestBootRefusesAKeyFileTheSandboxWouldGrant(t *testing.T) {
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(creds.EnvMasterKeyFile, "/run/secrets/master.key")
+	t.Setenv(knowledge.EnvDeployKeyFile, "")
+	if err := verifyKeyDelivery(); err != nil {
+		t.Errorf("a key outside every granted path is the supported deployment: %v", err)
+	}
+
+	t.Setenv(creds.EnvMasterKeyFile, "/usr/local/etc/master.key")
+	err := verifyKeyDelivery()
+	if err == nil {
+		t.Fatal("a master key inside the granted read-only OS was accepted")
+	}
+	if !strings.Contains(err.Error(), creds.EnvMasterKeyFile) {
+		t.Errorf("the refusal should name the variable to fix: %v", err)
+	}
+
+	t.Setenv(creds.EnvMasterKeyFile, "")
+	t.Setenv(knowledge.EnvDeployKeyFile, "/etc/ld.so.conf.d/deploy")
+	if err := verifyKeyDelivery(); err == nil {
+		t.Fatal("a deploy key inside a granted /etc entry was accepted")
+	}
+
+	// /etc is granted by named entry, so a secrets directory a host mounts
+	// under it is not one of them.
+	t.Setenv(knowledge.EnvDeployKeyFile, "/etc/secrets/deploy")
+	if err := verifyKeyDelivery(); err != nil {
+		t.Errorf("a platform secrets directory under /etc is a supported location: %v", err)
+	}
+
+	// Outside production the same misconfiguration is not an error: local
+	// runs are confined by their own container, which grants none of this.
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "")
+	if err := verifyKeyDelivery(); err != nil {
+		t.Errorf("outside production there is no sandbox grant list to violate: %v", err)
 	}
 }

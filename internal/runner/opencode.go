@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,7 +26,7 @@ import (
 // back the model process ready to start, kill and reap end it, and exec runs
 // one follow-up subcommand as the supervisor and returns its stdout.
 type attemptRuntime interface {
-	run(ocArgs []string) *exec.Cmd
+	run(ocArgs []string) (*exec.Cmd, error)
 	kill(cmd *exec.Cmd, done chan error, log *slog.Logger)
 	reap(cmd *exec.Cmd)
 	exec(args ...string) ([]byte, error)
@@ -45,7 +44,6 @@ func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 			workspace:    p.workspace.root,
 			tempDir:      p.tempDir,
 			knowledgeDir: p.workspace.KnowledgeDir,
-			uid:          p.attempt.AttemptUID,
 			env:          p.env,
 		}, nil
 	case mode.LocalNative:
@@ -84,14 +82,14 @@ func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 	return nil, fmt.Errorf("unsupported deployment mode %d", currentMode)
 }
 
-// Production: opencode from the image's PATH, the run
-// confined behind the Landlock shim as the attempt's own identity.
+// Production: opencode from the image's PATH, each run confined in a sandbox of
+// its own -- the strongest rung the host allowed, probed at boot -- holding the
+// read-only OS, this workspace, and nothing else.
 type sandboxedRuntime struct {
 	processGroup
 	workspace    string
 	tempDir      string
 	knowledgeDir string
-	uid          uint32
 	env          []string
 }
 
@@ -99,13 +97,21 @@ func (h sandboxedRuntime) home() string { return filepath.Join(h.workspace, atte
 
 func (h sandboxedRuntime) dataHome() string { return filepath.Join(h.home(), ".local", "share") }
 
-// Builds the model process behind the Landlock shim -- our own binary
-// applies the rules to itself, then execs opencode. HOME is disposable and
-// the attempt's alone: a shared writable home let one routine persist state,
-// plugins included, into a later routine's session.
-func (h sandboxedRuntime) run(ocArgs []string) *exec.Cmd {
-	ro, rw := sandbox.Paths(h.workspace, h.knowledgeDir, h.tempDir, os.Getenv("HOME"), h.home())
-	cmd := exec.Command(sandbox.HelperPath, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
+// Builds the model process inside this attempt's own sandbox. Boot proved a
+// sandbox can be built here, so failing to build one now is a run failure and
+// not a policy decision. HOME is disposable and the attempt's alone: a shared
+// writable home let one routine persist plugins into a later routine's session.
+func (h sandboxedRuntime) run(ocArgs []string) (*exec.Cmd, error) {
+	cmd := exec.Command("opencode", ocArgs...)
+	if !sandbox.Disabled() {
+		var err error
+		if cmd, err = sandbox.Command(sandbox.Attempt{
+			Workspace: h.workspace,
+			Writable:  []string{h.knowledgeDir, h.tempDir, h.home()},
+		}, append([]string{"opencode"}, ocArgs...)...); err != nil {
+			return nil, err
+		}
+	}
 	cmd.Env = slices.Concat(h.env, []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + h.home(),
@@ -113,24 +119,29 @@ func (h sandboxedRuntime) run(ocArgs []string) *exec.Cmd {
 		"XDG_CONFIG_HOME=" + filepath.Join(h.home(), ".config"),
 		"XDG_CACHE_HOME=" + filepath.Join(h.home(), ".cache"),
 		"TMPDIR=" + h.tempDir,
-		sandbox.EnvRO + "=" + sandbox.JoinPaths(ro),
-		sandbox.EnvRW + "=" + sandbox.JoinPaths(rw),
-		sandbox.EnvAttemptUID + "=" + strconv.FormatUint(uint64(h.uid), 10),
-		sandbox.EnvUnsafeOverride + "=" + os.Getenv(sandbox.EnvUnsafeOverride),
 	})
 	cmd.Dir = h.workspace
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid:    true,
-		Credential: &syscall.Credential{Uid: h.uid, Gid: h.uid},
+	// A session, not merely a process group: without one a sandboxed process can
+	// push characters into the controlling terminal's input queue with TIOCSTI
+	// and run commands outside the sandbox (CVE-2017-5226). A session leader
+	// leads a process group too, so the post-run sweep still has one to kill.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return cmd, nil
+}
+
+// Sweeps only where nothing else collapses the tree: the bubblewrap rung's pid
+// namespace dies with the sandbox and takes every descendant with it, while the
+// fallback rung and the open hatch leave a detached descendant behind.
+func (h sandboxedRuntime) reap(cmd *exec.Cmd) {
+	if !sandbox.Provides().CollapsesTree {
+		reapGroup(cmd)
 	}
-	return cmd
 }
 
 // Runs one subcommand with a minted hygiene HOME (see captureHome); the
 // attempt's store is reached by XDG_DATA_HOME -- data, never code.
 func (h sandboxedRuntime) exec(args ...string) ([]byte, error) {
-	gid := attemptGroup(h.home())
-	home, cleanup, err := captureHome(h.workspace, gid)
+	home, cleanup, err := captureHome(h.workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -145,18 +156,6 @@ func (h sandboxedRuntime) exec(args ...string) ([]byte, error) {
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 		"XDG_DATA_HOME=" + h.dataHome(),
 	}
-	// opencode writes to the attempt-owned store even to answer a read, with
-	// modes the supervisor's group access cannot cover -- so the exec runs
-	// as the attempt's own identity.
-	if gid != 0 {
-		if err := os.Chown(home, -1, int(gid)); err != nil {
-			return nil, fmt.Errorf("granting the capture home to the attempt group: %w", err)
-		}
-		if err := os.Chmod(home, 0o770); err != nil {
-			return nil, fmt.Errorf("granting the capture home to the attempt group: %w", err)
-		}
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: gid, Gid: gid}}
-	}
 	return runToFile(cmd)
 }
 
@@ -165,9 +164,9 @@ func (h sandboxedRuntime) exec(args ...string) ([]byte, error) {
 // startup, `session list` and `export` included (verified against 1.18.3) --
 // pointed at the attempt's own home, the exec would execute whatever a
 // prompt-injected routine left there. The directory comes from TMPDIR, so a
-// TMPDIR inside the workspace is refused. gid names the identity the exec
-// runs as; cleanup removes the tree through that identity's own help.
-func captureHome(workspace string, gid uint32) (string, func(), error) {
+// TMPDIR inside the workspace is refused. Cleanup removes the tree the way a
+// run workspace is removed, since opencode may leave shut-out modes behind.
+func captureHome(workspace string) (string, func(), error) {
 	home, err := os.MkdirTemp("", "openroutines-capture-*")
 	if err != nil {
 		return "", nil, err
@@ -181,7 +180,7 @@ func captureHome(workspace string, gid uint32) (string, func(), error) {
 		return "", nil, fmt.Errorf("capture home %s is inside the run workspace -- TMPDIR must point outside it", home)
 	}
 	cleanup := func() {
-		if err := removeAttemptTree(gid, home); err != nil {
+		if err := removeTree(home); err != nil {
 			slog.Warn("could not remove the capture home", "path", home, "error", err)
 		}
 	}
@@ -206,20 +205,6 @@ func underDir(dir, path string) (bool, error) {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)), nil
 }
 
-// Reads back the identity the attempt home was granted to at
-// staging; 0 means no identity scheme (native mode, tests).
-func attemptGroup(attemptHome string) uint32 {
-	info, err := os.Stat(attemptHome)
-	if err != nil {
-		return 0
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || st.Gid == uint32(os.Getgid()) {
-		return 0
-	}
-	return st.Gid
-}
-
 // OPENROUTINES_NATIVE=1: the developer's own opencode,
 // unconfined by explicit opt-in. Their real HOME stays (opencode auth lives
 // there); sessions are reached by working directory, which is this attempt's
@@ -232,7 +217,7 @@ type nativeRuntime struct {
 	env       []string
 }
 
-func (n nativeRuntime) run(ocArgs []string) *exec.Cmd {
+func (n nativeRuntime) run(ocArgs []string) (*exec.Cmd, error) {
 	cmd := exec.Command("opencode", ocArgs...)
 	cmd.Env = slices.Concat(n.env, []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -241,7 +226,7 @@ func (n nativeRuntime) run(ocArgs []string) *exec.Cmd {
 	})
 	cmd.Dir = n.workspace
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	return cmd
+	return cmd, nil
 }
 
 func (n nativeRuntime) exec(args ...string) ([]byte, error) {
@@ -267,7 +252,7 @@ type containerRuntime struct {
 // passed by NAME only -- docker resolves the values from the client
 // process's environment -- so secret values never appear on the command
 // line (argv is world-readable via ps for the duration of the run).
-func (c containerRuntime) run(ocArgs []string) *exec.Cmd {
+func (c containerRuntime) run(ocArgs []string) (*exec.Cmd, error) {
 	// HOME is the disposable per-attempt directory inside the mounted
 	// workspace, so session storage survives --rm.
 	args := []string{
@@ -289,7 +274,7 @@ func (c containerRuntime) run(ocArgs []string) *exec.Cmd {
 	// The docker client needs its own environment (daemon socket, config)
 	// plus the values it will forward by name.
 	cmd.Env = append(os.Environ(), c.env...)
-	return cmd
+	return cmd, nil
 }
 
 func (c containerRuntime) kill(cmd *exec.Cmd, done chan error, log *slog.Logger) {
