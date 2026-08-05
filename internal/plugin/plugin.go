@@ -336,17 +336,16 @@ func parseManifestFile(path string) (*Manifest, string, error) {
 	return &m, strings.TrimSpace(rest[end+len("\n---\n"):]), nil
 }
 
-// agentNamespace returns the agent's global routine and skill namespaces, or
-// an error if that namespace is already invalid. A name any load error is
-// about is dropped from the lists LoadAgent/ListAgent return, so a caller that
-// ignored the errors would check collisions against a namespace missing
-// exactly the names already in trouble -- and install on top of them. Fail
-// closed instead: this is the one place a single broken routine blocks work
-// on the others, because a namespace with a hole in it is not a namespace.
+// agentNamespace returns the installed plugin routine namespace and the
+// global skill namespace, or an error if the agent does not load cleanly.
+// Agent-owned routines deliberately do not participate in plugin collisions:
+// they shadow same-named plugin routines. Plugin routines are loaded directly
+// so a shadowed routine still prevents a second plugin from claiming its name.
 func agentNamespace(agentDir string) ([]*routine.Routine, []*skill.Skill, error) {
-	routines, routineErrs := routine.LoadAgent(agentDir)
+	_, agentRoutineErrs := routine.LoadDir(filepath.Join(agentDir, "routines"))
+	routines, pluginRoutineErrs := routine.LoadPlugins(agentDir)
 	skills, skillErrs := skill.ListAgent(agentDir)
-	if errs := slices.Concat(routineErrs, skillErrs); len(errs) > 0 {
+	if errs := slices.Concat(agentRoutineErrs, pluginRoutineErrs, skillErrs); len(errs) > 0 {
 		return nil, nil, errors.Join(errs...)
 	}
 	return routines, skills, nil

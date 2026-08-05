@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
 func writeTree(t *testing.T, root string, files map[string]string) {
@@ -159,10 +161,9 @@ func TestUpdateConflictKeepsRecordedRevision(t *testing.T) {
 	}
 }
 
-// The collision check excludes the plugin's own installed content -- its
-// routines always exist in the agent namespace -- but still refuses names
-// taken by content outside the plugin.
-func TestPrepareUpdateRefusesCollidingAgentContent(t *testing.T) {
+// A plugin update may add a routine shadowed by an agent-owned routine; the
+// vendored update lands normally and the agent-owned implementation wins.
+func TestUpdateAllowsAgentOwnedRoutineOverride(t *testing.T) {
 	agent, repo := updateFixture(t)
 	writeTree(t, repo, map[string]string{
 		"routines/extra.md": "---\nschedule: \"0 10 * * *\"\n---\nExtra.\n",
@@ -172,9 +173,22 @@ func TestPrepareUpdateRefusesCollidingAgentContent(t *testing.T) {
 		"routines/extra.md": "---\nschedule: \"0 9 * * *\"\n---\nMine.\n",
 	})
 
-	_, err := PrepareUpdate(agent, "demo")
-	if err == nil || !strings.Contains(err.Error(), "routine extra") {
-		t.Fatalf("want collision refusal naming routine extra, got %v", err)
+	upd, err := PrepareUpdate(agent, "demo")
+	if err != nil {
+		t.Fatalf("prepare update with override: %v", err)
+	}
+	defer upd.Close()
+	conflicts, err := upd.Apply()
+	if err != nil || len(conflicts) != 0 {
+		t.Fatalf("apply update with override: conflicts=%v err=%v", conflicts, err)
+	}
+	r, err := routine.Find(agent, "extra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(agent, "routines", "extra.md")
+	if r.Path != want {
+		t.Fatalf("winning routine = %s, want %s", r.Path, want)
 	}
 }
 

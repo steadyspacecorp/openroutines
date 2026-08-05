@@ -142,10 +142,23 @@ func cmdCheck(args []string) int {
 	// Routines
 	fmt.Println("routines/")
 	routines, parseErrs := routine.LoadAgent(dir)
+	pluginRoutines, _ := routine.LoadPlugins(dir)
+	pluginPaths := map[string][]string{}
+	for _, r := range pluginRoutines {
+		rel, err := filepath.Rel(dir, r.Path)
+		if err == nil {
+			pluginPaths[r.Name] = append(pluginPaths[r.Name], rel)
+		}
+	}
 	for _, e := range parseErrs {
 		failf("%v", e)
 	}
 	for _, r := range routines {
+		if r.Path == filepath.Join(dir, "routines", r.Name+".md") {
+			for _, shadowed := range pluginPaths[r.Name] {
+				okf("%s overrides %s", r.Name, shadowed)
+			}
+		}
 		var errs []string
 		if r.FM.Schedule == "" && r.FM.Trigger == nil {
 			errs = append(errs, "needs a schedule or a trigger")

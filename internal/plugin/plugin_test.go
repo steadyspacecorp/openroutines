@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
 func fixture(t *testing.T, name string) string {
@@ -325,16 +326,16 @@ func TestPrepareInstallRefusesInvalidProvenance(t *testing.T) {
 	}
 }
 
-// A duplicate global name is filtered out of the routine and skill lists, so
-// collision detection against an already-ambiguous agent would miss exactly
-// the name in conflict. Refuse while the namespace is invalid.
+// A duplicate plugin name is filtered out of the effective routine list, so
+// collision detection must inspect the raw plugin claims and refuse while the
+// namespace is invalid.
 func TestCollisionsFailClosedOnInvalidNamespace(t *testing.T) {
 	src := write(t, nil)
 	agent := t.TempDir()
 	routine := "---\nschedule: \"0 9 * * *\"\n---\nDo the demo.\n"
 	for _, rel := range []string{
-		filepath.Join("routines", "demo.md"),
-		filepath.Join(".openroutines", "plugins", "other", "routines", "demo.md"),
+		filepath.Join(".openroutines", "plugins", "one", "routines", "demo.md"),
+		filepath.Join(".openroutines", "plugins", "two", "routines", "demo.md"),
 	} {
 		path := filepath.Join(agent, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -350,6 +351,32 @@ func TestCollisionsFailClosedOnInvalidNamespace(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "duplicate routine") {
 		t.Fatalf("error should name the duplicate: %v", err)
+	}
+}
+
+func TestInstallAllowsAgentOwnedRoutineOverride(t *testing.T) {
+	src := write(t, nil)
+	agent := t.TempDir()
+	owned := filepath.Join(agent, "routines", "demo.md")
+	if err := os.MkdirAll(filepath.Dir(owned), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(owned, []byte("---\nschedule: \"0 8 * * *\"\n---\nAgent-owned.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := PrepareInstall(agent, src, testSource)
+	if err != nil {
+		t.Fatalf("prepare install with override: %v", err)
+	}
+	if _, _, err := inst.Apply(); err != nil {
+		t.Fatalf("apply install with override: %v", err)
+	}
+	r, err := routine.Find(agent, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Path != owned {
+		t.Fatalf("winning routine = %s, want %s", r.Path, owned)
 	}
 }
 

@@ -43,7 +43,7 @@ Idempotent -- run it whenever. Fills in `openroutines.yml` (name, [job descripti
 openroutines check
 ```
 
-Validates config, frontmatter, schedules, credential wiring, and config drift. Made for CI: run it on every push.
+Validates config, frontmatter, schedules, credential wiring, and config drift. When an agent-owned routine overrides a same-named plugin routine, check names the shadowed plugin path. Made for CI: run it on every push.
 
 ## status
 

@@ -33,8 +33,10 @@ deployed container runs whatever routine is due.
   <repo>`): its routines and skills stay grouped under `.openroutines/plugins/<name>/`
   with their source and revision, behind a grant summary and installed
   inactive. They are ordinary repo content -- review and edit them like
-  anything else here. `openroutines plugin update <name>` three-way merges
-  a reviewed upstream update with those local edits.
+  anything else here. An agent-owned `routines/<name>.md` overrides a plugin
+  routine with the same filename; `openroutines check` shows the override.
+  `openroutines plugin update <name>` three-way merges a reviewed upstream
+  update with local plugin edits.
 - **Validate after every change**: `openroutines check`. Run a routine once
   with `openroutines routines run <name>`; add `--no-memory` to discard its
   memory writes. Both forms may perform real external actions.
