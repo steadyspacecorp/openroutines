@@ -41,7 +41,7 @@ opencode also auto-loads `.opencode/plugin` from that directory and its ancestor
 In production the sandbox rules close it: the workspace root is outside the model process's writable set.
 Locally it is not closed, because bind-mounted workspace roots are writable by the container's uid: a prompt-injected routine can plant `/work/.opencode/plugin` and the capture container will load it.
 That residual is accepted at the level local runs are already pitched at -- the code executes in a discarded container with a secret-free environment and the workspace access the routine already had, not in the supervisor.
-Routing capture through the Landlock shim instead was rejected: it would bound the blast radius of attacker code rather than keep it from running, covers only the production spawn path, and hangs sandbox rules on a bookkeeping step that must never fail a run.
+Sandboxing the capture step instead was rejected: it would bound the blast radius of attacker code rather than keep it from running, covers only the production spawn path, and hangs confinement on a bookkeeping step that must never fail a run.
 
 One cost follows from the cold home, and it lands on **opencode plugins** -- the `plugin` array in `opencode.json`, unrelated to an OpenRoutines plugin.
 To resolve a plugin's imports opencode installs `node_modules` into its config dir, so an agent declaring one pays that install on every capture exec instead of reusing the attempt's warmed home: measured at ~55MB (3645 files) and about four seconds against the 30s capture timeout, where an agent declaring none costs well under a second.
