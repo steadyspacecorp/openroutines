@@ -1,14 +1,20 @@
+// The attempt's sessions are opencode's own record of the run. After the
+// model process exits, that record is read twice: captureSession folds it
+// into what the attempt records (token usage, whether the session ended
+// cleanly), and exportSessions saves its replayable form into operator
+// storage when one is designated.
+
 package runner
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
-	"time"
+	"regexp"
+
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // Usage is one attempt's token consumption, summed from the assistant
@@ -24,18 +30,6 @@ type Usage struct {
 	CostReported float64 `json:"-"`
 }
 
-// attemptHomeName is the disposable per-attempt home inside the run
-// workspace. Production created it for sandbox hygiene (alpha.22); local
-// container runs point HOME here too, which is what keeps the attempt's
-// session data readable after the container exits.
-const attemptHomeName = ".home"
-
-// opencodeExec runs one opencode subcommand in the attempt's context --
-// the caller decides where opencode exists (on PATH in the production
-// container, via the runtime image for local runs, nowhere in native dev
-// mode) and returns its stdout.
-type opencodeExec func(args ...string) ([]byte, error)
-
 // Session is what opencode's own record says about one attempt: what it
 // consumed, and whether it ended the way a finished run ends. Usage is nil
 // when the runtime didn't report -- never zero. Failure is empty unless the
@@ -49,48 +43,65 @@ type Session struct {
 // opencode itself (session list + export -- messages live in its database
 // from 1.18 on). Fallback: the pre-1.18 message JSONs on disk. The store
 // is attempt-scoped either way (the home is fresh per attempt), and an
-// unreadable one says nothing -- bookkeeping must never fail a run.
-func captureSession(workspace string, oc opencodeExec) Session {
+// unreadable one says nothing -- bookkeeping must never fail a run. A
+// capture that fails open is silent by design, but the two things it
+// costs -- usage reporting, and the "did the session end cleanly" check --
+// are worth a line each: log carries what the return value can't.
+func captureSession(workspace string, oc opencodeExec, log *slog.Logger) Session {
 	if oc != nil {
-		if msgs, ok := messagesViaExport(oc); ok {
+		msgs, err := messagesViaExport(oc)
+		switch {
+		case err != nil:
+			log.Warn("session capture unavailable -- no usage recorded and the session-outcome check did not run", "error", err)
+		case len(msgs) > 0:
 			return summarize(msgs)
 		}
+		log.Debug("session capture fell back to on-disk message files")
 	}
-	return summarize(messagesFromLegacyFiles(workspace))
+	msgs := messagesFromLegacyFiles(workspace)
+	if len(msgs) == 0 {
+		log.Debug("attempt session reported no assistant messages")
+	}
+	return summarize(msgs)
 }
 
 // messagesViaExport asks opencode for the attempt's session: the fresh home
 // holds at most one, `session list --format json` names it, and `export`
-// prints {info, messages}. Reports whether the session was read at all --
-// it wasn't when the fallback is worth trying.
-func messagesViaExport(oc opencodeExec) ([]assistantInfo, bool) {
+// prints {info, messages}. A non-nil error means the surface itself
+// couldn't be read -- exec failure or unparseable JSON -- and the fallback
+// is worth trying. No session yet, or a session with no assistant
+// messages, is not an error: (nil, nil).
+func messagesViaExport(oc opencodeExec) ([]assistantInfo, error) {
 	raw, err := oc("session", "list", "--format", "json", "-n", "1")
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	var sessions []struct {
 		ID string `json:"id"`
 	}
-	if json.Unmarshal(raw, &sessions) != nil || len(sessions) == 0 || sessions[0].ID == "" {
-		return nil, false
+	if err := json.Unmarshal(raw, &sessions); err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 || sessions[0].ID == "" {
+		return nil, nil
 	}
 	raw, err = oc("export", sessions[0].ID)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	var export struct {
 		Messages []struct {
 			Info assistantInfo `json:"info"`
 		} `json:"messages"`
 	}
-	if json.Unmarshal(raw, &export) != nil {
-		return nil, false
+	if err := json.Unmarshal(raw, &export); err != nil {
+		return nil, err
 	}
 	msgs := make([]assistantInfo, 0, len(export.Messages))
 	for _, m := range export.Messages {
 		msgs = append(msgs, m.Info)
 	}
-	return msgs, len(msgs) > 0
+	return msgs, nil
 }
 
 // messagesFromLegacyFiles reads the message JSONs opencode wrote before 1.18
@@ -153,6 +164,11 @@ func summarize(msgs []assistantInfo) Session {
 	if s.Failure == "" && lastFinish != "" && !finished {
 		s.Failure = fmt.Sprintf("the model session never finished a turn (last step finished on %q) -- the agent loop stopped on a step it did not come back from", lastFinish)
 	}
+	// The claim quotes a model-writable record and outlives the mint
+	// registration that would otherwise redact it downstream (events, the
+	// run record, the manual echo) -- so it is lifted redacted, while the
+	// registration is still live.
+	s.Failure = scrub.Redacted(s.Failure)
 	return s
 }
 
@@ -210,112 +226,97 @@ func (m assistantInfo) addTo(u *Usage) bool {
 	return true
 }
 
-// captureTimeout bounds each capture exec: a hung docker or opencode must
-// not stall the supervisor's tick.
-const captureTimeout = 30 * time.Second
+// EnvSessionDir designates operator storage for session history. When set,
+// the attempt's sessions are exported when the attempt ends, whatever the
+// outcome: `opencode session list` names them, `opencode export` renders
+// each, and the output lands at `<dir>/<run_id>.<attempt_id>/<session_id>.json`
+// (design decision "Run history: opencode's log passed through, sessions
+// exported"). Unset means nothing is written. An env var rather than
+// configuration for the same reason as the log-level override: storage --
+// typically a mounted volume -- is wired up where the container is defined,
+// not in the repo.
+const EnvSessionDir = "OPENROUTINES_SESSION_DIR"
 
-// captureHomeMount is where the capture's empty home lives inside the
-// runtime image -- deliberately outside /work, the attempt's workspace.
-const captureHomeMount = "/capture-home"
+// sessionIDPattern is the shape of an id worth using as a filename. The ids
+// come back from a session store the model process could write, so an id
+// that could climb out of the attempt's directory names no file.
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// captureHome mints the HOME one capture exec runs with: an empty,
-// supervisor-owned directory the attempt never had write access to.
-//
-// The capture step is not sandboxed -- it is an ordinary child of the
-// supervisor -- so it must not take its home from the attempt. opencode
-// auto-loads plugins from its config dir at startup, `session list` and
-// `export` included (verified against the pinned 1.18.3), and that dir
-// resolves under HOME when XDG_CONFIG_HOME is unset. Pointed at the
-// attempt's own home, capture would execute whatever a prompt-injected
-// routine left there. The session store is reached by XDG_DATA_HOME
-// instead: that path carries the attempt's data, never its code.
-//
-// The directory comes from TMPDIR, so it fails closed rather than trust
-// it: a TMPDIR inside the workspace would hand the attempt the very home
-// this exists to deny it.
-func captureHome(workspace string) (string, func(), error) {
-	home, err := os.MkdirTemp("", "openroutines-capture-*")
+// exportSessions saves the attempt's session history into operator storage
+// and returns the directory it landed in -- "" when no session dir is
+// designated, the attempt left no sessions, or storage is broken. The
+// exports run in the supervisor's process after the attempt ends: the model
+// process never touches the volume, so no sandbox grant or container mount
+// ever exposes it. Best-effort throughout -- broken operator storage must
+// never fail the run. An export that fails partway still names its
+// directory (the record points at what survived; the log carries the
+// warning), but one that lands no file at all names nothing, because an
+// empty directory is not a record.
+func exportSessions(meta Meta, oc opencodeExec, log *slog.Logger) string {
+	root := os.Getenv(EnvSessionDir)
+	if root == "" || oc == nil {
+		return ""
+	}
+	raw, err := oc("session", "list", "--format", "json")
 	if err != nil {
-		return "", nil, err
+		log.Warn("listing the attempt's sessions failed -- sessions not preserved", "error", err)
+		return ""
 	}
-	inside, err := underDir(workspace, home)
-	if err != nil || inside {
-		os.RemoveAll(home)
-		if err != nil {
-			return "", nil, err
+	var sessions []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &sessions); err != nil {
+		log.Warn("unreadable session list -- sessions not preserved", "error", err)
+		return ""
+	}
+	if len(sessions) == 0 {
+		log.Debug("attempt left no sessions to export")
+		return ""
+	}
+	dir := filepath.Join(root, meta.RunID+"."+meta.AttemptID)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	// A retried attempt reuses its identity -- giveBack() hands the attempt
+	// number back when a run is canceled or its lease is lost, after this
+	// export already ran -- so the directory can hold a previous attempt's
+	// files. One directory names one attempt's sessions, not two merged.
+	_ = os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Warn("session dir not writable -- sessions not preserved", "dir", dir, "error", err)
+		return ""
+	}
+	wrote := false
+	var firstErr error
+	for _, s := range sessions {
+		if err := exportSession(oc, s.ID, dir); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
-		return "", nil, fmt.Errorf("capture home %s is inside the run workspace -- TMPDIR must point outside it", home)
+		wrote = true
 	}
-	return home, func() { os.RemoveAll(home) }, nil
+	if firstErr != nil {
+		log.Warn("sessions exported incompletely", "dir", dir, "error", firstErr)
+	}
+	if !wrote {
+		_ = os.RemoveAll(dir)
+		return ""
+	}
+	return dir
 }
 
-// underDir reports whether path sits at or below dir, both resolved: the
-// containment check has to survive /var -> /private/var style symlinks.
-func underDir(dir, path string) (bool, error) {
-	d, err := filepath.EvalSymlinks(dir)
+// exportSession writes one session's export into the attempt's directory.
+// Owner-only: verbatim, unscrubbed sessions are as sensitive as the
+// credentials the routine could see.
+func exportSession(oc opencodeExec, id, dir string) error {
+	if !sessionIDPattern.MatchString(id) {
+		return fmt.Errorf("session id %q is not a safe filename", id)
+	}
+	raw, err := oc("export", id)
 	if err != nil {
-		return false, err
+		return err
 	}
-	p, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return false, err
-	}
-	rel, err := filepath.Rel(d, p)
-	if err != nil {
-		return false, err
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)), nil
-}
-
-// hostOpencodeExec runs opencode from PATH against the attempt's session
-// store -- the production container, where the binary sits next to the
-// supervisor. The working directory stays the workspace: opencode scopes
-// sessions to the directory they ran in.
-func hostOpencodeExec(workspace string) opencodeExec {
-	dataHome := filepath.Join(workspace, attemptHomeName, ".local", "share")
-	return func(args ...string) ([]byte, error) {
-		home, cleanup, err := captureHome(workspace)
-		if err != nil {
-			return nil, err
-		}
-		defer cleanup()
-		ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "opencode", args...)
-		cmd.Dir = workspace
-		cmd.Env = []string{
-			"PATH=" + os.Getenv("PATH"),
-			"HOME=" + home,
-			"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
-			"XDG_DATA_HOME=" + dataHome,
-		}
-		return cmd.Output()
-	}
-}
-
-// containerOpencodeExec re-enters the runtime image with the workspace
-// mounted -- local runs, where opencode exists only inside the image. No
-// network involved; the image is already local.
-func containerOpencodeExec(workspace, image string) opencodeExec {
-	return func(args ...string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
-		defer cancel()
-		dargs := []string{
-			"run", "--rm",
-			"-v", workspace + ":/work",
-			// The empty home is a tmpfs rather than a host directory: it is
-			// empty by construction, needs no world-writable host dir for the
-			// image's agent uid, and dies with the container. exec stays on so
-			// capture never breaks on something opencode installs under HOME --
-			// bookkeeping must not fail a run.
-			"--tmpfs", captureHomeMount + ":mode=0777,exec",
-			"-w", "/work",
-			"-e", "HOME=" + captureHomeMount,
-			"-e", "XDG_CONFIG_HOME=" + captureHomeMount + "/.config",
-			"-e", "XDG_DATA_HOME=/work/" + attemptHomeName + "/.local/share",
-			image, "opencode",
-		}
-		cmd := exec.CommandContext(ctx, "docker", append(dargs, args...)...)
-		return cmd.Output()
-	}
+	return os.WriteFile(filepath.Join(dir, id+".json"), raw, 0o600)
 }

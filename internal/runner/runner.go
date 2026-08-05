@@ -10,7 +10,6 @@
 package runner
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	_ "embed"
@@ -19,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"os"
 	"os/exec"
@@ -34,6 +34,7 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
@@ -66,36 +67,23 @@ type Meta struct {
 // failure (currently: provider authentication) so it surfaces as a
 // configuration problem instead of an opaque crash.
 type ExecResult struct {
-	Outcome  Outcome
-	ExitCode int
-	Duration time.Duration
-	Hint     string
-	Model    string // the resolved model this attempt ran with
-	Effort   string // frontmatter reasoning effort, when set
-	Usage    *Usage // token consumption; nil when the surface was unavailable
+	Outcome     Outcome
+	ExitCode    int
+	Duration    time.Duration
+	Hint        string
+	Model       string // the resolved model this attempt ran with
+	Effort      string // frontmatter reasoning effort, when set
+	Usage       *Usage // token consumption; nil when the surface was unavailable
+	SessionsDir string // the attempt's exported sessions, "" when no session dir is designated
 }
 
-// tailBuffer keeps the last max bytes written -- enough to classify a
-// failure from the end of the run's output without holding all of it.
-type tailBuffer struct {
-	buf []byte
-	max int
-}
-
-func (t *tailBuffer) Write(p []byte) (int, error) {
-	t.buf = append(t.buf, p...)
-	if len(t.buf) > t.max {
-		t.buf = t.buf[len(t.buf)-t.max:]
-	}
-	return len(p), nil
-}
-
-// authFailurePattern matches provider authentication errors in run output.
-// A bad or missing API key otherwise reports as a bare "crashed" -- and in
-// production burns five attempts and trips the circuit breaker before a
-// human learns the cause was configuration. The `error:` forms are opencode
-// passing a provider's status text through verbatim ("Error: Unauthorized"),
-// which carries no key-shaped phrase to match on.
+// authFailurePattern matches provider authentication errors in the session
+// record's failure text. A bad or missing API key otherwise reports as a
+// bare "crashed" -- and in production burns five attempts and trips the
+// circuit breaker before a human learns the cause was configuration. The
+// `error:` forms cover a provider's bare status text passed through
+// verbatim ("... ended on an error: Unauthorized"), which carries no
+// key-shaped phrase to match on.
 var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key|error:\s*unauthorized|invalid bearer token`)
 
 // authHint names what the framework knows about an authentication failure
@@ -179,7 +167,9 @@ func (s *Staging) Cleanup() error {
 		}
 	}
 	if s.BaseDir != "" {
-		_ = os.RemoveAll(s.BaseDir)
+		if err := os.RemoveAll(s.BaseDir); err != nil {
+			slog.Warn("could not remove the attempt's memory base snapshot", "path", s.BaseDir, "error", err)
+		}
 	}
 	return nil
 }
@@ -209,13 +199,14 @@ func (s *Staging) Consumed() bool {
 
 // Result is a completed manual run (routines run).
 type Result struct {
-	RunID      string
-	Outcome    Outcome
-	ExitCode   int
-	Duration   time.Duration
-	Commit     string            // memory commit hash, when one was made
-	Hint       string            // classified failure cause, when one was recognized
-	Conflicted []memory.Conflict // semantic edits preserved outside the canonical file
+	RunID       string
+	Outcome     Outcome
+	ExitCode    int
+	Duration    time.Duration
+	Commit      string            // memory commit hash, when one was made
+	Hint        string            // classified failure cause, when one was recognized
+	SessionsDir string            // the run's exported sessions, "" when no session dir is designated
+	Conflicted  []memory.Conflict // semantic edits preserved outside the canonical file
 }
 
 const runIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -255,15 +246,27 @@ func EffectiveTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 // DeclaredTimeout resolves frontmatter over agent defaults over 5m, before the
 // ceiling applies. `check` reports on it; execution uses EffectiveTimeout.
 func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
-	timeout := 5 * time.Minute
+	timeout, _ := declaredTimeout(agent, r)
+	return timeout
+}
+
+// declaredTimeout is DeclaredTimeout plus the raw value that failed to
+// parse, if any -- "" when every declared value parsed clean. Split out so
+// Stage can warn about the value it silently dropped without duplicating
+// the resolution order.
+func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Duration, badValue string) {
+	timeout = 5 * time.Minute
 	for _, t := range []string{agent.Defaults.Timeout, r.FM.Timeout} {
-		if t != "" {
-			if d, err := time.ParseDuration(t); err == nil {
-				timeout = d
-			}
+		if t == "" {
+			continue
+		}
+		if d, err := time.ParseDuration(t); err == nil {
+			timeout = d
+		} else {
+			badValue = t
 		}
 	}
-	return timeout
+	return timeout, badValue
 }
 
 // StagedRun is a fully prepared attempt: credentials resolved, workspace
@@ -279,13 +282,18 @@ type StagedRun struct {
 	meta      Meta
 	model     string
 	timeout   time.Duration
-	level     config.LogLevel
 	secrets   *runSecrets
 	staging   *Staging
 	workspace string
 	runTmp    string
 	env       []string
 	ocArgs    []string
+
+	// echo, when set, receives the run's scrubbed stdout live -- the manual
+	// `routines run` terminal. The supervisor never sets it: run output is
+	// never log lines (design decision "Run history: opencode's log passed
+	// through, sessions exported").
+	echo io.Writer
 }
 
 // Discard releases a staged attempt that will not be spawned (for example,
@@ -309,8 +317,14 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	if err != nil {
 		return nil, err
 	}
+	declared, badTimeout := declaredTimeout(agent, r)
+	if badTimeout != "" {
+		r.Log().Warn("unparseable timeout ignored -- falling back", "run_id", meta.RunID, "value", badTimeout, "using", declared)
+	}
 	timeout := EffectiveTimeout(agent, r)
-	level := agent.EffectiveLogLevel()
+	if timeout != declared {
+		r.Log().Warn("declared timeout capped by max_timeout", "run_id", meta.RunID, "declared", declared, "effective", timeout)
+	}
 	// The harness config is parsed from the agent repository, not the
 	// workspace copy buildWorkspace makes later: MCP permission rules must
 	// never depend on pipeline ordering to see the server list. A file
@@ -350,6 +364,9 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		return nil, err
 	}
 	if err := copyDeclaredSkills(dir, workspace, r.FM.Skills); err != nil {
+		return nil, err
+	}
+	if err := applyDeclaredMCP(workspace, r.FM.MCP); err != nil {
 		return nil, err
 	}
 	// The worktree-reading section, under the caller's memory lock: the
@@ -430,17 +447,16 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		env = append(env, strings.ToUpper(k)+"="+agent.Variables[k])
 	}
 
-	// The opencode invocation is identical across spawn paths.
-	ocArgs := []string{"run", "--agent", "routine", "-m", model}
+	// The opencode invocation is identical across spawn paths. opencode
+	// keeps its own diagnostic log at the level this process already runs
+	// at and prints it to stderr, where Run passes it into the log stream.
+	// Its --log-level flag takes the same four names slog renders.
+	ocArgs := []string{
+		"--print-logs", "--log-level=" + agent.EffectiveLogLevel().String(),
+		"run", "--agent", "routine", "-m", model,
+	}
 	if r.FM.Effort != "" {
 		ocArgs = append(ocArgs, "--variant", r.FM.Effort)
-	}
-	if level == config.LogDebug {
-		// The full formatted transcript, plus opencode's own diagnostics.
-		ocArgs = append(ocArgs, "--print-logs", "--log-level", "DEBUG")
-	} else {
-		// Raw JSON events, rendered into the bounded run log below.
-		ocArgs = append(ocArgs, "--format", "json")
 	}
 	ocArgs = append(ocArgs, r.Body)
 
@@ -451,7 +467,6 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		meta:      meta,
 		model:     model,
 		timeout:   timeout,
-		level:     level,
 		secrets:   secrets,
 		staging:   staging,
 		workspace: workspace,
@@ -479,7 +494,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	dir := sr.dir
 	workspace, runTmp, env, ocArgs := sr.workspace, sr.runTmp, sr.env, sr.ocArgs
 	attemptHome := filepath.Join(workspace, attemptHomeName)
-	model, timeout, level, secrets := sr.model, sr.timeout, sr.level, sr.secrets
+	model, timeout, secrets := sr.model, sr.timeout, sr.secrets
 	defer secrets.release()
 	ok := false
 	defer func() {
@@ -493,7 +508,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// production image or when a contributor opts out.
 	var cmd *exec.Cmd
 	containerName := ""
-	var ocExec opencodeExec // how capture reaches opencode after the run; nil in native dev mode
+	var ocExec opencodeExec // how capture and session export reach opencode after the run
 	if nativeMode() {
 		if _, err := exec.LookPath("opencode"); err != nil {
 			return nil, nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
@@ -526,7 +541,12 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		} else {
 			// OPENROUTINES_NATIVE=1: an explicit, unconfined dev opt-in
 			// (local user runs are confined by the run container instead).
-			// The developer's real HOME stays: their opencode auth lives there.
+			// The developer's real HOME stays: their opencode auth lives
+			// there -- which also means the session lands in their own
+			// store, reached after the run by working directory (opencode
+			// scopes `session list` to the directory a session ran in, and
+			// the workspace is this attempt's alone).
+			ocExec = nativeOpencodeExec(workspace)
 			cmd = exec.Command("opencode", ocArgs...)
 			cmd.Env = slices.Concat(env, []string{
 				"PATH=" + os.Getenv("PATH"),
@@ -567,51 +587,32 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		ocExec = containerOpencodeExec(workspace, image)
 		cmd = containerCmd(containerName, workspace, image, env, ocArgs)
 	}
-	// The run log is leveled (design decision "Run output is rendered,
-	// bounded, and leveled"): debug streams the formatted transcript as-is,
-	// info renders the JSON event stream into bounded lines, warn and error
-	// keep the stream out of the log entirely. The tail always captures what
-	// the level would have logged -- failure classification and the failure
-	// tail below read it.
-	tail := &tailBuffer{max: 4096}
-	// Log lines are attributed to their routine: runs execute concurrently
-	// and share one stdout. The prefix lands downstream of scrubbing and
-	// beside -- never in front of -- the tail buffer, which classification
-	// and the failure tail read raw.
-	var flush func()
-	if level == config.LogDebug {
-		pw := newPrefixWriter(os.Stdout, r.Name)
-		scrubber := scrub.NewWriter(io.MultiWriter(pw, tail), secrets.scrub)
-		cmd.Stdout, cmd.Stderr = scrubber, scrubber
-		flush = func() { scrubber.Flush(); pw.Flush() }
-	} else {
-		sink := io.Writer(os.Stdout)
-		if level > config.LogInfo {
-			sink = io.Discard
-		}
-		pw := newPrefixWriter(sink, r.Name)
-		// The two renderers land on one destination from os/exec's two drain
-		// goroutines; syncWriter keeps a line whole through the prefix
-		// buffer and the tail.
-		dst := &syncWriter{w: io.MultiWriter(pw, tail)}
-		// Renderers scrub before they truncate -- the ordering that keeps a
-		// truncation boundary from splitting a secret past the exact-value
-		// matcher. stderr is not part of the event stream; its renderer just
-		// passes lines through, bounded.
-		rout := newRenderer(dst, secrets.scrub)
-		rerr := newRenderer(dst, secrets.scrub)
-		cmd.Stdout, cmd.Stderr = rout, rerr
-		flush = func() { rout.Flush(); rerr.Flush(); pw.Flush() }
+	// stderr is opencode's own diagnostic log (--print-logs): each line
+	// passes through to the log stream with the attempt's identity
+	// appended, scrubbed first -- and with it every failure's diagnostics,
+	// so a failed attempt is never invisible. Run output (stdout) never
+	// enters the log stream: it echoes to the terminal on the interactive
+	// path and is otherwise discarded -- the run's record is its session
+	// (design decision "Run history: opencode's log passed through,
+	// sessions exported").
+	oclog := logging.NewPassthrough(os.Stdout, slog.String("routine", r.Name), slog.String("run_id", meta.RunID))
+	errOut := scrub.NewWriter(oclog)
+	cmd.Stderr = errOut
+	var out *scrub.Writer
+	if sr.echo != nil {
+		out = scrub.NewWriter(sr.echo)
+		cmd.Stdout = out
 	}
 	cmd.WaitDelay = pipeDrainDeadline
 
+	attemptLog := r.Log().With("run_id", meta.RunID)
 	done := make(chan error, 1)
 	kill := func() {
 		if containerName != "" {
 			stopContainer(containerName)
-			killClient(cmd, containerExitGrace, done)
+			killClient(cmd, containerExitGrace, done, attemptLog)
 		} else {
-			killGroup(cmd, 10*time.Second, done)
+			killGroup(cmd, 10*time.Second, done, attemptLog)
 		}
 	}
 	started := time.Now()
@@ -625,7 +626,9 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		// ErrWaitDelay means the process exited fine but something it left
 		// behind still held the output pipe: the run's outcome is the
 		// process's, not the orphan's -- only the tail of the log is lost.
-		if werr != nil && !errors.Is(werr, exec.ErrWaitDelay) {
+		if errors.Is(werr, exec.ErrWaitDelay) {
+			attemptLog.Warn("run output abandoned after the drain deadline -- a descendant outlived the attempt and the log tail is truncated", "deadline", pipeDrainDeadline)
+		} else if werr != nil {
 			res.Outcome = Crashed
 			var ee *exec.ExitError
 			if errors.As(werr, &ee) {
@@ -651,29 +654,28 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		kill()
 	}
 	res.Duration = time.Since(started).Round(time.Millisecond)
-	flush()
+	if out != nil {
+		out.Flush()
+	}
+	errOut.Flush()
+	oclog.Flush()
 	res.Model = model
 	res.Effort = r.FM.Effort
 	// Exit code alone is too weak a success signal for an agentic runtime:
 	// opencode exits 0 on a session whose agent loop died mid-turn. The
 	// session record is what says whether the run actually finished (design
 	// decision "A run is completed only when its session ended cleanly").
-	session := captureSession(workspace, ocExec)
+	session := captureSession(workspace, ocExec, attemptLog)
 	res.Usage = session.Usage
+	res.SessionsDir = exportSessions(meta, ocExec, attemptLog)
 	if res.Outcome == Completed && session.Failure != "" {
 		res.Outcome = Crashed
 		res.Hint = session.Failure
 	}
-	if res.Outcome == Crashed && authFailurePattern.Match(tail.buf) {
+	if res.Outcome == Crashed && authFailurePattern.MatchString(session.Failure) {
 		provider := strings.SplitN(model, "/", 2)[0]
 		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
 		res.Hint = authHint(dir, model, injected)
-	}
-	if level > config.LogInfo && (res.Outcome == Crashed || res.Outcome == Timeout) && len(tail.buf) > 0 {
-		// A failed attempt's last output is the diagnostic payload, not
-		// chatter: it escapes the level gate, or a warn/error production
-		// agent fails invisibly.
-		_, _ = fmt.Fprintf(os.Stdout, "%s %s %s -- last output:\n%s\n", r.Name, meta.RunID, res.Outcome, bytes.TrimSpace(tail.buf))
 	}
 	ok = true
 	return res, staging, nil
@@ -722,13 +724,16 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// The interactive path: the run's scrubbed output echoes to the terminal
+	// as it streams; the supervisor's staged runs stay silent.
+	sr.echo = os.Stdout
 	exec, staging, err := sr.Run(context.Background())
 	if err != nil {
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, staging.Cleanup()) }()
 
-	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint}
+	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint, SessionsDir: exec.SessionsDir}
 	if noMemory {
 		return res, nil
 	}
@@ -786,7 +791,9 @@ func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, m
 		}
 	}
 	if s.Outcome != Completed && s.Outcome != Canceled {
-		_ = mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.AttemptID, s.Detail))
+		if err := mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.AttemptID, s.Detail)); err != nil {
+			r.Log().Warn("could not record the failure event -- this log line is the only copy", "run_id", meta.RunID, "error", err)
+		}
 	}
 	if stage != nil {
 		stage(s)
@@ -869,11 +876,13 @@ func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID str
 	if !r.FM.IsConsumer() || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
 		return
 	}
-	_ = memory.At(dir).SaveCursor(r.Name, memory.Cursor{
+	if err := memory.At(dir).SaveCursor(r.Name, memory.Cursor{
 		ConsumedThrough: staging.ConsumerThrough,
 		ByRun:           runID,
 		At:              time.Now().UTC(),
-	})
+	}); err != nil {
+		r.Log().Error("consumer cursor not advanced -- this inbox will be delivered again", "run_id", runID, "through", staging.ConsumerThrough, "error", err)
+	}
 }
 
 // recordJSON formats one run record line for runs.jsonl. Usage fields are
@@ -912,11 +921,12 @@ func recordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, man
 }
 
 // runSecrets is a run's resolved secret material: the exact environment to
-// inject, the values the log scrubber must redact, and cleanup for derived
-// credentials (token revocation at attempt end).
+// inject, and cleanup for derived credentials (token revocation at attempt
+// end). Redaction needs no bookkeeping here -- resolving a credential
+// registers its value with the scrub registry at the point it is
+// materialized.
 type runSecrets struct {
 	env     map[string]string
-	scrub   map[string]string
 	cleanup []func()
 }
 
@@ -941,10 +951,18 @@ func (s *runSecrets) release() {
 // injects verbatim under its uppercase name; a typed credential (see
 // design decision "Credentials have types") is derived by the trusted runner and
 // injects its type's surface -- the stored root secret never enters the run.
-func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (*runSecrets, error) {
+// A resolve that fails releases whatever it already derived: the run it was
+// building never starts, so its material is dead the moment resolution is,
+// and no error path may be the one that forgets.
+func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (_ *runSecrets, err error) {
 	provider := strings.SplitN(model, "/", 2)[0]
 	providerKey := creds.ProviderKeyName(provider)
-	out := &runSecrets{env: map[string]string{}, scrub: map[string]string{}}
+	out := &runSecrets{env: map[string]string{}}
+	defer func() {
+		if err != nil {
+			out.release()
+		}
+	}()
 
 	key, keyErr := creds.LoadKey(dir)
 	if keyErr != nil {
@@ -968,29 +986,23 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 			if err := out.setEnv(strings.ToUpper(name), v); err != nil {
 				return nil, err
 			}
-			out.scrub[name] = v
 			continue
 		}
 		derived, err := creds.Derive(name, spec, v)
 		if err != nil {
-			out.release()
 			return nil, err
 		}
 		out.cleanup = append(out.cleanup, derived.Cleanup)
 		for _, k := range slices.Sorted(maps.Keys(derived.Env)) {
 			if err := out.setEnv(k, derived.Env[k]); err != nil {
-				out.release()
 				return nil, err
 			}
 		}
-		maps.Copy(out.scrub, derived.Scrub)
 	}
 	if v, present := store[providerKey]; present {
 		if err := out.setEnv(strings.ToUpper(providerKey), v); err != nil {
-			out.release()
 			return nil, err
 		}
-		out.scrub[providerKey] = v
 	}
 	return out, nil
 }
@@ -1089,6 +1101,64 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 		}
 	}
 	return nil
+}
+
+// applyDeclaredMCP rewrites the workspace's opencode.json so its mcp block
+// holds only the servers the routine declared. Enforcement is unchanged -- the
+// generated definition's deny rules and the withheld credentials close an
+// ungranted server's surface either way; removing the entry keeps the run's
+// opencode from contacting the server at all, so an ungranted run neither
+// probes a remote endpoint it holds no credential for nor logs that
+// endpoint's needs_auth refusal. A config without an mcp block, or a run
+// granted every configured server, travels byte-for-byte as written. Raw JSON
+// values keep unrelated configuration from passing through interface{} and
+// losing its original scalar representation while the block is filtered.
+func applyDeclaredMCP(workspace string, granted []string) error {
+	path := filepath.Join(workspace, config.OpenCodeFileName)
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		// Stage's LoadOpenCode already failed the attempt for this; on any
+		// other path the file just travels as written.
+		return nil
+	}
+	mcpRaw, ok := cfg["mcp"]
+	if !ok {
+		return nil
+	}
+	var mcp map[string]json.RawMessage
+	if err := json.Unmarshal(mcpRaw, &mcp); err != nil || len(mcp) == 0 {
+		return nil
+	}
+	filtered := map[string]json.RawMessage{}
+	for _, name := range granted {
+		if entry, ok := mcp[name]; ok {
+			filtered[name] = entry
+		}
+	}
+	if len(filtered) == len(mcp) {
+		return nil
+	}
+	if len(filtered) == 0 {
+		delete(cfg, "mcp")
+	} else {
+		filteredRaw, err := json.Marshal(filtered)
+		if err != nil {
+			return err
+		}
+		cfg["mcp"] = filteredRaw
+	}
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
 // The standing instruction lives in instruction.md -- editable prose,
@@ -1226,13 +1296,15 @@ const containerExitGrace = 5 * time.Second
 // may never return. The container can outlive the run; a stuck daemon is the
 // operator's problem, but it must not become the supervisor's.
 //
-// Waiting for Wait to return is not optional: the caller reads the tail
-// buffer the output goroutines write to, so returning before Wait would race
-// them. The bound comes from making the process exit, not from walking away.
-func killClient(cmd *exec.Cmd, grace time.Duration, done chan error) {
+// Waiting for Wait to return is not optional: the caller flushes the stream
+// writers the output goroutines write to, so returning before Wait would
+// race them. The bound comes from making the process exit, not from walking
+// away.
+func killClient(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Logger) {
 	select {
 	case <-done:
 	case <-time.After(grace):
+		log.Warn("docker client did not exit after the container stopped -- killed", "grace", grace)
 		_ = cmd.Process.Kill()
 		<-done // bounded by WaitDelay now that the process is going away
 	}
@@ -1252,12 +1324,13 @@ func signalTarget(cmd *exec.Cmd) int {
 // killGroup terminates the run's whole process group: SIGTERM, grace, SIGKILL.
 // The waits are bounded by the command's WaitDelay, not by the group's
 // willingness to exit.
-func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error) {
+func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Logger) {
 	target := signalTarget(cmd)
 	_ = syscall.Kill(target, syscall.SIGTERM)
 	select {
 	case <-done:
 	case <-time.After(grace):
+		log.Warn("run did not exit on SIGTERM -- killed", "grace", grace)
 		_ = syscall.Kill(target, syscall.SIGKILL)
 		<-done
 	}

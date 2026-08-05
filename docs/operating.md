@@ -49,18 +49,33 @@ A few properties fall out of the design (see [docs/design.md](design.md) for the
 - **Changes arrive by redeploy.** The only branch a running agent exchanges with origin is `memory`. Everything else -- routines, skills, credentials, config -- is read from the copy of the repo baked into the image, so a push to `main` changes nothing in production until the image is rebuilt and redeployed. (Locally the boundary doesn't exist: the supervisor reads your working tree, and an edit lands on the next tick.)
 - **One broken routine is one broken routine.** A frontmatter typo takes out the routine whose file it is in, not the agent: the others keep their schedules. The supervisor records an event naming the file, so the gap is visible in memory and not only in the log.
 - **Memory survives.** Code rolls back with the image; memory lives on its own branch and persists, like a database, but versioned.
-- **No application ingress.** The shipped container listens on no ports. Routine output and run records go to stdout -- read them with `docker logs` or your platform's log tooling. This does not replace normal host and deployment access controls.
+- **No application ingress.** The shipped container listens on no ports. The supervisor's log goes to stdout -- read it with `docker logs` or your platform's log tooling -- and session history persists as files when `OPENROUTINES_SESSION_DIR` designates storage (see below). This does not replace normal host and deployment access controls.
 
-## Log level
+## Logs and session history
 
-The log is rendered, not raw: a routine's own output prints whole; each tool call becomes a one-line summary with its result and suppressed-output size; failed tools also show the last 2KB of their diagnostic output. Every line is prefixed with its routine's name (runs execute concurrently and share one stdout), and injected secrets are scrubbed before anything is truncated or suppressed. Set `log_level` in `openroutines.yml` to change how much survives -- omitted means `info`:
+The log carries the supervisor's records plus opencode's own diagnostics, passed through into the same stream. Lines are [logfmt](https://brandur.org/logfmt) -- every part of the record is a `key=value` pair, so a line can be filtered by field instead of matched by shape:
 
-- `debug` -- the full model-process transcript plus opencode's own diagnostics. For chasing a specific problem, not for running unattended.
-- `info` -- the default: routine output, one-line tool summaries (diagnostic tails only for failed tools), and supervisor lifecycle lines (run started, completed, registered).
-- `warn` -- no run stream; degraded-but-running conditions (unreachable origin, a routine that stopped loading, sandbox warnings) and everything `error` shows.
+```
+time=2026-07-31T14:52:07.450-04:00 level=INFO msg="attempt starting" routine=check-in run_id=run_abc attempt=attempt_01
+timestamp=2026-07-31T18:52:08.104Z level=INFO run=c613738c message="creating instance" directory=/work routine=check-in run_id=run_abc
+time=2026-07-31T14:52:31.902-04:00 level=ERROR msg="attempt failed -- will retry" routine=check-in run_id=run_abc detail="exit status 1" sessions=/data/run_abc.attempt_01
+```
+
+Filter by `level=`, by `routine=`, or by `run_id=` to follow one logical run across its retries -- opencode's lines land with the same identity fields appended, so a run's diagnostics travel with the supervisor's records about it, and each run is asked for the process's own `log_level`. opencode's lines otherwise keep their own shape (`message=` rather than `msg=`, UTC timestamps): they are opencode's records, decorated rather than rewritten. The supervisor's timestamps are RFC3339 in the agent's timezone, so a log line and a cron expression can be compared without arithmetic. Your platform will usually add its own ingest timestamp alongside; the one in the line is when the event actually happened.
+
+Run output never flows through the log. Storing session history is an opt-in: point `OPENROUTINES_SESSION_DIR` at a directory and each of the attempt's sessions is exported (`opencode export`, the session's replayable form) to `<dir>/<run_id>.<attempt_id>/<session_id>.json` when the attempt ends, whatever the outcome. The `run completed` and `attempt failed` records name the directory (`sessions=...`). Leave the variable unset and nothing is written.
+
+The exports are verbatim -- exactly what opencode renders, not passed through the secret scrubber, because rewriting stored history would falsify the record (the log and the manual echo are scrubbed). Retention is yours too: nothing is pruned. Treat the directory as sensitively as the credentials your routines can see -- what lands there is written owner-only.
+
+A failed attempt never fails invisibly, session dir or not: opencode's own diagnostics are already in the log under the run's identity, and the failure record carries the classified reason (`hint`) when one was recognized. An export that fails partway -- a full volume, say -- still names the directory holding whatever landed, with a warning in the log; an export that lands nothing names no directory at all. A retry reuses the failed attempt's directory name and replaces it, so what you read there is always one attempt. Run output reaches you in exactly one place: `openroutines routines run` streams it to your terminal as it runs.
+
+Set `log_level` in `openroutines.yml` to change how much of the supervisor's log survives -- omitted means `info`:
+
+- `info` -- the default: lifecycle records (attempt starting, run completed, registered) and everything below.
+- `warn` -- degraded-but-running conditions (unreachable origin, a routine that stopped loading, sandbox warnings) and everything `error` shows.
 - `error` -- failed and abandoned runs, held dispatch, and nothing else.
 
-A failed attempt prints its last output at every level -- a warn or error agent still tells you why a run died. `OPENROUTINES_LOG_LEVEL` overrides the configured value for one process, which is how you flip a live container to `debug` without a redeploy (config changes only reach production on redeploy).
+`debug` is accepted for the standard ladder's sake and currently adds nothing beyond `info`. `OPENROUTINES_LOG_LEVEL` overrides the configured value for one process, which is how you quiet or open up a live container without a redeploy (config changes only reach production on redeploy).
 
 ## Continuous deployment
 

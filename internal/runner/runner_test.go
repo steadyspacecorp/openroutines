@@ -1,7 +1,12 @@
 package runner
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,16 +18,24 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
+// discardLog is the logger tests hand to code that only logs on a failure
+// path they aren't asserting on -- there is no log-capture harness in this
+// package, so tests that do care about a specific line read it from
+// behavior (a returned value, a file on disk), not from log output.
+var discardLog = slog.New(slog.DiscardHandler)
+
 func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
-	// Outside the real image the agent user is not in the manual attempt
-	// group, so the reservation must refuse with the image contract named
-	// -- the same refusal an operator sees on a stale deploy image. The
-	// working path runs in bin/smoke's container stage.
+	// Outside the real image the process is not in the attempt groups and
+	// has no cap_setgid to join them, so the reservation must refuse with
+	// the image contract named -- the same refusal an operator sees on a
+	// stale deploy image. The working path runs in bin/smoke's container
+	// stage.
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
 	_, err := Run(t.TempDir(), "daily", false)
-	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "manual attempt group") {
+	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "cap_setgid") {
 		t.Fatalf("manual run error = %v, want fatal manual-identity contract error", err)
 	}
 }
@@ -226,6 +239,74 @@ func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 		t.Error("a routine party to a name collision must fail")
 	} else if !strings.Contains(err.Error(), "duplicate routine") {
 		t.Errorf("want the collision error, got %v", err)
+	}
+}
+
+// An ungranted MCP server's entry does not travel into the workspace's
+// opencode.json: the run's opencode never contacts it, so an ungranted run
+// cannot probe the endpoint or log its needs_auth refusal. Granted entries
+// and every other block pass through.
+func TestApplyDeclaredMCPFiltersUngrantedServers(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"openroutines.yml":  "name: t\n",
+		"opencode.json":     `{"mcp":{"steady":{"type":"remote","url":"https://example.com/mcp"},"other":{"type":"remote","url":"https://example.org/mcp"}},"provider":{"openrouter":{"options":{"baseURL":"https://example.net/v1"}}}}`,
+		"routines/daily.md": "---\nschedule: \"0 9 * * *\"\n---\nwork",
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	load := func(workspace string) map[string]any {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(workspace, "opencode.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+
+	workspace := t.TempDir()
+	if err := buildWorkspace(dir, workspace, "daily"); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyDeclaredMCP(workspace, []string{"steady"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := load(workspace)
+	mcp, _ := cfg["mcp"].(map[string]any)
+	if _, ok := mcp["steady"]; !ok {
+		t.Error("the granted server must travel into the workspace config")
+	}
+	if _, ok := mcp["other"]; ok {
+		t.Error("an ungranted server must not travel into the workspace config")
+	}
+	if _, ok := cfg["provider"]; !ok {
+		t.Error("blocks other than mcp must pass through")
+	}
+
+	bare := t.TempDir()
+	if err := buildWorkspace(dir, bare, "daily"); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyDeclaredMCP(bare, nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg = load(bare)
+	if _, ok := cfg["mcp"]; ok {
+		t.Error("a run with no MCP grants gets no mcp block at all")
+	}
+	if _, ok := cfg["provider"]; !ok {
+		t.Error("blocks other than mcp must pass through")
 	}
 }
 
@@ -593,8 +674,9 @@ func TestResolveCredentialsRaw(t *testing.T) {
 	if s.env["STEADY_TOKEN"] != "sekrit" || s.env["OPENAI_API_KEY"] != "provider-key" {
 		t.Fatalf("raw injection wrong: %v", s.env)
 	}
-	if s.scrub["steady_token"] != "sekrit" {
-		t.Fatal("raw credential missing from scrub set")
+	// Decrypting the store is what registers its values for redaction.
+	if got := scrub.Redacted("carrying sekrit"); strings.Contains(got, "sekrit") {
+		t.Fatalf("stored credential not registered for redaction: %q", got)
 	}
 
 	typed := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"gh_key"}}}
@@ -602,6 +684,41 @@ func TestResolveCredentialsRaw(t *testing.T) {
 	// rather than injecting the stored root secret.
 	if _, err = resolveCredentials(dir, agent, typed, "openai/gpt"); err == nil {
 		t.Fatal("expected derivation failure for an invalid stored key")
+	}
+}
+
+// A resolve that fails partway has already minted whatever came before the
+// failure. That material dies with the abandoned run, so its registration
+// and its revocation must not outlive it -- the registry is bounded by live
+// material, not by history.
+func TestResolveCredentialsReleasesDerivedMaterialOnFailure(t *testing.T) {
+	const bearer = "bearer-of-an-abandoned-run"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"access_token":%q}`, bearer)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.Write(dir, key, map[string]string{"desk": "client-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	agent := &config.Agent{Credentials: map[string]creds.Spec{
+		"desk": {Type: "oauth2_client", TokenURL: server.URL, ClientID: "c", InjectAs: "desk_token"},
+	}}
+	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"desk", "missing_cred"}}}
+
+	if _, err := resolveCredentials(dir, agent, r, "openai/gpt"); err == nil {
+		t.Fatal("declaring an absent credential must fail the run")
+	}
+	if got := scrub.Redacted(bearer); got != bearer {
+		t.Fatalf("the abandoned run's bearer is still registered: %q", got)
 	}
 }
 
@@ -621,7 +738,7 @@ func TestKillClientBoundsTheWaitOnAStuckDockerClient(t *testing.T) {
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
-		killClient(cmd, 100*time.Millisecond, done)
+		killClient(cmd, 100*time.Millisecond, done, discardLog)
 	}()
 	select {
 	case <-returned:
@@ -657,14 +774,14 @@ func TestAuthHintNamesProviderEndpointAndCredential(t *testing.T) {
 	}
 }
 
-// opencode passes some providers' status text through verbatim -- "Error:
-// Unauthorized: Unauthorized" carries no key-shaped phrase, and unmatched it
-// reports as a bare crash (#60).
-func TestAuthFailurePatternMatchesPassthroughStatusText(t *testing.T) {
+// Some providers' status text carries no key-shaped phrase -- the session
+// record's failure reads "...ended on an error: Unauthorized" -- and
+// unmatched it reports as a bare crash (#60).
+func TestAuthFailurePatternMatchesBareStatusText(t *testing.T) {
 	for _, line := range []string{
-		"Error: Unauthorized: Unauthorized",
+		"the model session ended on an error: Unauthorized",
 		"error: unauthorized",
-		"Error: invalid bearer token",
+		"the model session ended on an error: invalid bearer token",
 		"API key is invalid.",
 	} {
 		if !authFailurePattern.MatchString(line) {
@@ -673,5 +790,29 @@ func TestAuthFailurePatternMatchesPassthroughStatusText(t *testing.T) {
 	}
 	if authFailurePattern.MatchString("the reviewer felt unauthorized to approve") {
 		t.Fatal("bare 'unauthorized' outside an error line should not classify as auth failure")
+	}
+}
+
+// The record carries model, effort, and per-attempt tokens when present,
+// and omits them -- never zeroes -- when the runtime didn't report.
+func TestRecordJSONUsage(t *testing.T) {
+	r := &routine.Routine{Name: "x"}
+	meta := Meta{RunID: "run_1"}
+
+	bare := recordJSON(r, meta, 1, &ExecResult{Outcome: Completed}, false)
+	for _, absent := range []string{"tokens", "model", "effort", "cost_reported"} {
+		if strings.Contains(bare, absent) {
+			t.Fatalf("unreported %s must be omitted, got %s", absent, bare)
+		}
+	}
+
+	res := &ExecResult{Outcome: Completed, Model: "fake/model", Effort: "high",
+		Usage: &Usage{Input: 100, Output: 20, Reasoning: 5, CacheRead: 7, CacheWrite: 3, CostReported: 0.01}}
+	rec := recordJSON(r, meta, 1, res, false)
+	for _, want := range []string{`"model":"fake/model"`, `"effort":"high"`, `"input":100`, `"output":20`,
+		`"reasoning":5`, `"cache_read":7`, `"cache_write":3`, `"cost_reported":0.01`} {
+		if !strings.Contains(rec, want) {
+			t.Fatalf("record missing %s: %s", want, rec)
+		}
 	}
 }

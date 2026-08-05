@@ -3,9 +3,12 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
@@ -16,6 +19,7 @@ Usage:
   openroutines configure            fill in openroutines.yml, generate the master key
   openroutines check                validate the agent; made for CI
   openroutines status               show what the agent has and still needs
+  openroutines memory               sync and show the agent's working memory (--json)
   openroutines usage                token use and reported cost per routine (--json)
   openroutines sync                 pull the agent's latest memory from origin (--push)
   openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
@@ -42,6 +46,8 @@ var commands = map[string]func([]string) int{
 	"routine":             cmdRoutines,
 	"supervise":           cmdSupervise,
 	"status":              cmdStatus,
+	"memory":              cmdMemory,
+	"teamwork":            cmdMemory,
 	"usage":               cmdUsage,
 	"sync":                cmdSync,
 	"skills":              cmdSkills,
@@ -100,9 +106,28 @@ func Run(args []string) int {
 		if _, err := os.Stat(config.Path(".")); err != nil {
 			return fail(fmt.Errorf("not an agent repository (no %s found)", config.FileName))
 		}
+		setupLogging(".")
 	}
 
 	return handler(rest)
+}
+
+// setupLogging points the process logger at stdout, gated and stamped from
+// the agent's configuration, before any command runs -- commands and the
+// packages under them never call logging.Setup themselves. Best effort: a
+// broken config or timezone keeps the load-time default so `check` can
+// still run and name the problem itself.
+func setupLogging(dir string) {
+	agent, err := config.Load(dir)
+	if err != nil {
+		return
+	}
+	loc, _ := time.LoadLocation(agent.Timezone)
+	level := agent.EffectiveLogLevel()
+	logging.Setup(os.Stdout, level, loc)
+	if v, ok := config.IgnoredLogLevel(); ok {
+		slog.Warn("ignoring an unrecognized log level", "env", config.EnvLogLevel, "value", v, "using", level)
+	}
 }
 
 func fail(err error) int {

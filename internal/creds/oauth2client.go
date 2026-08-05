@@ -28,7 +28,7 @@ var oauth2HTTP = &http.Client{
 	},
 }
 
-func deriveOAuth2Client(name string, s Spec, stored string) (*Derived, error) {
+func deriveOAuth2Client(s Spec, stored string) (*Derived, error) {
 	form := url.Values{
 		"grant_type":    {"client_credentials"},
 		"client_id":     {s.ClientID},
@@ -77,7 +77,6 @@ func deriveOAuth2Client(name string, s Spec, stored string) (*Derived, error) {
 	return &Derived{
 		Env:     map[string]string{strings.ToUpper(s.InjectAs): token.AccessToken},
 		Bearer:  token.AccessToken,
-		Scrub:   map[string]string{"oauth2_client bearer (" + name + ")": token.AccessToken},
 		Cleanup: func() {},
 	}, nil
 }

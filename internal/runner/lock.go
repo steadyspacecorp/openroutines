@@ -3,9 +3,9 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"syscall"
 
@@ -85,7 +85,10 @@ func (l *MemoryLock) Lock() {
 		}
 		if err != syscall.EINTR {
 			// Proceeding unserialized is the corruption this lock exists to
-			// prevent; there is no recoverable path from here.
+			// prevent; there is no recoverable path from here. Logged before
+			// the panic so the failure has a scrubbed, structured record in
+			// the same stream as everything else.
+			slog.Error("memory worktree lock failed -- refusing to proceed unserialized", "path", l.f.Name(), "error", err)
 			panic(fmt.Sprintf("memory worktree lock: %v", err))
 		}
 	}
@@ -105,15 +108,12 @@ func (l *MemoryLock) Unlock() {
 // kernel lock so two manual runs cannot share it.
 func reserveManualIdentity(dir string) (uint32, func(), error) {
 	const uid = uint32(sandbox.AttemptUIDBase + config.MaxConcurrency)
-	// Group membership is how the staged trees are shared with the identity;
-	// checking it here turns an image predating the manual identity into a
-	// named contract violation instead of a bare chgrp error mid-staging.
-	groups, err := os.Getgroups()
-	if err != nil {
-		return 0, nil, err
-	}
-	if !slices.Contains(groups, int(uid)) {
-		return 0, nil, fmt.Errorf("%w: the agent user is not in the manual attempt group %d -- rebuild the deploy image from the current template Dockerfile", ErrFatal, uid)
+	// Group membership is how the staged trees are shared with the identity.
+	// The container's init may not have delivered the image's membership to
+	// this process, so join the pool here; failure names the contract
+	// violation instead of surfacing as a bare chgrp error mid-staging.
+	if err := sandbox.EnsureAttemptGroups(config.MaxConcurrency + 1); err != nil {
+		return 0, nil, fmt.Errorf("%w: %w", ErrFatal, err)
 	}
 	lockDir := filepath.Join(dir, ".openroutines-tmp", "locks")
 	if err := os.MkdirAll(lockDir, 0o755); err != nil {
@@ -143,7 +143,7 @@ func reserveManualIdentity(dir string) (uint32, func(), error) {
 	}
 	return uid, func() {
 		if err := sandbox.ReapIdentity(uid); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: manual attempt identity cleanup: %v\n", err)
+			slog.Warn("manual attempt identity not proven empty at release", "uid", uid, "error", err)
 		}
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()

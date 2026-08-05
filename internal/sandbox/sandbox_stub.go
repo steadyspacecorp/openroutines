@@ -5,10 +5,10 @@ package sandbox
 import "fmt"
 
 // Apply is the non-Linux stub: the filesystem sandbox is Linux-only.
-func Apply(ro, rw []string) (string, error) {
+func Apply(ro, rw []string) (string, []string, error) {
 	_ = ro
 	_ = rw
-	return "", ErrUnsupported
+	return "", nil, ErrUnsupported
 }
 
 // ProtectProcess is a no-op off Linux: dumpable is a Linux procfs concept,

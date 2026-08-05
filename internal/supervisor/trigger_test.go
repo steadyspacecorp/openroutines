@@ -294,8 +294,12 @@ func TestTriggerDerivesTypedCredential(t *testing.T) {
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("unchanged polls must not fire, got %d runs", got)
 	}
-	if got := scrub.Redact("derived-installation-token", s.secrets.Snapshot()); strings.Contains(got, "derived-installation-token") {
-		t.Fatalf("derived bearer must be redactable in supervisor logs, got %q", got)
+	// Revoked and released: a trigger derives every interval, so its
+	// material must leave the registry with cleanup rather than accumulate.
+	// Redaction while the material is live is pinned where the mint happens
+	// (creds).
+	if got := scrub.Redacted("derived-installation-token"); got != "derived-installation-token" {
+		t.Fatalf("released bearer must leave the scrub registry, got %q", got)
 	}
 }
 

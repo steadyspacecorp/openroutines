@@ -1,15 +1,19 @@
 package creds
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/logging"
 )
 
 func testKeyPEM(t *testing.T) string {
@@ -33,6 +37,7 @@ type githubStub struct {
 	revocations   int
 	mintBodies    []string
 	failBotLookup bool
+	failRevoke    bool
 }
 
 func (g *githubStub) server(t *testing.T) *httptest.Server {
@@ -59,6 +64,15 @@ func (g *githubStub) server(t *testing.T) *httptest.Server {
 			payload = map[string]any{"id": 4242}
 		case r.URL.Path == "/installation/token" && r.Method == "DELETE":
 			g.revocations++
+			if g.failRevoke {
+				// The error message quotes the presented bearer, the way a
+				// hostile or echoing endpoint might: what reaches the log
+				// must arrive redacted, not depend on GitHub's manners.
+				w.WriteHeader(500)
+				bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+				_, _ = w.Write([]byte(`{"message":"cannot revoke ` + bearer + `"}`))
+				return
+			}
 			w.WriteHeader(204)
 			return
 		default:
@@ -82,7 +96,7 @@ func TestDeriveGitHubApp(t *testing.T) {
 	// The one-line escaped key form must work: it is the recommended storage
 	// format (exact-value log scrubbing).
 	escaped := strings.ReplaceAll(testKeyPEM(t), "\n", `\n`)
-	d, err := deriveGitHubApp(Spec{Type: "github_app", AppID: "456"}, escaped, srv.URL)
+	d, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "456"}, escaped, srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,15 +113,6 @@ func TestDeriveGitHubApp(t *testing.T) {
 			t.Fatalf("env %s = %q, want %q", k, d.Env[k], want)
 		}
 	}
-	scrubbed := false
-	for _, v := range d.Scrub {
-		if v == "test-installation-token" {
-			scrubbed = true
-		}
-	}
-	if !scrubbed {
-		t.Fatal("installation token missing from the scrub set")
-	}
 	if d.Bearer != "test-installation-token" {
 		t.Fatalf("bearer = %q, want installation token", d.Bearer)
 	}
@@ -122,20 +127,43 @@ func TestDeriveGitHubApp(t *testing.T) {
 	}
 }
 
+// A revocation that fails leaves the installation token live until it
+// expires, so the operator needs the warning even though the run itself
+// proceeds unaffected.
+func TestDeriveGitHubAppLogsFailedRevocation(t *testing.T) {
+	stub := &githubStub{installations: oneInstallation(), failRevoke: true}
+	srv := stub.server(t)
+	defer srv.Close()
+
+	var out bytes.Buffer
+	logging.Setup(&out, slog.LevelInfo, nil)
+
+	d, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "456"}, testKeyPEM(t), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Cleanup()
+
+	line := out.String()
+	if !strings.Contains(line, "revocation failed") || !strings.Contains(line, "credential=gh") {
+		t.Fatalf("expected a revocation-failure warning naming the credential, got %q", line)
+	}
+}
+
 func TestDeriveGitHubAppRefusesAmbiguity(t *testing.T) {
 	key := testKeyPEM(t)
 
 	stub := &githubStub{installations: append(oneInstallation(), map[string]any{"id": 124, "app_id": 456, "app_slug": "test-app"})}
 	srv := stub.server(t)
 	defer srv.Close()
-	if _, err := deriveGitHubApp(Spec{Type: "github_app", AppID: "456"}, key, srv.URL); err == nil || !strings.Contains(err.Error(), "exactly one installation") {
+	if _, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "456"}, key, srv.URL); err == nil || !strings.Contains(err.Error(), "exactly one installation") {
 		t.Fatalf("two installations must be refused, got %v", err)
 	}
 
 	stub2 := &githubStub{installations: oneInstallation()}
 	srv2 := stub2.server(t)
 	defer srv2.Close()
-	if _, err := deriveGitHubApp(Spec{Type: "github_app", AppID: "999"}, key, srv2.URL); err == nil || !strings.Contains(err.Error(), "belongs to App") {
+	if _, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "999"}, key, srv2.URL); err == nil || !strings.Contains(err.Error(), "belongs to App") {
 		t.Fatalf("an installation of a different App must be refused, got %v", err)
 	}
 	if stub.revocations+stub2.revocations != 0 {
@@ -147,7 +175,7 @@ func TestDeriveGitHubAppRevokesOnPartialFailure(t *testing.T) {
 	stub := &githubStub{installations: oneInstallation(), failBotLookup: true}
 	srv := stub.server(t)
 	defer srv.Close()
-	if _, err := deriveGitHubApp(Spec{Type: "github_app", AppID: "456"}, testKeyPEM(t), srv.URL); err == nil {
+	if _, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "456"}, testKeyPEM(t), srv.URL); err == nil {
 		t.Fatal("a failed bot lookup must fail derivation")
 	}
 	if stub.revocations != 1 {
@@ -155,8 +183,32 @@ func TestDeriveGitHubAppRevokesOnPartialFailure(t *testing.T) {
 	}
 }
 
+// The token is live -- and loggable -- from the moment GitHub returns it,
+// so it registers with the scrub registry right there, not only when
+// Derive returns: a failed revocation's warning during the mint window
+// must not publish it.
+func TestDeriveGitHubAppRedactsTokenInMintWindow(t *testing.T) {
+	stub := &githubStub{installations: oneInstallation(), failBotLookup: true, failRevoke: true}
+	srv := stub.server(t)
+	defer srv.Close()
+
+	var out bytes.Buffer
+	logging.Setup(&out, slog.LevelInfo, nil)
+
+	if _, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "456"}, testKeyPEM(t), srv.URL); err == nil {
+		t.Fatal("a failed bot lookup must fail derivation")
+	}
+	log := out.String()
+	if strings.Contains(log, "test-installation-token") {
+		t.Fatalf("the minted token reached the log unredacted: %s", log)
+	}
+	if !strings.Contains(log, "[REDACTED:") {
+		t.Fatalf("expected the revocation warning to carry a redaction marker, got %s", log)
+	}
+}
+
 func TestDeriveGitHubAppRejectsBadKey(t *testing.T) {
-	if _, err := deriveGitHubApp(Spec{Type: "github_app", AppID: "456"}, "not a key", "http://127.0.0.1:0"); err == nil {
+	if _, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "456"}, "not a key", "http://127.0.0.1:0"); err == nil {
 		t.Fatal("a non-PEM stored value must be rejected before any request")
 	}
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os/signal"
 	"syscall"
 
@@ -33,7 +34,11 @@ func cmdSupervise(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := s.Run(ctx); err != nil {
-		return fail(err)
+		// logging.Setup runs inside supervisor.New, above, so by the time
+		// Run can fail the process logger -- and its scrubbing -- are
+		// already installed; fail() is for the pre-logger case only.
+		slog.Error("supervisor stopped", "error", err, "instance", s.InstanceID, "dir", s.Dir)
+		return 1
 	}
 	return 0
 }

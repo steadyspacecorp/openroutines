@@ -7,11 +7,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
@@ -42,7 +41,6 @@ const stateDirName = "state"
 // worktree, and the supervisor-owned state inside it goes through here.
 type Memory struct {
 	repoDir string
-	secrets map[string]string // lazily loaded; redacted from supervisor-written entries
 }
 
 // At binds the agent repository at repoDir. No I/O: the worktree may not be
@@ -295,6 +293,10 @@ func (m *Memory) Ensure() error {
 						return fmt.Errorf("origin/%s does not descend from the last accepted tip %s -- memory history was rewritten while this agent was down; refusing to adopt it. Inspect origin/%s, then either restore the branch or move %s to the new tip to accept the rewrite deliberately", Branch, short(accepted), Branch, acceptedRef)
 					}
 				}
+				tip, _ := git(m.repoDir, "rev-parse", "refs/heads/"+Branch)
+				slog.Info("memory: adopted the memory branch from origin", "tip", tip)
+			} else if !strings.Contains(lerr.Error(), "exit status 2") {
+				slog.Warn("memory: could not reach origin to adopt the memory branch -- creating a local root; this will diverge if origin has one", "error", lerr)
 			}
 		}
 	}
@@ -313,6 +315,7 @@ func (m *Memory) Ensure() error {
 		if _, err := git(m.repoDir, "branch", Branch, commit); err != nil {
 			return fmt.Errorf("creating memory branch: %w", err)
 		}
+		slog.Info("memory: created the memory branch", "commit", commit)
 	}
 	if _, err := git(m.repoDir, "worktree", "add", wt, Branch); err != nil {
 		return err
@@ -523,8 +526,12 @@ func (m *Memory) Import(stagingDir, baseDir string) (conflicted []Conflict, err 
 		if berr != nil {
 			return nil // the run never saw this file; it cannot delete it
 		}
-		if cur, cerr := os.ReadFile(path); cerr == nil && bytes.Equal(cur, base) {
+		cur, cerr := os.ReadFile(path)
+		if cerr == nil && bytes.Equal(cur, base) {
 			return os.Remove(path)
+		}
+		if cerr == nil {
+			slog.Debug("memory: kept a file the run deleted -- the worktree moved since its snapshot", "path", rel)
 		}
 		return nil
 	})
@@ -628,47 +635,14 @@ func flatten(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// scrubbed prepares supervisor-written text for a memory file: every secret value
-// this process holds redacted, then flattened to one line. Redaction lives at
-// this seam rather than at the call sites that remember to ask for it, because
-// what lands here is committed and pushed -- a git error quoting key material
-// would be a durable, published record, not a log line.
-//
-// An empty set is retried rather than cached: SupervisorSecrets reports no
-// error, so caching a failed load would silently disarm redaction for the
-// life of the process -- and the append most likely to carry key material is
-// one recording that something involving the key just went wrong.
+// scrubbed prepares supervisor-written text for a memory file: every secret
+// in the process scrub registry redacted, then flattened to one line.
+// Redaction lives at this seam rather than at the call sites that remember
+// to ask for it, because what lands here is committed and pushed -- a git
+// error quoting key material would be a durable, published record, not a
+// log line.
 func (m *Memory) scrubbed(line string) string {
-	if len(m.secrets) == 0 {
-		m.secrets = SupervisorSecrets(m.repoDir)
-	}
-	return flatten(scrub.Redact(line, m.secrets))
-}
-
-// SupervisorSecrets collects the secret values the supervisor process itself
-// holds -- the master key and the deploy key -- so its own log lines and the
-// entries it writes to memory can be redacted. (The model's output stream has
-// its own scrubber, seeded with the run's credentials.) The deploy key is
-// multi-line, and redaction is line by line, so each substantial line
-// registers as its own value.
-func SupervisorSecrets(dir string) map[string]string {
-	out := map[string]string{}
-	if key, err := creds.LoadKey(dir); err == nil {
-		out["master_key"] = hex.EncodeToString(key)
-	}
-	deployKey := os.Getenv(EnvDeployKey)
-	if path := os.Getenv(EnvDeployKeyFile); deployKey == "" && path != "" {
-		if raw, err := os.ReadFile(path); err == nil {
-			deployKey = string(raw)
-		}
-	}
-	for i, line := range strings.Split(deployKey, "\n") {
-		line = strings.TrimSpace(line)
-		if len(line) >= 16 && !strings.HasPrefix(line, "-----") {
-			out[fmt.Sprintf("deploy_key_%d", i)] = line
-		}
-	}
-	return out
+	return flatten(scrub.Redacted(line))
 }
 
 // AppendEvent records a supervisor-written event: the mechanism for outcomes
@@ -780,6 +754,8 @@ func (m *Memory) ResolveHumanTasks(idPrefix, resolution string) (bool, error) {
 }
 
 // AppendRunRecord appends one JSONL run record to the supervisor-owned log.
+// Redacted at this seam like every append, but never flattened: the record
+// is already one line, and whitespace inside its JSON strings is content.
 func (m *Memory) AppendRunRecord(record string) error {
 	p := filepath.Join(m.Worktree(), "runs.jsonl")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -787,7 +763,7 @@ func (m *Memory) AppendRunRecord(record string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = fmt.Fprintln(f, record)
+	_, err = fmt.Fprintln(f, scrub.Redacted(record))
 	return err
 }
 
