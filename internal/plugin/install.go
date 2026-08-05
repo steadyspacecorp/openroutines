@@ -48,8 +48,8 @@ func PrepareInstall(agentDir, bundleDir string, source Source) (*Install, error)
 		return nil, err
 	}
 	var taken []string
-	if _, err := os.Stat(filepath.Join(agentDir, "plugins", p.Manifest.Name)); err == nil {
-		taken = append(taken, filepath.Join("plugins", p.Manifest.Name))
+	if _, err := os.Stat(filepath.Join(agentDir, ".openroutines", "plugins", p.Manifest.Name)); err == nil {
+		taken = append(taken, filepath.Join(".openroutines", "plugins", p.Manifest.Name))
 	}
 	taken = append(taken, p.collisions(routines, skills, "")...)
 	if len(taken) > 0 {
@@ -102,7 +102,7 @@ func (p *Plugin) collisions(routines []*routine.Routine, skills []*skill.Skill, 
 // surface.
 func (i *Install) Apply() (installed, pendingStubs []string, err error) {
 	p := i.Plugin
-	destRoot := filepath.Join(i.agentDir, "plugins", p.Manifest.Name)
+	destRoot := filepath.Join(i.agentDir, ".openroutines", "plugins", p.Manifest.Name)
 	if err := copyTreeExclusive(p.Dir, destRoot); err != nil {
 		return nil, nil, err
 	}
@@ -135,7 +135,7 @@ func (i *Install) Apply() (installed, pendingStubs []string, err error) {
 	if err := writeFileExclusive(filepath.Join(destRoot, SourceFileName), sourceRaw); err != nil {
 		return nil, nil, err
 	}
-	installed = append(installed, filepath.Join("plugins", p.Manifest.Name))
+	installed = append(installed, filepath.Join(".openroutines", "plugins", p.Manifest.Name))
 	wt := memory.At(i.agentDir).Worktree()
 	haveWorktree := false
 	if fi, err := os.Stat(wt); err == nil && fi.IsDir() {

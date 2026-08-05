@@ -53,7 +53,7 @@ func cmdUpdate(args []string) int {
 	}
 
 	target := version.Version
-	pinPath := filepath.Join(dir, ".openroutines-version")
+	pinPath := filepath.Join(dir, ".openroutines", "version")
 	current := "(none)"
 	if raw, err := os.ReadFile(pinPath); err == nil {
 		current = strings.TrimSpace(string(raw))
@@ -90,7 +90,7 @@ func cmdUpdate(args []string) int {
 		fmt.Printf("--- %s differs from the %s template ---\n", name, target)
 		printDiff(string(gotRaw), want)
 		apply := true
-		// The Dockerfile's version ARG and .openroutines-version are one pin.
+		// The Dockerfile's version ARG and .openroutines/version are one pin.
 		// Letting a user skip one while advancing the other produces an agent
 		// whose local/CI framework version differs from production.
 		if interactive && name != "Dockerfile" {
@@ -117,12 +117,12 @@ func cmdUpdate(args []string) int {
 		return fail(fmt.Errorf("cannot verify Dockerfile framework version: %w", err))
 	}
 	if !dockerfileUsesVersion(dockerfile, target) {
-		return fail(fmt.Errorf("the Dockerfile still pins a different openroutines version -- .openroutines-version was left at %s; set ARG OPENROUTINES_VERSION=%s and rerun", current, target))
+		return fail(fmt.Errorf("the Dockerfile still pins a different openroutines version -- .openroutines/version was left at %s; set ARG OPENROUTINES_VERSION=%s and rerun", current, target))
 	}
 	if err := os.WriteFile(pinPath, []byte(target+"\n"), 0o644); err != nil {
 		return fail(err)
 	}
-	fmt.Printf("Pinned %s in .openroutines-version (%d file(s) updated, %d skipped)\n\n", target, applied, skipped)
+	fmt.Printf("Pinned %s in .openroutines/version (%d file(s) updated, %d skipped)\n\n", target, applied, skipped)
 	fmt.Println("Review the diff, commit, and push -- your next deploy runs the new version.")
 	fmt.Println("Rolling back is git revert. Routines, skills, memory, and credentials were not touched.")
 	return 0

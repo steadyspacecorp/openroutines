@@ -105,13 +105,13 @@ step "check accepts provider config and flags unreferenced ids"
 # reporter (consumer routine + skill + raw credential + declared MCP server),
 # watcher (routine-only, typed credential + variable + ledger stub), and
 # toolkit (skills-only). The grant summary must state what each asks for,
-# each stays grouped under plugins/<name>/, ledger stubs wait for the memory
+# each stays grouped under .openroutines/plugins/<name>/, ledger stubs wait for the memory
 # worktree, and a reinstall is refused, not overwritten.
 if run plugin add "$repo/testdata/plugins/reporter"; then
   die "non-interactive plugin add should require --yes"
 fi
 grep -q 'rerun with --yes' "$work/out" || die "non-interactive plugin refusal did not explain --yes"
-[[ ! -e plugins/reporter/routines/reporter-digest.md ]] || die "plugin installed without non-interactive consent"
+[[ ! -e .openroutines/plugins/reporter/routines/reporter-digest.md ]] || die "plugin installed without non-interactive consent"
 cp opencode.json "$work/opencode.json.pre-plugins"
 run plugin add "$repo/testdata/plugins/reporter" --yes || die "plugin add reporter"
 grep -q "add to opencode.json's mcp block" "$work/out" || die "declared mcp server not surfaced as a next step"
@@ -120,9 +120,9 @@ for p in toolkit watcher; do
   run plugin add "$repo/testdata/plugins/$p" --yes || die "plugin add $p"
 done
 grep -q 'trigger: polls' "$work/out" && die "no fixture declares a trigger, summary invented one"
-[[ -f plugins/reporter/routines/reporter-digest.md && -d plugins/toolkit/skills/toolkit-notes && -f plugins/watcher/routines/watcher.md ]] || die "plugin files missing"
-[[ -f plugins/reporter/.openroutines-source.yaml ]] || die "plugin provenance missing"
-grep -q '^active: false$' plugins/reporter/routines/reporter-digest.md || die "installed plugin routine is active"
+[[ -f .openroutines/plugins/reporter/routines/reporter-digest.md && -d .openroutines/plugins/toolkit/skills/toolkit-notes && -f .openroutines/plugins/watcher/routines/watcher.md ]] || die "plugin files missing"
+[[ -f .openroutines/plugins/reporter/.openroutines-source.yaml ]] || die "plugin provenance missing"
+grep -q '^active: false$' .openroutines/plugins/reporter/routines/reporter-digest.md || die "installed plugin routine is active"
 [[ -e memory/ledgers/watcher.md ]] && die "ledger stub installed with no memory worktree"
 grep -q 'seed memory/ledgers/watcher.md' "$work/out" || die "pending stub not surfaced as a next step"
 grep -q 'credentials set watcher_app_key' "$work/out" || die "credential next-step missing"
@@ -154,8 +154,8 @@ git -C "$work/update-source" init -q
 git -C "$work/update-source" add .
 git -C "$work/update-source" -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm initial
 run plugin add "$work/update-source" --yes || die "plugin add update fixture"
-sed -i.bak 's/0 9/0 8/' plugins/update-demo/routines/update-demo.md
-rm plugins/update-demo/routines/update-demo.md.bak
+sed -i.bak 's/0 9/0 8/' .openroutines/plugins/update-demo/routines/update-demo.md
+rm .openroutines/plugins/update-demo/routines/update-demo.md.bak
 cat > "$work/update-source/routines/update-demo.md" <<'EOF'
 ---
 schedule: "0 9 * * *"
@@ -166,8 +166,8 @@ EOF
 git -C "$work/update-source" add .
 git -C "$work/update-source" -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm update
 run plugin update update-demo --yes || die "plugin update"
-grep -q 'schedule: "0 8 ' plugins/update-demo/routines/update-demo.md || die "plugin update lost local schedule edit"
-grep -q 'Updated upstream prompt' plugins/update-demo/routines/update-demo.md || die "plugin update missed upstream prompt edit"
+grep -q 'schedule: "0 8 ' .openroutines/plugins/update-demo/routines/update-demo.md || die "plugin update lost local schedule edit"
+grep -q 'Updated upstream prompt' .openroutines/plugins/update-demo/routines/update-demo.md || die "plugin update missed upstream prompt edit"
 run plugin list || die "plugin list"
 grep -q 'update-demo' "$work/out" || die "plugin list omitted installed plugin"
 step "plugin update merges upstream with local edits and advances provenance"
@@ -218,10 +218,10 @@ step "all configuration names load; check nudges the rename"
 # framework-owned files (non-interactive stdin applies automatically).
 # opencode.json is user config: update must never rewrite it.
 cp opencode.json "$work/opencode.json.seeded"
-echo "v0.0.0-old" > .openroutines-version
+echo "v0.0.0-old" > .openroutines/version
 sed -i.bak 's/^ARG OPENROUTINES_VERSION=.*/ARG OPENROUTINES_VERSION=v0.0.0-old/' Dockerfile && rm -f Dockerfile.bak
 "$bin" update </dev/null >"$work/out" 2>&1 || die "update"
-grep -q "$("$bin" version)" .openroutines-version || die "update did not bump the pin"
+grep -q "$("$bin" version)" .openroutines/version || die "update did not bump the pin"
 grep -q "^ARG OPENROUTINES_VERSION=$("$bin" version)$" Dockerfile || die "update did not rewrite the Dockerfile pin"
 cmp -s opencode.json "$work/opencode.json.seeded" || die "update rewrote opencode.json"
 step "update bumps the pin, rewrites the Dockerfile pin, leaves opencode.json alone"

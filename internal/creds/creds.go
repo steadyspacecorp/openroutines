@@ -23,7 +23,7 @@ import (
 // Store layout and key-delivery environment variables.
 const (
 	KeyFileName      = "master.key"
-	FileName         = "credentials.yml.enc"
+	FileName         = ".openroutines/credentials.yml.enc"
 	EnvMasterKey     = "OPENROUTINES_MASTER_KEY"
 	EnvMasterKeyFile = "OPENROUTINES_MASTER_KEY_FILE"
 	header           = "ORV1:" // versioned format header
@@ -195,7 +195,11 @@ func Write(dir string, key []byte, values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, FileName), []byte(encoded+"\n"), 0o644)
+	path := filepath.Join(dir, FileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(encoded+"\n"), 0o644)
 }
 
 // ProviderKeyName returns the reserved credential name for a model provider,

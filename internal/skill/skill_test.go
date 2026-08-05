@@ -21,12 +21,12 @@ func TestListAgentIncludesPluginsAndDropsDuplicateNames(t *testing.T) {
 		}
 	}
 	write("skills/owned", "owned")
-	write("plugins/demo/skills/plugin-owned", "plugin-owned")
+	write(".openroutines/plugins/demo/skills/plugin-owned", "plugin-owned")
 	skills, errs := ListAgent(root)
 	if len(errs) != 0 || len(skills) != 2 {
 		t.Fatalf("grouped discovery: skills=%v errs=%v", skills, errs)
 	}
-	write("plugins/demo/skills/owned", "owned")
+	write(".openroutines/plugins/demo/skills/owned", "owned")
 	skills, errs = ListAgent(root)
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "duplicate skill") {
 		t.Fatalf("duplicate should be reported: skills=%v errs=%v", skills, errs)

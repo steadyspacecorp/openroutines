@@ -149,12 +149,12 @@ func TestLoadAgentIncludesPluginsAndDropsDuplicateIdentities(t *testing.T) {
 		}
 	}
 	write("routines/owned.md")
-	write("plugins/demo/routines/plugin-owned.md")
+	write(".openroutines/plugins/demo/routines/plugin-owned.md")
 	routines, errs := LoadAgent(root)
 	if len(errs) != 0 || len(routines) != 2 {
 		t.Fatalf("grouped discovery: routines=%v errs=%v", routines, errs)
 	}
-	write("plugins/demo/routines/owned.md")
+	write(".openroutines/plugins/demo/routines/owned.md")
 	routines, errs = LoadAgent(root)
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "duplicate routine") {
 		t.Fatalf("duplicate should be reported: routines=%v errs=%v", routines, errs)
@@ -218,7 +218,7 @@ func TestLoadErrorsAreAttributedToTheirRoutine(t *testing.T) {
 // its run, and only then have the runner refuse to assemble the workspace.
 func TestBrokenFileClaimsItsNameAgainstAHealthyOne(t *testing.T) {
 	root := t.TempDir()
-	for _, dir := range []string{filepath.Join(root, "routines"), filepath.Join(root, "plugins", "demo", "routines")} {
+	for _, dir := range []string{filepath.Join(root, "routines"), filepath.Join(root, ".openroutines", "plugins", "demo", "routines")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -227,7 +227,7 @@ func TestBrokenFileClaimsItsNameAgainstAHealthyOne(t *testing.T) {
 		[]byte("---\nschedule: \"0 9 * * *\"\n---\nwork\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "plugins", "demo", "routines", "daily.md"),
+	if err := os.WriteFile(filepath.Join(root, ".openroutines", "plugins", "demo", "routines", "daily.md"),
 		[]byte("---\nschedule: \"0 9 * * *\"\nactve: false\n---\nbroken\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestBrokenFileClaimsItsNameAgainstAHealthyOne(t *testing.T) {
 	if len(errs) != 1 || !Concerns(errs[0], "daily") {
 		t.Fatalf("want one error about daily, got %v", errs)
 	}
-	if !strings.Contains(errs[0].Error(), filepath.Join("plugins", "demo", "routines", "daily.md")) {
+	if !strings.Contains(errs[0].Error(), filepath.Join(".openroutines", "plugins", "demo", "routines", "daily.md")) {
 		t.Errorf("the error must name the broken file, not just the routine: %v", errs[0])
 	}
 }

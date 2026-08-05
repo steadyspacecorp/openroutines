@@ -176,7 +176,7 @@ func WithActive(raw []byte, active bool) ([]byte, error) {
 // keeps one broken file from being everyone's problem -- a run of a healthy
 // routine can tell that the error belongs to someone else. Path names the
 // file when the failure is about one, since a name alone does not say which
-// of routines/ and plugins/*/routines/ the failure is in -- and two plugins
+// of routines/ and .openroutines/plugins/*/routines/ the failure is in -- and two plugins
 // shipping the same broken filename would otherwise be indistinguishable.
 type Error struct {
 	Name string // the routine the failure is about
@@ -250,7 +250,7 @@ func LoadDir(dir string) ([]*Routine, []error) {
 // list is a name the tick would schedule, mint, and push before that refusal.
 func LoadAgent(root string) ([]*Routine, []error) {
 	routines, errs := LoadDir(filepath.Join(root, "routines"))
-	pluginDirs, err := os.ReadDir(filepath.Join(root, "plugins"))
+	pluginDirs, err := os.ReadDir(filepath.Join(root, ".openroutines", "plugins"))
 	if err != nil && !os.IsNotExist(err) {
 		errs = append(errs, err)
 	}
@@ -258,7 +258,7 @@ func LoadAgent(root string) ([]*Routine, []error) {
 		if !entry.IsDir() {
 			continue
 		}
-		found, foundErrs := LoadDir(filepath.Join(root, "plugins", entry.Name(), "routines"))
+		found, foundErrs := LoadDir(filepath.Join(root, ".openroutines", "plugins", entry.Name(), "routines"))
 		routines = append(routines, found...)
 		errs = append(errs, foundErrs...)
 	}

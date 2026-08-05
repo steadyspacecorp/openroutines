@@ -51,7 +51,7 @@ USER agent
 ENV HOME=/home/agent
 
 FROM base AS agent
-# The framework pin, kept in lockstep with .openroutines-version by `openroutines update`.
+# The framework pin, kept in lockstep with .openroutines/version by `openroutines update`.
 ARG OPENROUTINES_VERSION={{OPENROUTINES_VERSION}}
 RUN curl -fsSL https://get.openroutines.dev/install.sh | OPENROUTINES_INSTALL_DIR=/usr/local/bin bash
 RUN mkdir -p /usr/local/lib/openroutines \

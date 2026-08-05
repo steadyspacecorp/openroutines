@@ -12,7 +12,7 @@ instructions -- so nothing written here reaches the deployed agent.
 
 This repo *is* an agent: one job description (`openroutines.yml`), a set of
 scheduled routines (`routines/*.md`), the skills they may use (`skills/`),
-encrypted credentials (`credentials.yml.enc`), and the agent's memory (a
+encrypted credentials (`.openroutines/credentials.yml.enc`), and the agent's memory (a
 `memory/` directory backed by its own git branch). A supervisor in the
 deployed container runs whatever routine is due.
 
@@ -30,7 +30,7 @@ deployed container runs whatever routine is due.
   frontmatter declares. When adding a capability, add the grant in the same
   change so the diff shows what the routine can now touch.
 - A whole capability can arrive as a plugin (`openroutines plugin add
-  <repo>`): its routines and skills stay grouped under `plugins/<name>/`
+  <repo>`): its routines and skills stay grouped under `.openroutines/plugins/<name>/`
   with their source and revision, behind a grant summary and installed
   inactive. They are ordinary repo content -- review and edit them like
   anything else here. `openroutines plugin update <name>` three-way merges
@@ -103,7 +103,7 @@ counts as delivered.
 
 - Never write a secret into any tracked file. Secrets go in the encrypted
   store via `openroutines credentials set <name>` (never edit
-  `credentials.yml.enc` by hand). Credential names are lowercase snake_case
+  `.openroutines/credentials.yml.enc` by hand). Credential names are lowercase snake_case
   and become env vars (`slack_webhook` -> `SLACK_WEBHOOK`) only in runs that
   declare them.
 - Non-secret configuration goes in the `variables:` map in `openroutines.yml`

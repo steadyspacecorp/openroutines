@@ -53,7 +53,7 @@ func PrepareUpdate(agentDir, name string) (*Update, error) {
 	if !skill.NamePattern.MatchString(name) {
 		return nil, fmt.Errorf("invalid plugin name %q", name)
 	}
-	oldSource, err := ReadSource(filepath.Join(agentDir, "plugins", name))
+	oldSource, err := ReadSource(filepath.Join(agentDir, ".openroutines", "plugins", name))
 	if err != nil {
 		return nil, fmt.Errorf("plugin %s: %w", name, err)
 	}
@@ -94,7 +94,7 @@ func PrepareUpdate(agentDir, name string) (*Update, error) {
 	if upstream.Manifest.Name != name {
 		return nil, fmt.Errorf("upstream plugin name changed from %q to %q", name, upstream.Manifest.Name)
 	}
-	if taken := upstream.collisions(routines, skills, filepath.Join(agentDir, "plugins", name)); len(taken) > 0 {
+	if taken := upstream.collisions(routines, skills, filepath.Join(agentDir, ".openroutines", "plugins", name)); len(taken) > 0 {
 		return nil, fmt.Errorf("updated plugin collides with agent content: %s", strings.Join(taken, ", "))
 	}
 	u.Changes, err = changes(u.base, u.theirs)
@@ -113,7 +113,7 @@ func PrepareUpdate(agentDir, name string) (*Update, error) {
 // for the person to resolve, and the recorded revision stays put so rerunning
 // the update converges.
 func (u *Update) Apply() (conflicts []string, err error) {
-	ours := filepath.Join(u.agentDir, "plugins", u.name)
+	ours := filepath.Join(u.agentDir, ".openroutines", "plugins", u.name)
 	merged, err := os.MkdirTemp(u.agentDir, ".openroutines-plugin-update-*")
 	if err != nil {
 		return nil, err
