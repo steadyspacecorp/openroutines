@@ -58,10 +58,21 @@ RUN mkdir -p /usr/local/lib/openroutines \
     && cp /usr/local/bin/openroutines /usr/local/lib/openroutines/sandbox-exec \
     && chown root:root /usr/local/lib/openroutines/sandbox-exec \
     && chmod 0755 /usr/local/lib/openroutines/sandbox-exec
+
+# The committed agent configuration selects the image's matching security
+# profile. The default UID profile carries the three capabilities needed to
+# launch and reap attempt identities. Capability-restricted platforms select
+# the Landlock profile, whose binary must remain capless to exec under
+# no-new-privileges.
+COPY --chown=agent openroutines.yml /agent/openroutines.yml
 RUN chown root:agent /usr/local/bin/openroutines \
     && chmod 0750 /usr/local/bin/openroutines \
-    && setcap cap_setuid,cap_setgid,cap_kill=ep /usr/local/bin/openroutines \
-    && getcap /usr/local/bin/openroutines | grep -q '=ep'
+    && if grep -Eq "^isolation_profile:[[:space:]]*(['\"]?landlock['\"]?)[[:space:]]*(#.*)?$" /agent/openroutines.yml; then \
+         test -z "$(getcap /usr/local/bin/openroutines)"; \
+       else \
+         setcap cap_setuid,cap_setgid,cap_kill=ep /usr/local/bin/openroutines \
+         && getcap /usr/local/bin/openroutines | grep -q '=ep'; \
+       fi
 
 COPY --chown=agent . /agent
 RUN chmod 0700 /agent \

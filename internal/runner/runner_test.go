@@ -34,7 +34,7 @@ func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
 	// stale deploy image. The working path runs in bin/smoke's container
 	// stage.
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
-	_, err := Run(t.TempDir(), "daily", false)
+	_, _, err := reserveManualIdentity(t.TempDir())
 	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "cap_setgid") {
 		t.Fatalf("manual run error = %v, want fatal manual-identity contract error", err)
 	}
@@ -44,6 +44,27 @@ func TestCleanupReportsWorkspaceRemovalFailure(t *testing.T) {
 	staging := &Staging{workspace: "\x00"}
 	if err := staging.Cleanup(); !errors.Is(err, ErrAttemptCleanup) {
 		t.Fatalf("cleanup error = %v, want ErrAttemptCleanup", err)
+	}
+}
+
+func TestSingleIdentityCleanupReopensModelOwnedTree(t *testing.T) {
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "secret"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	staging := &Staging{workspace: root, singleIdentity: true}
+	if err := staging.Cleanup(); err != nil {
+		t.Fatalf("single-identity cleanup: %v", err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("workspace remains after cleanup: %v", err)
 	}
 }
 

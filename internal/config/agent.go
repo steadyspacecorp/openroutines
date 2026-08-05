@@ -71,6 +71,13 @@ const DefaultMaxTimeout = 6 * time.Hour
 // either -- an existing agent stays serial until its operator opts in.
 const ScaffoldConcurrency = 2
 
+const (
+	// IsolationUID requires a distinct Unix identity for every attempt.
+	IsolationUID = "uid"
+	// IsolationLandlock requires Landlock and serial shared-identity runs.
+	IsolationLandlock = "landlock"
+)
+
 // Memory holds memory-behavior settings; see design decision "Memory has three
 // shared primitives" for the retention window semantics.
 type Memory struct {
@@ -84,17 +91,18 @@ type Memory struct {
 // credential a derived type (see design decision "Credentials have types"); a
 // credential without an entry is raw, injected verbatim.
 type Agent struct {
-	Name        string                `yaml:"name"`
-	Description string                `yaml:"description"`
-	Owner       Owner                 `yaml:"owner"`
-	Timezone    string                `yaml:"timezone"`
-	Defaults    Defaults              `yaml:"defaults"`
-	MaxTimeout  string                `yaml:"max_timeout,omitempty"`
-	Concurrency int                   `yaml:"concurrency,omitempty"`
-	LogLevel    string                `yaml:"log_level,omitempty"`
-	Memory      *Memory               `yaml:"memory,omitempty"`
-	Variables   map[string]string     `yaml:"variables,omitempty"`
-	Credentials map[string]creds.Spec `yaml:"credentials,omitempty"`
+	Name             string                `yaml:"name"`
+	Description      string                `yaml:"description"`
+	Owner            Owner                 `yaml:"owner"`
+	Timezone         string                `yaml:"timezone"`
+	Defaults         Defaults              `yaml:"defaults"`
+	MaxTimeout       string                `yaml:"max_timeout,omitempty"`
+	Concurrency      int                   `yaml:"concurrency,omitempty"`
+	IsolationProfile string                `yaml:"isolation_profile,omitempty"`
+	LogLevel         string                `yaml:"log_level,omitempty"`
+	Memory           *Memory               `yaml:"memory,omitempty"`
+	Variables        map[string]string     `yaml:"variables,omitempty"`
+	Credentials      map[string]creds.Spec `yaml:"credentials,omitempty"`
 }
 
 // MaxRunTimeout is the agent-wide ceiling on a single attempt's effective
@@ -119,6 +127,21 @@ func (a *Agent) RunSlots() int {
 		return a.Concurrency
 	}
 	return 1
+}
+
+// EffectiveIsolationProfile returns the production process-isolation profile.
+// Omitted is the full per-attempt UID boundary; the Landlock-only profile is
+// an explicit compatibility choice for capability-restricted platforms.
+func (a *Agent) EffectiveIsolationProfile() string {
+	if a.IsolationProfile == "" {
+		return IsolationUID
+	}
+	return a.IsolationProfile
+}
+
+// UsesAttemptUIDs reports whether production attempts require reserved UIDs.
+func (a *Agent) UsesAttemptUIDs() bool {
+	return a.EffectiveIsolationProfile() == IsolationUID
 }
 
 // MaxConcurrency bounds the reserved production UID pool. Each concurrent
@@ -212,6 +235,15 @@ func (a *Agent) Problems() []string {
 		out = append(out, fmt.Sprintf("concurrency %d must be at least 1", a.Concurrency))
 	} else if a.Concurrency > MaxConcurrency {
 		out = append(out, fmt.Sprintf("concurrency %d exceeds the maximum of %d", a.Concurrency, MaxConcurrency))
+	}
+	switch a.EffectiveIsolationProfile() {
+	case IsolationUID:
+	case IsolationLandlock:
+		if a.Concurrency != 1 {
+			out = append(out, "isolation_profile landlock requires concurrency: 1")
+		}
+	default:
+		out = append(out, fmt.Sprintf("isolation_profile %q must be %q or %q", a.IsolationProfile, IsolationUID, IsolationLandlock))
 	}
 	if _, err := memory.ParseRetention(a.Retention()); err != nil {
 		out = append(out, fmt.Sprintf("memory.retention: %v", err))

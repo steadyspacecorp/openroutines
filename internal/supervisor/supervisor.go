@@ -59,11 +59,12 @@ type Supervisor struct {
 	Dir        string
 	InstanceID string
 
-	mem       *memory.Memory
-	noOrigin  bool
-	loc       *time.Location
-	retention time.Duration
-	lastTrim  time.Time
+	mem              *memory.Memory
+	noOrigin         bool
+	loc              *time.Location
+	retention        time.Duration
+	isolationProfile string
+	lastTrim         time.Time
 
 	// memMu serializes every memory-worktree critical section: the tick's
 	// bookkeeping (sync, trim, scheduling state, intent commit), each
@@ -141,25 +142,30 @@ func New(dir string) (*Supervisor, error) {
 	}
 	slots := make(chan uint32, agent.RunSlots())
 	for i := range agent.RunSlots() {
-		slots <- uint32(attemptUIDBase + i)
+		uid := uint32(0)
+		if agent.UsesAttemptUIDs() {
+			uid = uint32(attemptUIDBase + i)
+		}
+		slots <- uid
 	}
 	return &Supervisor{
-		Dir:            dir,
-		InstanceID:     memory.InstanceID(),
-		mem:            mem,
-		memMu:          memMu,
-		leaseTTL:       memory.LeaseTTL,
-		loc:            loc,
-		retention:      retention,
-		noOrigin:       !mem.HasOrigin(),
-		slots:          slots,
-		inFlight:       map[string]bool{},
-		waitLogged:     map[string]bool{},
-		cooldownWarned: map[string]bool{},
-		fatal:          make(chan error, 1),
-		reap:           sandbox.ReapIdentity,
-		lastPolled:     map[string]time.Time{},
-		pollFailed:     map[string]bool{},
+		Dir:              dir,
+		InstanceID:       memory.InstanceID(),
+		mem:              mem,
+		memMu:            memMu,
+		leaseTTL:         memory.LeaseTTL,
+		loc:              loc,
+		retention:        retention,
+		isolationProfile: agent.EffectiveIsolationProfile(),
+		noOrigin:         !mem.HasOrigin(),
+		slots:            slots,
+		inFlight:         map[string]bool{},
+		waitLogged:       map[string]bool{},
+		cooldownWarned:   map[string]bool{},
+		fatal:            make(chan error, 1),
+		reap:             sandbox.ReapIdentity,
+		lastPolled:       map[string]time.Time{},
+		pollFailed:       map[string]bool{},
 	}, nil
 }
 
@@ -201,7 +207,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		defer func() { s.mem.ReleaseLease(s.leaseSHA) }()
 	}
-	slog.Info("supervising", "dir", s.Dir, "instance", s.InstanceID, "tick", TickInterval)
+	slog.Info("supervising", "dir", s.Dir, "instance", s.InstanceID, "tick", TickInterval, "isolation_profile", s.isolationProfile)
 	if err := s.verifySandbox(); err != nil {
 		return err
 	}
@@ -264,10 +270,22 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			}
 			continue
 		}
+		releaseAttempt := func() {}
+		if s.isolationProfile == config.IsolationLandlock {
+			releaseAttempt, lockErr = runner.LockSingleIdentityAttempt(s.Dir)
+			if lockErr != nil {
+				release()
+				if !errors.Is(lockErr, runner.ErrSingleIdentityBusy) {
+					d.r.Log().Error("single-identity attempt lock failed", "error", lockErr)
+				}
+				continue
+			}
+		}
 		var attemptUID uint32
 		select {
 		case attemptUID = <-s.slots:
 		default:
+			releaseAttempt()
 			release()
 			// warn, not info: an agent whose due work is parked behind a
 			// full pool looks idle from outside, and an operator running at
@@ -282,21 +300,22 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		delete(s.waitLogged, d.r.Name)
 		s.setRunning(d.r.Name, true)
 		s.runs.Add(1)
-		go func(d dispatch, uid uint32, release func()) {
+		go func(d dispatch, uid uint32, release, releaseAttempt func()) {
 			defer s.runs.Done()
+			defer releaseAttempt()
 			defer release()
 			defer s.setRunning(d.r.Name, false)
 			cleanupErr := s.execute(ctx, d.r, d.st, now, uid)
 			if !s.releaseIdentity(uid, cleanupErr) {
 				return
 			}
-		}(d, attemptUID, release)
+		}(d, attemptUID, release, releaseAttempt)
 	}
 }
 
 func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
 	err := cleanupErr
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && s.isolationProfile != config.IsolationLandlock {
 		err = errors.Join(err, s.reap(uid))
 	}
 	if err != nil {
@@ -1005,6 +1024,19 @@ func verifyAttemptGroups(groups []int, slots int) error {
 func (s *Supervisor) verifySandbox() error {
 	switch {
 	case os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
+		if s.isolationProfile == config.IsolationLandlock {
+			probe := exec.Command(sandbox.HelperPath, "sandbox-probe")
+			probe.Env = []string{
+				"TMPDIR=" + os.Getenv("TMPDIR"),
+				sandbox.EnvIsolationProfile + "=" + config.IsolationLandlock,
+			}
+			out, err := probe.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("landlock isolation probe: %w: %s", err, strings.TrimSpace(string(out)))
+			}
+			slog.Warn("landlock isolation profile active -- attempts share the agent uid; concurrency is serial and denial-of-service isolation is reduced", "mode", strings.TrimSpace(string(out)))
+			return nil
+		}
 		// Attempt tree access is granted by group: staging chgrps each run's
 		// trees to the attempt's group, unprivileged only because the agent
 		// user belongs to every attempt group. Join the groups first --

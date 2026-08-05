@@ -65,9 +65,10 @@ const EnvUnsafeOverride = "OPENROUTINES_UNSAFE_NO_SANDBOX"
 // Env vars carrying rule paths from the runner to sandbox-exec
 // (os.PathListSeparator-joined).
 const (
-	EnvRO         = "OPENROUTINES_SANDBOX_RO"
-	EnvRW         = "OPENROUTINES_SANDBOX_RW"
-	EnvAttemptUID = "OPENROUTINES_ATTEMPT_UID"
+	EnvRO               = "OPENROUTINES_SANDBOX_RO"
+	EnvRW               = "OPENROUTINES_SANDBOX_RW"
+	EnvAttemptUID       = "OPENROUTINES_ATTEMPT_UID"
+	EnvIsolationProfile = "OPENROUTINES_ISOLATION_PROFILE"
 )
 
 // Paths computes the rule sets for one attempt: read on the workspace, the

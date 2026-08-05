@@ -17,6 +17,10 @@ import (
 // an attempt is already in flight.
 var ErrRoutineLocked = errors.New("routine attempt already in flight")
 
+// ErrSingleIdentityBusy reports that the Landlock profile already has its
+// one permitted model process in flight, whether scheduled or manual.
+var ErrSingleIdentityBusy = errors.New("the landlock isolation profile already has an attempt in flight")
+
 // LockRoutine takes the per-routine kernel lock (design decision "Overlap"): a
 // non-blocking flock on .openroutines-tmp/locks/<name>.lock, held for the
 // whole attempt lifecycle -- snapshot through import and settlement. Both
@@ -25,18 +29,28 @@ var ErrRoutineLocked = errors.New("routine attempt already in flight")
 // supervisor's own run of the same routine would double external actions
 // and race the import. The kernel drops the lock if the holder dies.
 func LockRoutine(dir, name string) (release func(), err error) {
+	return lockFile(dir, name+".lock", ErrRoutineLocked)
+}
+
+// LockSingleIdentityAttempt serializes all model processes across supervisor
+// instances and manual runs when they share the agent Unix identity.
+func LockSingleIdentityAttempt(dir string) (release func(), err error) {
+	return lockFile(dir, "single-identity-attempt.lock", ErrSingleIdentityBusy)
+}
+
+func lockFile(dir, name string, busy error) (release func(), err error) {
 	lockDir := filepath.Join(dir, ".openroutines-tmp", "locks")
 	if err := os.MkdirAll(lockDir, 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(lockDir, name+".lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(filepath.Join(lockDir, name), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if err == syscall.EWOULDBLOCK {
-			return nil, ErrRoutineLocked
+			return nil, busy
 		}
 		return nil, err
 	}

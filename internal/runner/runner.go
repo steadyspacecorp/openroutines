@@ -131,6 +131,9 @@ type Staging struct {
 	// identity: Cleanup may then need that identity's help to reclaim
 	// paths the model process chmodded away from the group.
 	attemptUID uint32
+	// singleIdentity marks the mandatory-Landlock profile, where the
+	// supervisor owns model-created paths and can reopen modes itself.
+	singleIdentity bool
 
 	// ConsumerThrough is the memory commit the delivery inbox was prepared
 	// against -- set only for consumer routines, fixed before the run starts.
@@ -158,12 +161,19 @@ func (s *Staging) Cleanup() error {
 		}
 	}
 	if err := os.RemoveAll(s.workspace); err != nil {
-		if s.attemptUID == 0 {
-			return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.workspace, err)
-		}
-		reclaimErr := reclaimAttemptTrees(s.attemptUID, s.workspace)
-		if removeErr := os.RemoveAll(s.workspace); removeErr != nil {
-			return fmt.Errorf("%w: reclaim uid %d tree and remove %s", errors.Join(ErrAttemptCleanup, reclaimErr, removeErr), s.attemptUID, s.workspace)
+		if s.singleIdentity {
+			reopenAttemptTrees(s.workspace)
+			if removeErr := os.RemoveAll(s.workspace); removeErr != nil {
+				return fmt.Errorf("%w: reopen and remove %s: %w", ErrAttemptCleanup, s.workspace, removeErr)
+			}
+		} else {
+			if s.attemptUID == 0 {
+				return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.workspace, err)
+			}
+			reclaimErr := reclaimAttemptTrees(s.attemptUID, s.workspace)
+			if removeErr := os.RemoveAll(s.workspace); removeErr != nil {
+				return fmt.Errorf("%w: reclaim uid %d tree and remove %s", errors.Join(ErrAttemptCleanup, reclaimErr, removeErr), s.attemptUID, s.workspace)
+			}
 		}
 	}
 	if s.BaseDir != "" {
@@ -172,6 +182,20 @@ func (s *Staging) Cleanup() error {
 		}
 	}
 	return nil
+}
+
+func reopenAttemptTrees(root string) {
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			_ = os.Chmod(path, 0o700)
+		} else if entry.Type().IsRegular() {
+			_ = os.Chmod(path, 0o600)
+		}
+		return nil
+	})
 }
 
 // reclaimAttemptTrees spawns the capless helper as the attempt identity to
@@ -277,17 +301,18 @@ func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Dura
 // settlement stay serialized behind the supervisor's memory lock (design
 // decision "Overlap").
 type StagedRun struct {
-	dir       string
-	r         *routine.Routine
-	meta      Meta
-	model     string
-	timeout   time.Duration
-	secrets   *runSecrets
-	staging   *Staging
-	workspace string
-	runTmp    string
-	env       []string
-	ocArgs    []string
+	dir              string
+	r                *routine.Routine
+	meta             Meta
+	model            string
+	timeout          time.Duration
+	secrets          *runSecrets
+	staging          *Staging
+	workspace        string
+	runTmp           string
+	env              []string
+	ocArgs           []string
+	isolationProfile string
 
 	// echo, when set, receives the run's scrubbed stdout live -- the manual
 	// `routines run` terminal. The supervisor never sets it: run output is
@@ -310,7 +335,7 @@ func (sr *StagedRun) Discard() error {
 // not hold up every other attempt's settlement. On error, everything Stage
 // acquired -- derived credentials, the workspace -- is already released.
 func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (stagedRun *StagedRun, err error) {
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && meta.AttemptUID == 0 {
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && agent.UsesAttemptUIDs() && meta.AttemptUID == 0 {
 		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
 	}
 	model, err := EffectiveModel(agent, r)
@@ -351,6 +376,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		return nil, err
 	}
 	staging := &Staging{MemoryDir: filepath.Join(workspace, memory.Dir), workspace: workspace}
+	staging.singleIdentity = os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && !agent.UsesAttemptUIDs()
 	defer func() {
 		if !ok {
 			err = errors.Join(err, staging.Cleanup())
@@ -462,17 +488,18 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 
 	ok = true
 	return &StagedRun{
-		dir:       dir,
-		r:         r,
-		meta:      meta,
-		model:     model,
-		timeout:   timeout,
-		secrets:   secrets,
-		staging:   staging,
-		workspace: workspace,
-		runTmp:    runTmp,
-		env:       env,
-		ocArgs:    ocArgs,
+		dir:              dir,
+		r:                r,
+		meta:             meta,
+		model:            model,
+		timeout:          timeout,
+		secrets:          secrets,
+		staging:          staging,
+		workspace:        workspace,
+		runTmp:           runTmp,
+		env:              env,
+		ocArgs:           ocArgs,
+		isolationProfile: agent.EffectiveIsolationProfile(),
 	}, nil
 }
 
@@ -495,6 +522,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	workspace, runTmp, env, ocArgs := sr.workspace, sr.runTmp, sr.env, sr.ocArgs
 	attemptHome := filepath.Join(workspace, attemptHomeName)
 	model, timeout, secrets := sr.model, sr.timeout, sr.secrets
+	isolationProfile := sr.isolationProfile
 	defer secrets.release()
 	ok := false
 	defer func() {
@@ -536,6 +564,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 				sandbox.EnvRO + "=" + sandbox.JoinPaths(ro),
 				sandbox.EnvRW + "=" + sandbox.JoinPaths(rw),
 				sandbox.EnvAttemptUID + "=" + strconv.FormatUint(uint64(meta.AttemptUID), 10),
+				sandbox.EnvIsolationProfile + "=" + isolationProfile,
 				sandbox.EnvUnsafeOverride + "=" + os.Getenv(sandbox.EnvUnsafeOverride),
 			})
 		} else {
@@ -556,7 +585,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		}
 		cmd.Dir = workspace
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && isolationProfile == config.IsolationUID {
 			cmd.SysProcAttr.Credential = &syscall.Credential{
 				Uid: meta.AttemptUID,
 				Gid: meta.AttemptUID,
@@ -687,7 +716,11 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 // identity first, so it can never share a uid with a supervisor slot.
 func Run(dir, name string, noMemory bool) (result *Result, err error) {
 	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+	agent, err := config.Load(dir)
+	if err != nil {
+		return nil, fmt.Errorf("not an agent repository: %w", err)
+	}
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && agent.UsesAttemptUIDs() {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
 		if err != nil {
 			return nil, err
@@ -695,9 +728,12 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 		defer releaseIdentity()
 		meta.AttemptUID = uid
 	}
-	agent, err := config.Load(dir)
-	if err != nil {
-		return nil, fmt.Errorf("not an agent repository: %w", err)
+	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && !agent.UsesAttemptUIDs() {
+		releaseAttempt, lockErr := LockSingleIdentityAttempt(dir)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		defer releaseAttempt()
 	}
 	r, err := routine.Find(dir, name)
 	if err != nil {

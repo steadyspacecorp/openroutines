@@ -111,6 +111,36 @@ func TestConcurrencyConfig(t *testing.T) {
 	}
 }
 
+func TestIsolationProfile(t *testing.T) {
+	a := Agent{
+		Name:        "a",
+		Description: "d",
+		Owner:       Owner{Email: "o@example.com"},
+		Timezone:    "UTC",
+		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
+	}
+	if got := a.EffectiveIsolationProfile(); got != IsolationUID || !a.UsesAttemptUIDs() {
+		t.Fatalf("omitted isolation profile = %q, uses uids %t", got, a.UsesAttemptUIDs())
+	}
+	a.IsolationProfile = IsolationLandlock
+	a.Concurrency = 1
+	if p := a.Problems(); len(p) != 0 {
+		t.Fatalf("serial landlock profile flagged: %v", p)
+	}
+	if a.UsesAttemptUIDs() {
+		t.Fatal("landlock profile uses attempt uids")
+	}
+	a.Concurrency = 2
+	if p := a.Problems(); len(p) != 1 || !strings.Contains(p[0], "requires concurrency: 1") {
+		t.Fatalf("concurrent landlock profile: want one serial problem, got %v", p)
+	}
+	a.Concurrency = 0
+	a.IsolationProfile = "automatic"
+	if p := a.Problems(); len(p) != 1 || !strings.Contains(p[0], "must be") {
+		t.Fatalf("unknown isolation profile: want one problem, got %v", p)
+	}
+}
+
 // The configuration file resolves newest spelling first: .yml, then the
 // legacy .yaml, then the original agent.yaml -- all read, so a pinned
 // agent renames on its own schedule (#50).

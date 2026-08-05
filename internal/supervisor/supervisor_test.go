@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
@@ -68,6 +69,49 @@ func TestAttemptIdentityIsNotReusedWhenWorkspaceCleanupFails(t *testing.T) {
 		}
 	default:
 		t.Fatal("workspace cleanup failure did not stop supervision")
+	}
+}
+
+func TestLandlockProfileReturnsSerialSlotWithoutUIDReaping(t *testing.T) {
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	reaped := false
+	s := &Supervisor{
+		isolationProfile: config.IsolationLandlock,
+		slots:            make(chan uint32, 1),
+		fatal:            make(chan error, 1),
+		reap:             func(uint32) error { reaped = true; return errors.New("must not run") },
+	}
+	if !s.releaseIdentity(0, nil) {
+		t.Fatal("landlock serial slot was not returned")
+	}
+	if reaped {
+		t.Fatal("landlock profile attempted cross-uid reaping")
+	}
+	if uid := <-s.slots; uid != 0 {
+		t.Fatalf("landlock slot identity = %d, want shared identity marker 0", uid)
+	}
+}
+
+func TestLandlockProfileUsesSharedIdentityMarker(t *testing.T) {
+	dir := fixture(t, "success")
+	path := filepath.Join(dir, "openroutines.yml")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("concurrency: 1\nisolation_profile: landlock\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := newSupervisor(t, dir)
+	if s.isolationProfile != config.IsolationLandlock {
+		t.Fatalf("profile = %q", s.isolationProfile)
+	}
+	if uid := <-s.slots; uid != 0 {
+		t.Fatalf("slot identity = %d, want shared identity marker 0", uid)
 	}
 }
 

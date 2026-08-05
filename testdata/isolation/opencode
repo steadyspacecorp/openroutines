@@ -20,6 +20,11 @@ chmod 700 .home/locked
 # The escapee proves it started by writing to staged memory before sleeping
 # -- the record imports, so the smoke test can tell a killed survivor from
 # one that never existed.
-setsid sh -c 'echo "escaped pid=$$" > memory/ledgers/escapee.md; exec sleep 300' </dev/null >/dev/null 2>&1 &
-while [ ! -s memory/ledgers/escapee.md ]; do sleep 0.1; done
+if [ "${OPENROUTINES_ISOLATION_PROFILE:-uid}" = uid ]; then
+  setsid sh -c 'echo "escaped pid=$$" > memory/ledgers/escapee.md; exec sleep 300' </dev/null >/dev/null 2>&1 &
+  while [ ! -s memory/ledgers/escapee.md ]; do sleep 0.1; done
+elif setsid true 2>/dev/null; then
+  echo "landlock attempt escaped its process group" >&2
+  exit 42
+fi
 echo done

@@ -1,6 +1,6 @@
 # Operating in production
 
-An ORA deploys as a plain Docker container. Anything that runs a container runs your agent -- a VPS, Fly, Render, Kamal, your homelab. There is nothing else to provision: no database, no queue, no secrets platform.
+An ORA deploys as a plain Docker container. There is nothing else to provision: no database, no queue, no secrets platform. Most container hosts use the default per-attempt UID isolation profile; capability-restricted hosts such as Render require the explicit Landlock profile described below.
 
 The one prerequisite is a git origin the agent can push to -- GitHub, GitLab, Gitea, even a bare repo on a VPS -- since that's where memory durably lives. (Local development needs no origin, and `openroutines check` verifies one before you deploy.)
 
@@ -21,7 +21,7 @@ ssh-keygen -t ed25519 -f ~/.keys/my-agent_deploy_key -N "" -C "my-agent deploy k
 gh repo deploy-key add ~/.keys/my-agent_deploy_key.pub --allow-write --title "my-agent"
 ```
 
-The agent image is self-contained: the Dockerfile installs the pinned `openroutines` release, checksum-verified, from the public download site. No registry login or token is needed, so your platform's build-from-Dockerfile deploy (`fly deploy`, Render, Kamal) works unmodified. Build and run:
+The agent image is self-contained: the Dockerfile installs the pinned `openroutines` release, checksum-verified, from the public download site. No registry login or token is needed, so your platform can build it directly from its Dockerfile. Build and run:
 
 ```bash
 docker build -t my-agent .
@@ -39,6 +39,26 @@ The image contains the pinned `openroutines` binary, opencode, git, `gh` (can au
 - **The deploy key** lets the agent push its memory. On boot the supervisor fetches the `memory` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
 
 Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEPLOY_KEY_FILE` at the paths, as above -- file delivery keeps key material out of the process environment. On platforms where mounting a file is awkward, the values can arrive directly in `OPENROUTINES_MASTER_KEY` / `OPENROUTINES_DEPLOY_KEY` instead, but environment delivery has a weaker process-exposure posture and is not the recommended production configuration. When the master key value is in its environment the supervisor logs a warning once at boot, so a deployment that chose env delivery years ago is told rather than left to remember -- if you see it after moving to file delivery, the old `OPENROUTINES_MASTER_KEY` is still set and should be unset.
+
+## Isolation profiles
+
+Production has two explicit isolation profiles:
+
+| `isolation_profile` | Required boundary | Concurrency | Use when |
+| --- | --- | --- | --- |
+| `uid` (default when omitted) | A separate Unix identity per attempt; Landlock when available | Up to 32 | The container host permits the generated binary's `CAP_SETUID`, `CAP_SETGID`, and `CAP_KILL` file capabilities |
+| `landlock` | Mandatory Landlock filesystem confinement; attempts share the non-root `agent` identity | Exactly 1 | A capability-restricted host such as Render rejects the default image |
+
+The `landlock` profile retains the filesystem boundary around the repository, canonical memory, master key, and deploy key. A small inherited seccomp rule prevents attempts from leaving their process group, allowing the ordinary group reap to end every descendant. Process isolation is still weaker because same-UID model code may be able to disrupt supervisor-owned processes. The profile is never selected automatically.
+
+To deploy on Render, commit this configuration before Render builds the Dockerfile:
+
+```yaml
+isolation_profile: landlock
+concurrency: 1
+```
+
+The Dockerfile reads that committed setting and leaves the supervisor binary capless. At boot, the supervisor requires working Landlock and process-group confinement probes, then logs the reduced profile. `openroutines check` rejects any concurrency other than 1 and warns about the tradeoff. The unsafe Landlock override does not apply to this profile.
 
 ## Operational properties
 

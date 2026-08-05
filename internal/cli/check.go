@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"os"
@@ -79,6 +80,9 @@ func cmdCheck(args []string) int {
 		}
 	} else {
 		okf("valid (%s, %s)", agent.Name, agent.Timezone)
+		if agent.EffectiveIsolationProfile() == config.IsolationLandlock {
+			warnf("isolation_profile landlock uses one Unix identity: Landlock protects files and secrets, but denial-of-service isolation is weaker than the default uid profile")
+		}
 		if configName != config.FileName {
 			warnf("%s is a legacy configuration name -- rename it to %s (git mv %s %s); all spellings are read, and the rename is a one-line diff",
 				configName, config.FileName, configName, config.FileName)
@@ -372,6 +376,10 @@ func cmdCheck(args []string) int {
 			failf("Dockerfile version pin does not match .openroutines-version %s", v)
 		} else {
 			okf("Dockerfile version pin matches %s", v)
+			if agent != nil && agent.EffectiveIsolationProfile() == config.IsolationLandlock &&
+				(!bytes.Contains(dockerfile, []byte("isolation_profile:")) || !bytes.Contains(dockerfile, []byte("landlock"))) {
+				failf("Dockerfile does not support the capless landlock isolation profile -- run openroutines update")
+			}
 		}
 	}
 

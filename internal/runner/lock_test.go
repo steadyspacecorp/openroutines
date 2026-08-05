@@ -32,6 +32,23 @@ func TestLockRoutineExcludesConcurrentAttempts(t *testing.T) {
 	release3()
 }
 
+func TestSingleIdentityLockSerializesAllAttempts(t *testing.T) {
+	dir := t.TempDir()
+	release, err := LockSingleIdentityAttempt(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LockSingleIdentityAttempt(dir); !errors.Is(err, ErrSingleIdentityBusy) {
+		t.Fatalf("second single-identity lock = %v, want ErrSingleIdentityBusy", err)
+	}
+	release()
+	releaseAgain, err := LockSingleIdentityAttempt(dir)
+	if err != nil {
+		t.Fatalf("lock after release: %v", err)
+	}
+	releaseAgain()
+}
+
 // The memory lock's cross-process exclusion rides the same per-description
 // flock semantics: two separate opens of the lock -- a supervisor and a
 // manual run -- contend through the kernel, not through the in-process mutex.

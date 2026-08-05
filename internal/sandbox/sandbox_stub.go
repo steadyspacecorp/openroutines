@@ -15,6 +15,11 @@ func Apply(ro, rw []string) (string, []string, error) {
 // and production supervision always runs in a Linux container.
 func ProtectProcess() error { return nil }
 
+// RestrictProcessGroupEscape is unavailable off Linux.
+func RestrictProcessGroupEscape() error {
+	return fmt.Errorf("process-group confinement is unavailable on this platform")
+}
+
 // DropIdentity reports that production UID isolation is Linux-only.
 func DropIdentity(_ uint32) error {
 	return fmt.Errorf("attempt uid isolation is unavailable on this platform")

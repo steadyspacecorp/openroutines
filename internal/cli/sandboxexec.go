@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
@@ -48,9 +49,12 @@ func cmdSandboxExec(args []string) int {
 	for _, p := range skippedRW {
 		fmt.Fprintf(os.Stderr, "[sandbox: write grant %s does not exist -- dropped from the ruleset; the run will not be able to write there]\n", p)
 	}
+	landlockOnly := os.Getenv(sandbox.EnvIsolationProfile) == config.IsolationLandlock
 	switch {
 	case err == nil:
 		fmt.Fprintf(os.Stderr, "[sandbox: %s]\n", desc)
+	case landlockOnly:
+		return fail(fmt.Errorf("sandbox-exec: landlock profile requires filesystem confinement: %w", err))
 	case os.Getenv(sandbox.EnvUnsafeOverride) == "1":
 		fmt.Fprintf(os.Stderr, "[sandbox: landlock disabled by %s; uid isolation remains active]\n", sandbox.EnvUnsafeOverride)
 	case runtime.GOOS != "linux":
@@ -59,12 +63,18 @@ func cmdSandboxExec(args []string) int {
 		fmt.Fprintf(os.Stderr, "[sandbox: landlock unavailable (%v); uid isolation remains active]\n", err)
 	}
 
-	uid64, parseErr := strconv.ParseUint(os.Getenv(sandbox.EnvAttemptUID), 10, 32)
-	if parseErr != nil || uid64 == 0 {
-		return fail(fmt.Errorf("sandbox-exec: invalid attempt uid %q", os.Getenv(sandbox.EnvAttemptUID)))
-	}
-	if err := sandbox.DropIdentity(uint32(uid64)); err != nil {
-		return fail(fmt.Errorf("sandbox-exec: uid isolation failed: %w", err))
+	if landlockOnly {
+		if err := sandbox.RestrictProcessGroupEscape(); err != nil {
+			return fail(fmt.Errorf("sandbox-exec: confine attempt process group: %w", err))
+		}
+	} else {
+		uid64, parseErr := strconv.ParseUint(os.Getenv(sandbox.EnvAttemptUID), 10, 32)
+		if parseErr != nil || uid64 == 0 {
+			return fail(fmt.Errorf("sandbox-exec: invalid attempt uid %q", os.Getenv(sandbox.EnvAttemptUID)))
+		}
+		if err := sandbox.DropIdentity(uint32(uid64)); err != nil {
+			return fail(fmt.Errorf("sandbox-exec: uid isolation failed: %w", err))
+		}
 	}
 
 	// Everything the model process creates must stay reachable by the
@@ -117,6 +127,19 @@ func cmdSandboxReclaim(args []string) int {
 // and reports whether confinement is available. Used by supervise at boot
 // (fail closed before the first run, not during it).
 func cmdSandboxProbe(_ []string) int {
+	if os.Getenv(sandbox.EnvIsolationProfile) == config.IsolationLandlock {
+		desc, _, err := sandbox.Apply([]string{os.TempDir()}, nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := sandbox.RestrictProcessGroupEscape(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println(desc + " + single identity")
+		return 0
+	}
 	uid64, err := strconv.ParseUint(os.Getenv(sandbox.EnvAttemptUID), 10, 32)
 	if err != nil || uid64 == 0 {
 		fmt.Fprintln(os.Stderr, "attempt uid is required")

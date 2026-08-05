@@ -21,6 +21,7 @@ COPY openroutines /usr/local/bin/openroutines
 # CAPS is extracted from the scaffolded template Dockerfile by bin/smoke, so
 # this image can never hold a broader grant than production does.
 ARG CAPS=cap_setuid,cap_setgid,cap_kill
+ARG PROFILE=uid
 RUN chmod 0755 /usr/local/bin/opencode \
     && mkdir -p /usr/local/lib/openroutines \
     && cp /usr/local/bin/openroutines /usr/local/lib/openroutines/sandbox-exec \
@@ -28,7 +29,11 @@ RUN chmod 0755 /usr/local/bin/opencode \
     && chmod 0755 /usr/local/lib/openroutines/sandbox-exec \
     && chown root:agent /usr/local/bin/openroutines \
     && chmod 0750 /usr/local/bin/openroutines \
-    && setcap "${CAPS}=ep" /usr/local/bin/openroutines
+    && if [ "${PROFILE}" = landlock ]; then \
+         test -z "$(getcap /usr/local/bin/openroutines)"; \
+       else \
+         setcap "${CAPS}=ep" /usr/local/bin/openroutines; \
+       fi
 COPY --chown=agent agent /agent
 RUN chmod 0700 /agent
 ENV OPENROUTINES_IN_CONTAINER=1

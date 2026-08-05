@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
 	"golang.org/x/sys/unix"
@@ -156,6 +157,30 @@ func Apply(ro, rw []string) (string, []string, error) {
 // checks are ptrace-mode checks, and dumpable is what fails them).
 func ProtectProcess() error {
 	return unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
+}
+
+// RestrictProcessGroupEscape installs an inherited seccomp rule that denies
+// the only syscalls a process can use to leave its attempt process group.
+// The Landlock profile has no per-attempt UID to find detached descendants
+// by, so group cleanup is trustworthy only when descendants cannot detach.
+func RestrictProcessGroupEscape() error {
+	filter := []unix.SockFilter{
+		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 0}, // seccomp_data.nr
+		// Clear x86-64's x32 ABI marker; harmless on architectures without it.
+		{Code: unix.BPF_ALU | unix.BPF_AND | unix.BPF_K, K: 0xbfffffff},
+		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jt: 2, K: uint32(unix.SYS_SETSID)},
+		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jt: 1, K: uint32(unix.SYS_SETPGID)},
+		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ALLOW},
+		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(syscall.EPERM)},
+	}
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return fmt.Errorf("set no-new-privileges: %w", err)
+	}
+	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
+	if err := unix.Prctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER, uintptr(unsafe.Pointer(&program)), 0, 0); err != nil {
+		return fmt.Errorf("install process-group seccomp filter: %w", err)
+	}
+	return nil
 }
 
 func existing(paths []string) (kept, skipped []string) {
