@@ -504,6 +504,13 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		}
 	}()
 
+	// An unattended run is asked for JSON events (see the stderr comment
+	// below); a manual run keeps opencode's default rendering for the
+	// human watching it.
+	if sr.echo == nil {
+		ocArgs = append(slices.Clip(ocArgs), "--format", "json")
+	}
+
 	// Spawn the model process: in the runtime container by default (the
 	// container boundary is the trust boundary), natively inside the
 	// production image or when a contributor opts out.
@@ -588,14 +595,16 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		ocExec = containerOpencodeExec(workspace, image)
 		cmd = containerCmd(containerName, workspace, image, env, ocArgs)
 	}
-	// stderr is opencode's own diagnostic log (--print-logs): each line
+	// stderr carries opencode's diagnostic log (--print-logs): each line
 	// passes through to the log stream with the attempt's identity
 	// appended, scrubbed first -- and with it every failure's diagnostics,
-	// so a failed attempt is never invisible. Run output (stdout) never
-	// enters the log stream: it echoes to the terminal on the interactive
-	// path and is otherwise discarded -- the run's record is its session
-	// (design decision "Run history: opencode's log passed through,
-	// sessions exported").
+	// so a failed attempt is never invisible. stderr also carries the run's
+	// rendered progress -- banner, tool traces, echoed tool output -- unless
+	// the run is asked for JSON events instead, so an unattended run asks:
+	// run output must not masquerade as log lines, and its record is the
+	// session, not the stream (design decision "Run history: opencode's log
+	// passed through, sessions exported"). A watched manual run keeps the
+	// rendering -- that is the one place run output reaches a person.
 	oclog := logging.NewPassthrough(os.Stdout, slog.String("routine", r.Name), slog.String("run_id", meta.RunID))
 	errOut := scrub.NewWriter(oclog)
 	cmd.Stderr = errOut
