@@ -240,16 +240,16 @@ func LoadDir(dir string) ([]*Routine, []error) {
 	return routines, errs
 }
 
-// LoadAgent reads agent-owned routines plus every installed plugin's
-// routines. Names are global identities, so duplicates are errors.
+// LoadPlugins reads every installed plugin's routines. Names are global
+// identities across plugins, so duplicates are errors.
 //
-// Every routine it returns is one a caller may run: a name any attributed
-// error is about is dropped from the list, not just a name two *parseable*
-// files claim. A run whose workspace would be assembled around such a name
-// refuses to start (routine.Concerns, in the runner), so a name left in the
-// list is a name the tick would schedule, mint, and push before that refusal.
-func LoadAgent(root string) ([]*Routine, []error) {
-	routines, errs := LoadDir(filepath.Join(root, "routines"))
+// The returned list contains every parseable claim, including duplicate
+// names. LoadAgent applies precedence and drops broken identities; plugin
+// installation uses the unfiltered claims to prevent two plugins from sharing
+// a name even when an agent-owned routine shadows both.
+func LoadPlugins(root string) ([]*Routine, []error) {
+	var routines []*Routine
+	var errs []error
 	pluginDirs, err := os.ReadDir(filepath.Join(root, ".openroutines", "plugins"))
 	if err != nil && !os.IsNotExist(err) {
 		errs = append(errs, err)
@@ -269,6 +269,42 @@ func LoadAgent(root string) ([]*Routine, []error) {
 		} else {
 			seen[r.Name] = r.Path
 		}
+	}
+	sort.Slice(routines, func(i, j int) bool { return routines[i].Name < routines[j].Name })
+	return routines, errs
+}
+
+// LoadAgent reads agent-owned routines plus every installed plugin's
+// routines. An agent-owned filename shadows the same filename from plugins;
+// duplicate names across plugins remain errors.
+//
+// Every routine it returns is one a caller may run: a name any attributed
+// error is about is dropped from the list. An invalid agent-owned file still
+// claims its name, so a plugin routine cannot silently take over for it.
+func LoadAgent(root string) ([]*Routine, []error) {
+	routines, errs := LoadDir(filepath.Join(root, "routines"))
+	claimed := map[string]bool{}
+	for _, r := range routines {
+		claimed[r.Name] = true
+	}
+	for _, err := range errs {
+		var re *Error
+		if errors.As(err, &re) {
+			claimed[re.Name] = true
+		}
+	}
+	pluginRoutines, pluginErrs := LoadPlugins(root)
+	for _, r := range pluginRoutines {
+		if !claimed[r.Name] {
+			routines = append(routines, r)
+		}
+	}
+	for _, err := range pluginErrs {
+		var re *Error
+		if errors.As(err, &re) && claimed[re.Name] {
+			continue
+		}
+		errs = append(errs, err)
 	}
 	broken := map[string]bool{}
 	for _, err := range errs {

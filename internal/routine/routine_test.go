@@ -136,7 +136,7 @@ func TestParseRejectsUnknownFrontmatterKeys(t *testing.T) {
 	}
 }
 
-func TestLoadAgentIncludesPluginsAndDropsDuplicateIdentities(t *testing.T) {
+func TestLoadAgentIncludesPluginsAndPrefersAgentOwnedRoutine(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel string) {
 		t.Helper()
@@ -154,14 +154,44 @@ func TestLoadAgentIncludesPluginsAndDropsDuplicateIdentities(t *testing.T) {
 	if len(errs) != 0 || len(routines) != 2 {
 		t.Fatalf("grouped discovery: routines=%v errs=%v", routines, errs)
 	}
+	pluginOverride := filepath.Join(root, ".openroutines/plugins/demo/routines/owned.md")
 	write(".openroutines/plugins/demo/routines/owned.md")
 	routines, errs = LoadAgent(root)
-	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "duplicate routine") {
-		t.Fatalf("duplicate should be reported: routines=%v errs=%v", routines, errs)
+	if len(errs) != 0 || len(routines) != 2 {
+		t.Fatalf("agent-owned precedence: routines=%v errs=%v", routines, errs)
 	}
+	found := false
 	for _, r := range routines {
 		if r.Name == "owned" {
-			t.Fatal("ambiguous routine must fail closed, not be returned for execution")
+			found = true
+			if r.Path == pluginOverride || r.Path != filepath.Join(root, "routines", "owned.md") {
+				t.Fatalf("owned routine path = %s, want agent-owned path", r.Path)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("agent-owned routine was not returned")
+	}
+}
+
+func TestLoadAgentRejectsDuplicatePluginRoutines(t *testing.T) {
+	root := t.TempDir()
+	for _, pluginName := range []string{"one", "two"} {
+		path := filepath.Join(root, ".openroutines", "plugins", pluginName, "routines", "shared.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nschedule: \"0 9 * * *\"\n---\nwork\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	routines, errs := LoadAgent(root)
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "duplicate routine") {
+		t.Fatalf("duplicate plugins should be reported: routines=%v errs=%v", routines, errs)
+	}
+	for _, r := range routines {
+		if r.Name == "shared" {
+			t.Fatal("duplicate plugin routine must not be returned for execution")
 		}
 	}
 }
@@ -212,11 +242,9 @@ func TestLoadErrorsAreAttributedToTheirRoutine(t *testing.T) {
 	}
 }
 
-// A file that does not parse still claims its name, so a name two files claim
-// is a collision even when one of them is the broken file -- and both are
-// dropped. Otherwise the tick would schedule the healthy one, mint and push
-// its run, and only then have the runner refuse to assemble the workspace.
-func TestBrokenFileClaimsItsNameAgainstAHealthyOne(t *testing.T) {
+// Agent-owned precedence ignores the same plugin filename completely, even
+// when the shadowed plugin file does not parse.
+func TestAgentOwnedRoutineShadowsBrokenPluginRoutine(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{filepath.Join(root, "routines"), filepath.Join(root, ".openroutines", "plugins", "demo", "routines")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -233,14 +261,11 @@ func TestBrokenFileClaimsItsNameAgainstAHealthyOne(t *testing.T) {
 	}
 
 	routines, errs := LoadAgent(root)
-	if len(routines) != 0 {
-		t.Errorf("daily is ambiguous while one of its two files does not load: %v", routines)
+	if len(routines) != 1 || routines[0].Path != filepath.Join(root, "routines", "daily.md") {
+		t.Errorf("agent-owned daily should win: %v", routines)
 	}
-	if len(errs) != 1 || !Concerns(errs[0], "daily") {
-		t.Fatalf("want one error about daily, got %v", errs)
-	}
-	if !strings.Contains(errs[0].Error(), filepath.Join(".openroutines", "plugins", "demo", "routines", "daily.md")) {
-		t.Errorf("the error must name the broken file, not just the routine: %v", errs[0])
+	if len(errs) != 0 {
+		t.Fatalf("shadowed plugin error should be ignored, got %v", errs)
 	}
 }
 

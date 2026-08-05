@@ -81,6 +81,32 @@ func TestCheckWarnsOnMissingOpencodeJSON(t *testing.T) {
 	}
 }
 
+func TestCheckReportsAgentOwnedRoutineOverride(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
+	os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}\n"), 0o644)
+	for path, body := range map[string]string{
+		filepath.Join("routines", "digest.md"):                                         "Agent-owned implementation.",
+		filepath.Join(".openroutines", "plugins", "reporter", "routines", "digest.md"): "Plugin implementation.",
+	} {
+		path = filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nschedule: \"0 9 * * *\"\n---\n"+body+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, "digest overrides .openroutines/plugins/reporter/routines/digest.md") {
+		t.Fatalf("check should name the shadowed plugin routine:\n%s", out)
+	}
+	if strings.Contains(out, "duplicate routine") {
+		t.Fatalf("an agent-owned override is not a duplicate error:\n%s", out)
+	}
+}
+
 func TestCheckAllowsTypedTriggerCredential(t *testing.T) {
 	dir := t.TempDir()
 	config := checkAgentYAML + "credentials:\n  gh_key:\n    type: github_app\n    app_id: \"1\"\n"

@@ -219,12 +219,12 @@ func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 	if err := buildWorkspace(dir, workspace, "daily"); err != nil {
 		t.Fatalf("a sibling's parse error must not fail this routine's run: %v", err)
 	}
-	for _, f := range []string{"routines/daily.md", "routines/plugged.md"} {
+	for _, f := range []string{"routines/daily.md", "routines/plugged.md", "routines/twin.md"} {
 		if _, err := os.Stat(filepath.Join(workspace, f)); err != nil {
 			t.Errorf("%s should travel into the workspace: %v", f, err)
 		}
 	}
-	for _, f := range []string{"routines/typo.md", "routines/twin.md"} {
+	for _, f := range []string{"routines/typo.md"} {
 		if _, err := os.Stat(filepath.Join(workspace, f)); err == nil {
 			t.Errorf("%s does not load and must not travel into the workspace", f)
 		}
@@ -235,10 +235,8 @@ func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "frontmatter") {
 		t.Errorf("want the parse error, got %v", err)
 	}
-	if err := buildWorkspace(dir, t.TempDir(), "twin"); err == nil {
-		t.Error("a routine party to a name collision must fail")
-	} else if !strings.Contains(err.Error(), "duplicate routine") {
-		t.Errorf("want the collision error, got %v", err)
+	if err := buildWorkspace(dir, t.TempDir(), "twin"); err != nil {
+		t.Errorf("the agent-owned routine should override its plugin namesake: %v", err)
 	}
 }
 
