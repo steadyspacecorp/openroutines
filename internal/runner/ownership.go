@@ -1,9 +1,14 @@
 package runner
 
 import (
+	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
+
+	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
 // The attempt identity's filesystem access is granted on the group axis,
@@ -38,6 +43,38 @@ func prepareWorkspaceAccess(gid uint32, workspace string) error {
 		}
 		return os.Chmod(path, mode)
 	})
+}
+
+// removeAttemptTree removes a tree an attempt identity may have written
+// into -- the run workspace, a capture home. The supervisor's own access
+// rides the group axis, and processes running as the attempt can leave
+// paths the group cannot cover: explicitly requested modes (opencode's
+// 0644, a chmod 0700), which umask can only have narrowed, never widened.
+// The supervisor holds no CAP_DAC_OVERRIDE by design, but every attempt
+// identity is one it minted and can execute as -- authority enough over
+// everything attempt-owned -- so a denied removal is retried after the
+// attempt identity itself reopens its paths. uid 0 means no attempt
+// identity was involved and removal must succeed on its own.
+func removeAttemptTree(uid uint32, path string) error {
+	err := os.RemoveAll(path)
+	if err == nil || uid == 0 {
+		return err
+	}
+	reclaimErr := reclaimAttemptTrees(uid, path)
+	if retryErr := os.RemoveAll(path); retryErr != nil {
+		return errors.Join(reclaimErr, retryErr)
+	}
+	return nil
+}
+
+// reclaimAttemptTrees spawns the capless helper as the attempt identity to
+// restore group bits on paths that identity owns. removeAttemptTree retries
+// removal either way and includes this error if the retry also fails.
+func reclaimAttemptTrees(uid uint32, root string) error {
+	cmd := exec.Command(sandbox.HelperPath, "sandbox-reclaim", root)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid}}
+	return cmd.Run()
 }
 
 // prepareAttemptTrees makes the trees the attempt may mutate -- staged

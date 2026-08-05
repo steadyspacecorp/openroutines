@@ -3,10 +3,12 @@ package runner
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -46,7 +48,12 @@ const captureHomeMount = "/capture-home"
 // The directory comes from TMPDIR, so it fails closed rather than trust
 // it: a TMPDIR inside the workspace would hand the attempt the very home
 // this exists to deny it.
-func captureHome(workspace string) (string, func(), error) {
+//
+// gid names the attempt identity the exec will run as (0 when there is
+// none): what opencode installs under the home then arrives attempt-owned
+// with modes the group cannot cover, so the cleanup removes the tree
+// through that identity's own help.
+func captureHome(workspace string, gid uint32) (string, func(), error) {
 	home, err := os.MkdirTemp("", "openroutines-capture-*")
 	if err != nil {
 		return "", nil, err
@@ -59,7 +66,12 @@ func captureHome(workspace string) (string, func(), error) {
 		}
 		return "", nil, fmt.Errorf("capture home %s is inside the run workspace -- TMPDIR must point outside it", home)
 	}
-	return home, func() { os.RemoveAll(home) }, nil
+	cleanup := func() {
+		if err := removeAttemptTree(gid, home); err != nil {
+			slog.Warn("could not remove the capture home", "path", home, "error", err)
+		}
+	}
+	return home, cleanup, nil
 }
 
 // underDir reports whether path sits at or below dir, both resolved: the
@@ -85,9 +97,11 @@ func underDir(dir, path string) (bool, error) {
 // supervisor. The working directory stays the workspace: opencode scopes
 // sessions to the directory they ran in.
 func hostOpencodeExec(workspace string) opencodeExec {
-	dataHome := filepath.Join(workspace, attemptHomeName, ".local", "share")
+	attemptHome := filepath.Join(workspace, attemptHomeName)
+	dataHome := filepath.Join(attemptHome, ".local", "share")
 	return func(args ...string) ([]byte, error) {
-		home, cleanup, err := captureHome(workspace)
+		gid := attemptGroup(attemptHome)
+		home, cleanup, err := captureHome(workspace, gid)
 		if err != nil {
 			return nil, err
 		}
@@ -102,8 +116,39 @@ func hostOpencodeExec(workspace string) opencodeExec {
 			"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 			"XDG_DATA_HOME=" + dataHome,
 		}
+		// The store is attempt-owned and opencode writes there even to
+		// answer a read (its startup log, sqlite's WAL side files), which
+		// the supervisor's group access cannot cover: files opencode
+		// creates 0644 never carried a group-write bit for the shim's
+		// umask to keep. So the exec runs as the attempt's own identity,
+		// with the minted home handed to it on the group axis.
+		if gid != 0 {
+			if err := os.Chown(home, -1, int(gid)); err != nil {
+				return nil, fmt.Errorf("granting the capture home to the attempt group: %w", err)
+			}
+			if err := os.Chmod(home, 0o770); err != nil {
+				return nil, fmt.Errorf("granting the capture home to the attempt group: %w", err)
+			}
+			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: gid, Gid: gid}}
+		}
 		return cmd.Output()
 	}
+}
+
+// attemptGroup reads back the identity the supervisor granted the attempt
+// home to at staging (gid equals uid by design), 0 when the home is grouped
+// to the supervisor itself: no identity scheme -- native mode, tests -- and
+// nothing to transition to.
+func attemptGroup(attemptHome string) uint32 {
+	info, err := os.Stat(attemptHome)
+	if err != nil {
+		return 0
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Gid == uint32(os.Getgid()) {
+		return 0
+	}
+	return st.Gid
 }
 
 // nativeOpencodeExec runs the developer's own opencode against their own
