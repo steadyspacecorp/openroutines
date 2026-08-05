@@ -23,7 +23,7 @@ deployed container runs whatever routine is due.
   change-detection poll; keep a slow `schedule` as its heartbeat backstop),
   `timeout` (capped at the agent-wide `max_timeout` ceiling in
   `openroutines.yml`), `active`, `skills`, `credentials`, `model`,
-  `url` (available as `$OPENROUTINES_URL`), `effort` (reasoning effort, e.g. `high`), `events`, `consumes` -- and the
+  `url` (available as `$OPENROUTINES_URL`), `effort` (reasoning effort, e.g. `high`), `teamwork` (`full`/`events`/`off`), `consumes` -- and the
   body is the prompt. The filename is the routine's identity: renaming a
   routine retires it and starts a new one with fresh scheduling state.
 - **Grants are explicit**: a routine gets only the skills and credentials its

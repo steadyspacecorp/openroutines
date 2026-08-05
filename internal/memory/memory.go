@@ -540,7 +540,7 @@ func (m *Memory) Import(stagingDir, baseDir string) (conflicted []Conflict, err 
 // RestoreFile puts the base-snapshot copy of one memory file back into the
 // staged tree, undoing whatever the run staged there -- restored to base,
 // not to the live worktree, so the import's unchanged-versus-base rule then
-// skips the file entirely. The enforcement half of `events: false` (design
+// skips the file entirely. The enforcement half of `teamwork: off` (design
 // decision "Memory records events, tasks, and context"): the instruction
 // tells the routine not to write the file, this makes sure. Reports whether
 // a staged change was discarded.

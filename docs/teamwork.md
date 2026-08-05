@@ -13,7 +13,7 @@ One rule routes everything an agent wants to remember, into files any autonomous
 - It may inform future decisions but requires no action → a line in **context.md**
 - Only one routine needs it → that routine's private ledger in `memory/ledgers/` -- working state for its next run, not a run log
 
-Records hold facts, never polished prose -- compression and voice are a reader's job. The rule is injected into every run by the runtime, not left to routine authors; a reporting routine opts out of recording events with `events: false` (checking in is not work).
+Records hold facts, never polished prose -- compression and voice are a reader's job. The rule is injected into every run by the runtime, not left to routine authors; a reporting routine opts out of recording events with `teamwork: off` (checking in is not work), and a conditional check declares `teamwork: events` -- its runs still land in the record, but its fires appear in `schedule.md` as `fact:` lines, to know about rather than report on.
 
 ## Memory lives on a git branch
 

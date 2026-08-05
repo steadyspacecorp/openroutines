@@ -751,7 +751,7 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 type Settlement struct {
 	Outcome   Outcome // downgraded to Crashed when staged memory was rejected
 	Detail    string  // the failure description recorded; "" for clean completions
-	Discarded bool    // staged events.md change discarded (events: false)
+	Discarded bool    // staged events.md change discarded (teamwork: off)
 	Commit    string  // settlement commit hash, "" when nothing changed
 	// Conflicted names files where this run and a concurrently settled run
 	// edited the same lines: the import kept both sides (union merge), and
@@ -821,7 +821,7 @@ func parseAttempt(attemptID string) int {
 }
 
 // importMemory applies routine-level memory policy, then imports the staged
-// tree. A routine with events: false cannot record events: a staged change
+// tree. A routine with teamwork: off cannot record events: a staged change
 // to events.md is discarded -- the worktree copy wins, the rest of the tree
 // imports normally. Reports whether such a change was discarded.
 func importMemory(dir string, r *routine.Routine, staging *Staging) (discarded bool, conflicted []memory.Conflict, err error) {

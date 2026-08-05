@@ -139,3 +139,17 @@ func TestCheckAllowsTypedTriggerCredential(t *testing.T) {
 		t.Fatalf("check should flag a stored github_app value that cannot serve its type:\n%s", out)
 	}
 }
+
+func TestCheckSurfacesRetiredEventsKeyWithMapping(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
+	os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
+	os.WriteFile(filepath.Join(dir, "routines", "check-in.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\nevents: false\nconsumes: memory\n---\nReport.\n"), 0o644)
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, `"events: false" is now "teamwork: off"`) {
+		t.Fatalf("a fleet routine still declaring events: must fail check with the rename, not an unknown-field error:\n%s", out)
+	}
+}

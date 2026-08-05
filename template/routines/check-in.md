@@ -1,7 +1,7 @@
 ---
 schedule: "0 6,18 * * *"
 timeout: 10m
-events: false
+teamwork: off
 consumes: memory
 ---
 Compose this agent's twice-daily check-in and print it as your output -- it

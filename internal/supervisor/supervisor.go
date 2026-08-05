@@ -721,7 +721,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		log.Error("settle failed", "error", serr)
 	}
 	if settlement.Discarded {
-		log.Info("discarded staged events.md change (events: false)")
+		log.Info("discarded staged events.md change (teamwork: off)")
 	}
 	for i, conflict := range settlement.Conflicted {
 		taskID := fmt.Sprintf("task-%s-memory-conflict-%d", p.RunID, i+1)
