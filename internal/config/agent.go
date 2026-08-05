@@ -126,9 +126,10 @@ func (a *Agent) RunSlots() int {
 	return 1
 }
 
-// MaxConcurrency bounds the reserved production UID pool. Each concurrent
-// attempt needs a distinct identity; a finite ceiling keeps that security
-// boundary explicit in the image and configuration.
+// MaxConcurrency is the ceiling on run slots. Nothing structural requires
+// one -- each attempt builds its own sandbox and needs no reserved identity
+// -- but dozens of model processes in one container is a configuration
+// mistake, and a stated ceiling catches it before boot rather than at load.
 const MaxConcurrency = 32
 
 // Retention returns the configured knowledge retention string ("" = default).

@@ -20,23 +20,17 @@ FROM debian:trixie-slim AS base
 
 # Tools every run can rely on: git, gh for GitHub work, jq for reading JSON APIs,
 # ssh for git-over-ssh knowledge pushes, curl for the installs below.
-# The attempt identity pool: 32 run-slot identities plus attempt-32, reserved
-# for manual `routines run` inside the container. The agent user joins every
-# attempt group because per-attempt filesystem access is granted on the group
-# axis: the supervisor chgrps the trees it stages (unprivileged for a group it
-# belongs to) instead of chowning them, which would need CAP_CHOWN and friends.
+# bubblewrap is the preferred run sandbox: the supervisor wraps every model
+# process in its own mount, pid, ipc, uts and user namespaces, so one run
+# cannot see, signal, or name anything belonging to another. It is the only
+# sandbox that needs installing -- where the host will not permit those
+# namespaces the supervisor falls back to a Landlock domain, which needs
+# nothing but the kernel.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git gh jq openssh-client curl ca-certificates libcap2-bin \
+    && apt-get install -y --no-install-recommends git gh jq openssh-client curl ca-certificates bubblewrap \
     && rm -rf /var/lib/apt/lists/* \
-    && groups=""; \
-       for i in $(seq 0 32); do \
-         uid=$((20000 + i)); \
-         groupadd --gid "${uid}" "attempt-${i}"; \
-         useradd --no-create-home --uid "${uid}" --gid "${uid}" --shell /usr/sbin/nologin "attempt-${i}"; \
-         groups="${groups},attempt-${i}"; \
-       done \
     && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
-    && useradd -m -u 10001 -G "${groups#,}" agent
+    && useradd -m -u 10001 agent
 
 # opencode's installer only targets $HOME, so relocate the binary to the system path.
 ARG OPENCODE_VERSION=1.18.3
@@ -54,15 +48,6 @@ FROM base AS agent
 # The framework pin, kept in lockstep with .openroutines/version by `openroutines update`.
 ARG OPENROUTINES_VERSION={{OPENROUTINES_VERSION}}
 RUN curl -fsSL https://get.openroutines.dev/install.sh | OPENROUTINES_INSTALL_DIR=/usr/local/bin bash
-RUN mkdir -p /usr/local/lib/openroutines \
-    && cp /usr/local/bin/openroutines /usr/local/lib/openroutines/sandbox-exec \
-    && chown root:root /usr/local/lib/openroutines/sandbox-exec \
-    && chmod 0755 /usr/local/lib/openroutines/sandbox-exec
-RUN chown root:agent /usr/local/bin/openroutines \
-    && chmod 0750 /usr/local/bin/openroutines \
-    && setcap cap_setuid,cap_setgid,cap_kill=ep /usr/local/bin/openroutines \
-    && getcap /usr/local/bin/openroutines | grep -q '=ep'
-
 COPY --chown=agent . /agent
 RUN chmod 0700 /agent \
     && find /agent -type d -exec chmod 0700 {} + \

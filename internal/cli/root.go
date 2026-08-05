@@ -11,6 +11,7 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
+	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
@@ -35,41 +36,43 @@ Run any command from inside an agent repository (except scaffold).
 `
 
 // commands are recognized CLI subcommands, mapped to their handler.
-// scaffold, sandbox-exec, and sandbox-probe are exempt from the agent-repo
-// check below: scaffold creates the repository, and the sandbox commands
-// are internal re-exec shims that run in the sandboxed workspace, not the
-// agent checkout.
+// scaffold is exempt from the agent-repo check below: it creates the
+// repository. sandbox-exec is exempt too, and undocumented besides: it is the
+// supervisor re-entering its own binary to confine one attempt, not something
+// anyone types.
 var commands = map[string]func([]string) int{
-	"scaffold":            cmdScaffold,
-	"configure":           cmdConfigure,
-	"check":               cmdCheck,
-	"routines":            cmdRoutines,
-	"routine":             cmdRoutines,
-	"supervise":           cmdSupervise,
-	"status":              cmdStatus,
-	"usage":               cmdUsage,
-	"sync":                cmdSync,
-	"skills":              cmdSkills,
-	"skill":               cmdSkills,
-	"plugin":              cmdPlugin,
-	"plugins":             cmdPlugin,
-	"credentials":         cmdCredentials,
-	"credential":          cmdCredentials,
-	"update":              cmdUpdate,
-	"sandbox-exec":        cmdSandboxExec,
-	"sandbox-probe":       cmdSandboxProbe,
-	"sandbox-spawn-probe": cmdSandboxSpawnProbe,
-	"sandbox-hold":        cmdSandboxHold,
-	"sandbox-reclaim":     cmdSandboxReclaim,
+	"scaffold":          cmdScaffold,
+	"configure":         cmdConfigure,
+	"check":             cmdCheck,
+	"routines":          cmdRoutines,
+	"routine":           cmdRoutines,
+	"supervise":         cmdSupervise,
+	"status":            cmdStatus,
+	"usage":             cmdUsage,
+	"sync":              cmdSync,
+	"skills":            cmdSkills,
+	"skill":             cmdSkills,
+	"plugin":            cmdPlugin,
+	"plugins":           cmdPlugin,
+	"credentials":       cmdCredentials,
+	"credential":        cmdCredentials,
+	"update":            cmdUpdate,
+	sandbox.ShimCommand: cmdSandboxExec,
+}
+
+// cmdSandboxExec confines this process and execs the run it was handed. It
+// never returns on success: the model process replaces it, keeping the pid
+// the supervisor is already waiting on.
+func cmdSandboxExec(args []string) int {
+	if err := sandbox.ExecConfined(args); err != nil {
+		return fail(err)
+	}
+	return 0
 }
 
 var repoOptional = map[string]bool{
-	"scaffold":            true,
-	"sandbox-exec":        true,
-	"sandbox-probe":       true,
-	"sandbox-spawn-probe": true,
-	"sandbox-hold":        true,
-	"sandbox-reclaim":     true,
+	"scaffold":          true,
+	sandbox.ShimCommand: true,
 }
 
 // Run dispatches a CLI invocation and returns the process exit code.

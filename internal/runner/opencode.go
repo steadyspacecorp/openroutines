@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -32,7 +31,7 @@ import (
 // runtime doesn't know what its consumers ask -- sessions.go is one,
 // fetching through the opencodeExec contract exec happens to satisfy.
 type opencode interface {
-	run(ocArgs []string) *exec.Cmd
+	run(ocArgs []string) (*exec.Cmd, error)
 	kill(cmd *exec.Cmd, done chan error, log *slog.Logger)
 	reap(cmd *exec.Cmd)
 	exec(args ...string) ([]byte, error)
@@ -52,7 +51,6 @@ func (sr *StagedRun) opencode() (opencode, error) {
 			workspace:    sr.workspace,
 			runTmp:       sr.runTmp,
 			knowledgeDir: sr.staging.KnowledgeDir,
-			uid:          sr.meta.AttemptUID,
 			env:          sr.env,
 		}, nil
 	case nativeMode():
@@ -97,14 +95,15 @@ func nativeMode() bool {
 	return os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" || os.Getenv("OPENROUTINES_NATIVE") == "1"
 }
 
-// hostOpencode is production: opencode from the image's PATH, the run
-// confined behind the Landlock shim as the attempt's own identity.
+// hostOpencode is production: opencode from the image's PATH, each run
+// confined in a sandbox of its own -- the strongest rung the host allowed,
+// probed at boot (see sandbox.Verify) -- holding the read-only OS, this
+// workspace, and nothing else.
 type hostOpencode struct {
 	processGroup
 	workspace    string
 	runTmp       string
 	knowledgeDir string
-	uid          uint32
 	env          []string
 }
 
@@ -114,17 +113,29 @@ func (h hostOpencode) home() string { return filepath.Join(h.workspace, attemptH
 
 func (h hostOpencode) dataHome() string { return filepath.Join(h.home(), ".local", "share") }
 
-// run builds the model process behind the Landlock shim -- our own binary
-// applies the rules to itself, then execs opencode. See design decision
-// "Runs are sandboxed" for the fail-closed policy.
+// run builds the model process inside this attempt's own sandbox. The
+// supervisor proved a sandbox can be built here at boot, so failing to
+// build one now is a run failure, not a policy decision. Where the
+// operator disabled the sandbox, the attempt is unchanged in every other
+// respect -- same constructed environment, same disposable HOME, same
+// workspace -- because the hatch gives up the confinement, not the rest of
+// what a run is. The supervisor said what that costs at boot.
 //
 // HOME is disposable and the attempt's alone: a shared writable opencode
 // home let one routine persist state -- plugins included -- into a later
 // routine's session. Provider auth arrives by env var, so opencode needs
 // no durable home.
-func (h hostOpencode) run(ocArgs []string) *exec.Cmd {
-	ro, rw := sandbox.Paths(h.workspace, h.knowledgeDir, h.runTmp, os.Getenv("HOME"), h.home())
-	cmd := exec.Command(sandbox.HelperPath, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
+func (h hostOpencode) run(ocArgs []string) (*exec.Cmd, error) {
+	cmd := exec.Command("opencode", ocArgs...)
+	if !sandbox.Disabled() {
+		var err error
+		if cmd, err = sandbox.Command(sandbox.Attempt{
+			Workspace: h.workspace,
+			Writable:  []string{h.knowledgeDir, h.runTmp, h.home()},
+		}, append([]string{"opencode"}, ocArgs...)...); err != nil {
+			return nil, err
+		}
+	}
 	cmd.Env = slices.Concat(h.env, []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + h.home(),
@@ -132,17 +143,28 @@ func (h hostOpencode) run(ocArgs []string) *exec.Cmd {
 		"XDG_CONFIG_HOME=" + filepath.Join(h.home(), ".config"),
 		"XDG_CACHE_HOME=" + filepath.Join(h.home(), ".cache"),
 		"TMPDIR=" + h.runTmp,
-		sandbox.EnvRO + "=" + sandbox.JoinPaths(ro),
-		sandbox.EnvRW + "=" + sandbox.JoinPaths(rw),
-		sandbox.EnvAttemptUID + "=" + strconv.FormatUint(uint64(h.uid), 10),
-		sandbox.EnvUnsafeOverride + "=" + os.Getenv(sandbox.EnvUnsafeOverride),
 	})
 	cmd.Dir = h.workspace
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid:    true,
-		Credential: &syscall.Credential{Uid: h.uid, Gid: h.uid},
+	// A session of its own, not merely a process group: without one a
+	// sandboxed process can push characters into the controlling terminal's
+	// input queue with TIOCSTI and run commands outside the sandbox
+	// (CVE-2017-5226). bwrap asks for this itself with --new-session; a rung
+	// that is an ordinary subprocess cannot, so the spawn does it for them. A
+	// session leader is a process group leader too, with pgid == pid, so the
+	// post-run sweep still has the group it kills.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return cmd, nil
+}
+
+// reap sweeps only where nothing else collapses the tree: the bubblewrap
+// rung's pid namespace dies with the sandbox and takes every descendant
+// with it, while the fallback rung (and the disabled hatch) leaves a
+// detached descendant to the runner's group sweep -- a question about the
+// confinement in force, not about which deployment mode this is.
+func (h hostOpencode) reap(cmd *exec.Cmd) {
+	if !sandbox.Provides().CollapsesTree {
+		reapGroup(cmd)
 	}
-	return cmd
 }
 
 // exec runs one subcommand with a minted hygiene HOME: this process is not
@@ -151,8 +173,7 @@ func (h hostOpencode) run(ocArgs []string) *exec.Cmd {
 // reached by XDG_DATA_HOME instead: that path carries the attempt's data,
 // never its code.
 func (h hostOpencode) exec(args ...string) ([]byte, error) {
-	gid := attemptGroup(h.home())
-	home, cleanup, err := captureHome(h.workspace, gid)
+	home, cleanup, err := captureHome(h.workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -166,21 +187,6 @@ func (h hostOpencode) exec(args ...string) ([]byte, error) {
 		"HOME=" + home,
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 		"XDG_DATA_HOME=" + h.dataHome(),
-	}
-	// The store is attempt-owned and opencode writes there even to
-	// answer a read (its startup log, sqlite's WAL side files), which
-	// the supervisor's group access cannot cover: files opencode
-	// creates 0644 never carried a group-write bit for the shim's
-	// umask to keep. So the exec runs as the attempt's own identity,
-	// with the minted home handed to it on the group axis.
-	if gid != 0 {
-		if err := os.Chown(home, -1, int(gid)); err != nil {
-			return nil, fmt.Errorf("granting the capture home to the attempt group: %w", err)
-		}
-		if err := os.Chmod(home, 0o770); err != nil {
-			return nil, fmt.Errorf("granting the capture home to the attempt group: %w", err)
-		}
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: gid, Gid: gid}}
 	}
 	return runToFile(cmd)
 }
@@ -198,11 +204,10 @@ func (h hostOpencode) exec(args ...string) ([]byte, error) {
 // it: a TMPDIR inside the workspace would hand the attempt the very home
 // this exists to deny it.
 //
-// gid names the attempt identity the exec will run as (0 when there is
-// none): what opencode installs under the home then arrives attempt-owned
-// with modes the group cannot cover, so the cleanup removes the tree
-// through that identity's own help.
-func captureHome(workspace string, gid uint32) (string, func(), error) {
+// What opencode installs under the home it may leave at modes that stop a
+// plain walk, so the cleanup removes the tree the way a run workspace is
+// removed.
+func captureHome(workspace string) (string, func(), error) {
 	home, err := os.MkdirTemp("", "openroutines-capture-*")
 	if err != nil {
 		return "", nil, err
@@ -216,7 +221,7 @@ func captureHome(workspace string, gid uint32) (string, func(), error) {
 		return "", nil, fmt.Errorf("capture home %s is inside the run workspace -- TMPDIR must point outside it", home)
 	}
 	cleanup := func() {
-		if err := removeAttemptTree(gid, home); err != nil {
+		if err := removeTree(home); err != nil {
 			slog.Warn("could not remove the capture home", "path", home, "error", err)
 		}
 	}
@@ -241,22 +246,6 @@ func underDir(dir, path string) (bool, error) {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)), nil
 }
 
-// attemptGroup reads back the identity the supervisor granted the attempt
-// home to at staging (gid equals uid by design), 0 when the home is grouped
-// to the supervisor itself: no identity scheme -- native mode, tests -- and
-// nothing to transition to.
-func attemptGroup(attemptHome string) uint32 {
-	info, err := os.Stat(attemptHome)
-	if err != nil {
-		return 0
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || st.Gid == uint32(os.Getgid()) {
-		return 0
-	}
-	return st.Gid
-}
-
 // nativeOpencode is OPENROUTINES_NATIVE=1: the developer's own opencode,
 // an explicit, unconfined dev opt-in (local user runs are confined by the
 // run container instead). The developer's real HOME stays for both paths:
@@ -273,7 +262,7 @@ type nativeOpencode struct {
 	env       []string
 }
 
-func (n nativeOpencode) run(ocArgs []string) *exec.Cmd {
+func (n nativeOpencode) run(ocArgs []string) (*exec.Cmd, error) {
 	cmd := exec.Command("opencode", ocArgs...)
 	cmd.Env = slices.Concat(n.env, []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -282,7 +271,7 @@ func (n nativeOpencode) run(ocArgs []string) *exec.Cmd {
 	})
 	cmd.Dir = n.workspace
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	return cmd
+	return cmd, nil
 }
 
 func (n nativeOpencode) exec(args ...string) ([]byte, error) {
@@ -308,7 +297,7 @@ type containerOpencode struct {
 // passed by NAME only -- docker resolves the values from the client
 // process's environment -- so secret values never appear on the command
 // line (argv is world-readable via ps for the duration of the run).
-func (c containerOpencode) run(ocArgs []string) *exec.Cmd {
+func (c containerOpencode) run(ocArgs []string) (*exec.Cmd, error) {
 	// HOME is the disposable per-attempt directory inside the mounted
 	// workspace -- the same hygiene production applies, and what makes
 	// opencode's session storage readable after the container exits
@@ -332,7 +321,7 @@ func (c containerOpencode) run(ocArgs []string) *exec.Cmd {
 	// The docker client needs its own environment (daemon socket, config)
 	// plus the values it will forward by name.
 	cmd.Env = append(os.Environ(), c.env...)
-	return cmd
+	return cmd, nil
 }
 
 func (c containerOpencode) kill(cmd *exec.Cmd, done chan error, log *slog.Logger) {

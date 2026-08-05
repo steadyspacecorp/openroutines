@@ -27,23 +27,35 @@ import (
 // behavior (a returned value, a file on disk), not from log output.
 var discardLog = slog.New(slog.DiscardHandler)
 
-func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
-	// Outside the real image the process is not in the attempt groups and
-	// has no cap_setgid to join them, so the reservation must refuse with
-	// the image contract named -- the same refusal an operator sees on a
-	// stale deploy image. The working path runs in bin/smoke's container
-	// stage.
-	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
-	_, err := Run(t.TempDir(), "daily", false)
-	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "cap_setgid") {
-		t.Fatalf("manual run error = %v, want fatal manual-identity contract error", err)
-	}
-}
-
 func TestCleanupReportsWorkspaceRemovalFailure(t *testing.T) {
 	staging := &Staging{workspace: "\x00"}
 	if err := staging.Cleanup(); !errors.Is(err, ErrAttemptCleanup) {
 		t.Fatalf("cleanup error = %v, want ErrAttemptCleanup", err)
+	}
+}
+
+// A run writes into its workspace as the supervisor's own uid, so it can
+// chmod a directory shut behind itself. Nothing asks it to, but a workspace
+// that survives cleanup is one a hostile routine can leave on disk every
+// attempt, so cleanup has to be indifferent to the modes it finds.
+func TestCleanupRemovesAWorkspaceTheRunClosedBehindItself(t *testing.T) {
+	workspace := t.TempDir()
+	shut := filepath.Join(workspace, "memory", "sealed")
+	if err := os.MkdirAll(shut, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shut, "events.md"), []byte("left behind"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shut, 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (&Staging{workspace: workspace}).Cleanup(); err != nil {
+		t.Fatalf("cleanup failed on a directory the run closed: %v", err)
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("the workspace outlived cleanup: stat = %v", err)
 	}
 }
 
