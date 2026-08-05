@@ -22,7 +22,7 @@ import (
 // other's image between build and run (a shared :local tag could).
 func runtimeImageTag(agentDir string) string {
 	pin := "local"
-	if raw, err := os.ReadFile(filepath.Join(agentDir, ".openroutines-version")); err == nil {
+	if raw, err := os.ReadFile(filepath.Join(agentDir, ".openroutines", "version")); err == nil {
 		if v := strings.TrimSpace(string(raw)); v != "" {
 			pin = v
 		}

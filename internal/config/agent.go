@@ -22,7 +22,7 @@ import (
 
 // FileName is the agent configuration file at the repository root --
 // named for the system that reads it, as opencode.json is named for the
-// harness, and spelled .yml like credentials.yml.enc beside it (#50).
+// harness, and spelled .yml like .openroutines/credentials.yml.enc (#50).
 const FileName = "openroutines.yml"
 
 // LegacyFileNames are earlier spellings, newest first. Still read, and

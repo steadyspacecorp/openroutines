@@ -473,34 +473,29 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 	}
 }
 
-// A broken file claims its name whether or not it parses, so a healthy
-// routine of the same name is ambiguous, not runnable: the tick must not mint
-// a run the runner will then refuse to assemble a workspace for -- five
-// attempts, an abandonment task, and a tripped breaker for a routine whose
-// own file is fine.
-func TestShadowedRoutineNameIsNotScheduled(t *testing.T) {
+// An agent-owned routine wins before plugin parsing, so a broken same-named
+// plugin routine cannot stop the winning routine from being scheduled.
+func TestAgentOwnedRoutineIsScheduledOverBrokenPluginRoutine(t *testing.T) {
 	dir := fixture(t, "ok")
-	os.MkdirAll(filepath.Join(dir, "plugins", "demo", "routines"), 0o755)
-	os.WriteFile(filepath.Join(dir, "plugins", "demo", "routines", "every-minute.md"), []byte(
+	os.MkdirAll(filepath.Join(dir, ".openroutines", "plugins", "demo", "routines"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".openroutines", "plugins", "demo", "routines", "every-minute.md"), []byte(
 		"---\nschedule: \"* * * * *\"\nactve: false\n---\nBroken.\n"), 0o644)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	for i := 0; i <= 40; i++ {
-		s.tickWait(ctx, t0.Add(time.Duration(i)*7*time.Minute))
-	}
+	s.tickWait(ctx, t0)
 
-	if st := loadState(t, s); st != nil {
-		t.Errorf("an ambiguous name should not be scheduled at all: %+v", st)
+	if st := loadState(t, s); st == nil {
+		t.Error("the agent-owned routine should be registered")
 	}
 	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
 	if strings.Contains(tasks, "abandoned") {
 		t.Errorf("no run should have been minted, let alone abandoned:\n%s", tasks)
 	}
 	events := readFile(t, filepath.Join(dir, "memory", "events.md"))
-	if !strings.Contains(events, "routine every-minute does not load") {
-		t.Errorf("the collision should be recorded: %q", events)
+	if strings.Contains(events, "routine every-minute does not load") {
+		t.Errorf("the shadowed plugin error should not be recorded: %q", events)
 	}
 }
 

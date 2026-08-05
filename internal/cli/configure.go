@@ -46,7 +46,7 @@ func cmdConfigure(args []string) int {
 	// --help was recognized (issue #67) -- hits EOF on the very first
 	// prompt, and every prompt after it would silently take its default:
 	// exactly the failure mode that generated a master key and wrote
-	// credentials.yml.enc unattended.
+	// .openroutines/credentials.yml.enc unattended.
 	eofHit := false
 	prompt := func(label, current string) string {
 		def := current

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
 func fixture(t *testing.T, name string) string {
@@ -244,16 +245,16 @@ func TestPrepareInstallAndApply(t *testing.T) {
 	if len(pending) != 1 || !strings.Contains(pending[0], "demo.md") {
 		t.Fatalf("stub should be pending without a worktree: %v", pending)
 	}
-	for _, rel := range []string{"plugins/demo/routines/demo.md", "plugins/demo/skills/demo-skill/SKILL.md", "plugins/demo/" + SourceFileName} {
+	for _, rel := range []string{".openroutines/plugins/demo/routines/demo.md", ".openroutines/plugins/demo/skills/demo-skill/SKILL.md", ".openroutines/plugins/demo/" + SourceFileName} {
 		if _, err := os.Stat(filepath.Join(agent, rel)); err != nil {
 			t.Fatalf("%s not installed: %v", rel, err)
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(agent, "plugins", "demo", "routines", "demo.md"))
+	raw, err := os.ReadFile(filepath.Join(agent, ".openroutines", "plugins", "demo", "routines", "demo.md"))
 	if err != nil || !strings.Contains(string(raw), "active: false") {
 		t.Fatalf("installed routine must be explicitly inactive: %v\n%s", err, raw)
 	}
-	if len(installed) != 1 || installed[0] != filepath.Join("plugins", "demo") {
+	if len(installed) != 1 || installed[0] != filepath.Join(".openroutines", "plugins", "demo") {
 		t.Fatalf("installed %v, want the grouped plugin directory", installed)
 	}
 
@@ -263,7 +264,7 @@ func TestPrepareInstallAndApply(t *testing.T) {
 	if err == nil {
 		t.Fatal("reinstall over an existing plugin should be refused")
 	}
-	for _, want := range []string{filepath.Join("plugins", "demo"), "routine demo", "skill demo-skill"} {
+	for _, want := range []string{filepath.Join(".openroutines", "plugins", "demo"), "routine demo", "skill demo-skill"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal should name %q: %v", want, err)
 		}
@@ -318,23 +319,23 @@ func TestPrepareInstallRefusesInvalidProvenance(t *testing.T) {
 			if _, err := PrepareInstall(agent, src, source); err == nil {
 				t.Fatal("want refusal")
 			}
-			if _, err := os.Stat(filepath.Join(agent, "plugins")); !os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(agent, ".openroutines", "plugins")); !os.IsNotExist(err) {
 				t.Fatalf("nothing should have been copied: %v", err)
 			}
 		})
 	}
 }
 
-// A duplicate global name is filtered out of the routine and skill lists, so
-// collision detection against an already-ambiguous agent would miss exactly
-// the name in conflict. Refuse while the namespace is invalid.
+// A duplicate plugin name is filtered out of the effective routine list, so
+// collision detection must inspect the raw plugin claims and refuse while the
+// namespace is invalid.
 func TestCollisionsFailClosedOnInvalidNamespace(t *testing.T) {
 	src := write(t, nil)
 	agent := t.TempDir()
 	routine := "---\nschedule: \"0 9 * * *\"\n---\nDo the demo.\n"
 	for _, rel := range []string{
-		filepath.Join("routines", "demo.md"),
-		filepath.Join("plugins", "other", "routines", "demo.md"),
+		filepath.Join(".openroutines", "plugins", "one", "routines", "demo.md"),
+		filepath.Join(".openroutines", "plugins", "two", "routines", "demo.md"),
 	} {
 		path := filepath.Join(agent, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -350,6 +351,32 @@ func TestCollisionsFailClosedOnInvalidNamespace(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "duplicate routine") {
 		t.Fatalf("error should name the duplicate: %v", err)
+	}
+}
+
+func TestInstallAllowsAgentOwnedRoutineOverride(t *testing.T) {
+	src := write(t, nil)
+	agent := t.TempDir()
+	owned := filepath.Join(agent, "routines", "demo.md")
+	if err := os.MkdirAll(filepath.Dir(owned), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(owned, []byte("---\nschedule: \"0 8 * * *\"\n---\nAgent-owned.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := PrepareInstall(agent, src, testSource)
+	if err != nil {
+		t.Fatalf("prepare install with override: %v", err)
+	}
+	if _, _, err := inst.Apply(); err != nil {
+		t.Fatalf("apply install with override: %v", err)
+	}
+	r, err := routine.Find(agent, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Path != owned {
+		t.Fatalf("winning routine = %s, want %s", r.Path, owned)
 	}
 }
 
@@ -374,10 +401,10 @@ func TestInstallRollsBackOnCopyFailure(t *testing.T) {
 	if _, _, err := inst.Apply(); err == nil || !strings.Contains(err.Error(), "nested .git") {
 		t.Fatalf("want nested .git copy refusal, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(agent, "plugins", "demo", "routines", "demo.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(agent, ".openroutines", "plugins", "demo", "routines", "demo.md")); !os.IsNotExist(err) {
 		t.Fatalf("partial routine survived rollback: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(agent, "plugins", "demo", "skills", "demo-skill")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(agent, ".openroutines", "plugins", "demo", "skills", "demo-skill")); !os.IsNotExist(err) {
 		t.Fatalf("partial skill survived rollback: %v", err)
 	}
 }

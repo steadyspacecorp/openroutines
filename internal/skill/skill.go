@@ -80,7 +80,7 @@ func List(dir string) ([]*Skill, []error) {
 // Skill names are global because routine grants name them without a path.
 func ListAgent(root string) ([]*Skill, []error) {
 	skills, errs := List(filepath.Join(root, "skills"))
-	pluginDirs, err := os.ReadDir(filepath.Join(root, "plugins"))
+	pluginDirs, err := os.ReadDir(filepath.Join(root, ".openroutines", "plugins"))
 	if err != nil && !os.IsNotExist(err) {
 		errs = append(errs, err)
 	}
@@ -88,7 +88,7 @@ func ListAgent(root string) ([]*Skill, []error) {
 		if !entry.IsDir() {
 			continue
 		}
-		found, foundErrs := List(filepath.Join(root, "plugins", entry.Name(), "skills"))
+		found, foundErrs := List(filepath.Join(root, ".openroutines", "plugins", entry.Name(), "skills"))
 		skills = append(skills, found...)
 		errs = append(errs, foundErrs...)
 	}

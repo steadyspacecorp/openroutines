@@ -2,7 +2,7 @@
 # never in main's history.
 memory/
 
-# The master key unlocks credentials.yml.enc. Local only; production reads
+# The master key unlocks .openroutines/credentials.yml.enc. Local only; production reads
 # it from a mounted file (OPENROUTINES_MASTER_KEY_FILE) or env var.
 master.key
 

@@ -1013,7 +1013,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 // memory snapshot, the delivery inbox, the generated definition. A file not
 // on the list -- the encrypted credential store, a stray key, dev rules like
 // AGENTS.md -- does not exist in a run. (This replaced a deny-list that
-// missed exactly one entry, credentials.yml.enc; allow-lists don't have
+// missed exactly one entry, .openroutines/credentials.yml.enc; allow-lists don't have
 // that failure mode.) name is the routine being run -- whose errors are the
 // only ones that can fail assembly.
 func buildWorkspace(dir, workspace, name string) error {

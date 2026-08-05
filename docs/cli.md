@@ -43,7 +43,7 @@ Idempotent -- run it whenever. Fills in `openroutines.yml` (name, [job descripti
 openroutines check
 ```
 
-Validates config, frontmatter, schedules, credential wiring, and config drift. Made for CI: run it on every push.
+Validates config, frontmatter, schedules, credential wiring, and config drift. When an agent-owned routine overrides a same-named plugin routine, check names the shadowed plugin path. Made for CI: run it on every push.
 
 ## status
 
@@ -137,7 +137,7 @@ openroutines plugin list
 openroutines plugin update <name> [--yes]
 ```
 
-`add` shows the bundle's declared authority and vendors it under `plugins/<name>/` after you confirm; installed routines land inactive. `list` shows installed plugins. `update` fetches the recorded source and three-way merges upstream changes against your vendored copy. `--yes` is required when stdin is not interactive.
+`add` shows the bundle's declared authority and vendors it under `.openroutines/plugins/<name>/` after you confirm; installed routines land inactive. `list` shows installed plugins. `update` fetches the recorded source and three-way merges upstream changes against your vendored copy. `--yes` is required when stdin is not interactive.
 
 ## credentials
 
@@ -163,7 +163,7 @@ Runs the scheduler. This is the container entrypoint; you rarely run it by hand.
 openroutines update
 ```
 
-Brings the agent up to the version of the `openroutines` binary you're running: bumps the pin in `.openroutines-version`, rewrites the Dockerfile's base-image tag, and offers other framework-owned file changes interactively with a diff.
+Brings the agent up to the version of the `openroutines` binary you're running: bumps the pin in `.openroutines/version`, rewrites the Dockerfile's base-image tag, and offers other framework-owned file changes interactively with a diff.
 
 ## version
 

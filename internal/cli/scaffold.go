@@ -76,7 +76,11 @@ func cmdScaffold(args []string) int {
 	}
 
 	// The version pin: this binary's version is what the agent runs against.
-	if err := os.WriteFile(filepath.Join(target, ".openroutines-version"), []byte(version.Version+"\n"), 0o644); err != nil {
+	frameworkDir := filepath.Join(target, ".openroutines")
+	if err := os.MkdirAll(frameworkDir, 0o755); err != nil {
+		return fail(err)
+	}
+	if err := os.WriteFile(filepath.Join(frameworkDir, "version"), []byte(version.Version+"\n"), 0o644); err != nil {
 		return fail(err)
 	}
 
