@@ -107,19 +107,19 @@ func cmdCheck(args []string) int {
 	}
 
 	// Plugins
-	fmt.Println("plugins/")
-	pluginEntries, pluginDirErr := os.ReadDir(filepath.Join(dir, "plugins"))
+	fmt.Println(".openroutines/plugins/")
+	pluginEntries, pluginDirErr := os.ReadDir(filepath.Join(dir, ".openroutines", "plugins"))
 	if pluginDirErr != nil && !os.IsNotExist(pluginDirErr) {
 		failf("%v", pluginDirErr)
 	}
 	pluginCount := 0
 	for _, entry := range pluginEntries {
 		if !entry.IsDir() {
-			failf("plugins/%s is not a plugin directory", entry.Name())
+			failf(".openroutines/plugins/%s is not a plugin directory", entry.Name())
 			continue
 		}
 		pluginCount++
-		pluginDir := filepath.Join(dir, "plugins", entry.Name())
+		pluginDir := filepath.Join(dir, ".openroutines", "plugins", entry.Name())
 		p, err := plugin.Load(pluginDir, agentSkills)
 		if err != nil {
 			failf("%s: %v", entry.Name(), err)
@@ -361,7 +361,7 @@ func cmdCheck(args []string) int {
 	} else {
 		okf("origin %s", strings.TrimSpace(string(out)))
 	}
-	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines-version")); err == nil {
+	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version")); err == nil {
 		v := strings.TrimSpace(string(pin))
 		if strings.Contains(v, "-dev") {
 			warnf("pinned %s -- a source-build version; no release exists for it, so this agent cannot deploy until the pin points at a release", v)
@@ -369,7 +369,7 @@ func cmdCheck(args []string) int {
 		if dockerfile, derr := os.ReadFile(filepath.Join(dir, "Dockerfile")); derr != nil {
 			failf("Dockerfile: %v", derr)
 		} else if !dockerfileUsesVersion(dockerfile, v) {
-			failf("Dockerfile version pin does not match .openroutines-version %s", v)
+			failf("Dockerfile version pin does not match .openroutines/version %s", v)
 		} else {
 			okf("Dockerfile version pin matches %s", v)
 		}

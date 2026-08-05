@@ -64,7 +64,7 @@ func TestPrepareUpdateReportsCurrent(t *testing.T) {
 // advances to the new revision.
 func TestUpdateMergesLocalEditsAndDeactivatesNewRoutines(t *testing.T) {
 	agent, repo := updateFixture(t)
-	installedRoutine := filepath.Join(agent, "plugins", "demo", "routines", "demo.md")
+	installedRoutine := filepath.Join(agent, ".openroutines", "plugins", "demo", "routines", "demo.md")
 	raw, err := os.ReadFile(installedRoutine)
 	if err != nil {
 		t.Fatal(err)
@@ -106,15 +106,15 @@ func TestUpdateMergesLocalEditsAndDeactivatesNewRoutines(t *testing.T) {
 			t.Fatalf("merged routine missing %q:\n%s", want, merged)
 		}
 	}
-	extra, err := os.ReadFile(filepath.Join(agent, "plugins", "demo", "routines", "extra.md"))
+	extra, err := os.ReadFile(filepath.Join(agent, ".openroutines", "plugins", "demo", "routines", "extra.md"))
 	if err != nil || !strings.Contains(string(extra), "active: false") {
 		t.Fatalf("new upstream routine must arrive deactivated: %v\n%s", err, extra)
 	}
-	source, err := ReadSource(filepath.Join(agent, "plugins", "demo"))
+	source, err := ReadSource(filepath.Join(agent, ".openroutines", "plugins", "demo"))
 	if err != nil || source.Revision != next {
 		t.Fatalf("provenance should advance to %s: %+v err=%v", next, source, err)
 	}
-	if _, err := os.Stat(filepath.Join(agent, "plugins", "demo.update-backup")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(agent, ".openroutines", "plugins", "demo.update-backup")); !os.IsNotExist(err) {
 		t.Fatalf("backup should be gone after a clean swap: %v", err)
 	}
 }
@@ -123,7 +123,7 @@ func TestUpdateMergesLocalEditsAndDeactivatesNewRoutines(t *testing.T) {
 // and keeps the recorded revision, so rerunning the update converges.
 func TestUpdateConflictKeepsRecordedRevision(t *testing.T) {
 	agent, repo := updateFixture(t)
-	installedRoutine := filepath.Join(agent, "plugins", "demo", "routines", "demo.md")
+	installedRoutine := filepath.Join(agent, ".openroutines", "plugins", "demo", "routines", "demo.md")
 	raw, err := os.ReadFile(installedRoutine)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +153,7 @@ func TestUpdateConflictKeepsRecordedRevision(t *testing.T) {
 	if !strings.Contains(string(merged), "<<<<<<< local") {
 		t.Fatalf("conflict markers missing:\n%s", merged)
 	}
-	source, err := ReadSource(filepath.Join(agent, "plugins", "demo"))
+	source, err := ReadSource(filepath.Join(agent, ".openroutines", "plugins", "demo"))
 	if err != nil || source.Revision != upd.Old.Revision {
 		t.Fatalf("conflicted update must keep the recorded revision %s: %+v err=%v", upd.Old.Revision, source, err)
 	}

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
 // Claude Code reads CLAUDE.md, not AGENTS.md, so the scaffold links one to
@@ -28,5 +30,22 @@ func TestScaffoldLinksClaudeMdToAgentsMd(t *testing.T) {
 	}
 	if dest != "AGENTS.md" {
 		t.Fatalf("CLAUDE.md points at %q, want AGENTS.md", dest)
+	}
+}
+
+func TestScaffoldKeepsFrameworkFilesUnderOpenRoutines(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	if code := cmdScaffold([]string{dir}); code != 0 {
+		t.Fatalf("scaffold exited %d", code)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(raw); got != version.Version+"\n" {
+		t.Fatalf("version = %q, want %q", got, version.Version+"\n")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".openroutines-version")); !os.IsNotExist(err) {
+		t.Fatalf("legacy version pin exists: %v", err)
 	}
 }

@@ -83,7 +83,7 @@ For continuous deployment, wire the usual hooks: run `openroutines check` on eve
 
 ## Updating the framework
 
-Your agent pins the OpenRoutines version it runs against in `.openroutines-version`. The deployed container installs exactly that release, so laptop, CI, and production always agree.
+Your agent pins the OpenRoutines version it runs against in `.openroutines/version`. The deployed container installs exactly that release, so laptop, CI, and production always agree.
 
 To update the framework:
 

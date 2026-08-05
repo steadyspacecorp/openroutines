@@ -146,21 +146,21 @@ func TestWebAccessOptIn(t *testing.T) {
 func TestBuildWorkspaceAllowList(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
-		"openroutines.yml":                      "name: t\n",
-		"opencode.json":                         "{}",
-		"routines/daily.md":                     "---\nschedule: \"0 9 * * *\"\n---\nwork",
-		"plugins/demo/routines/plugin-daily.md": "---\nschedule: \"0 10 * * *\"\n---\nplugin work",
-		"credentials.yml.enc":                   "ORV1:ciphertext",
-		"master.key":                            "hex",
-		"agent_deploy_key":                      "PRIVATE KEY",
-		"AGENTS.md":                             "dev rules",
-		"CLAUDE.md":                             "dev rules",
-		"README.md":                             "docs",
-		"Dockerfile":                            "FROM x",
-		".openroutines-version":                 "v0",
-		"skills/s1/SKILL.md":                    "skill",
-		"memory/events.md":                      "events",
-		".git/config":                           "git",
+		"openroutines.yml":  "name: t\n",
+		"opencode.json":     "{}",
+		"routines/daily.md": "---\nschedule: \"0 9 * * *\"\n---\nwork",
+		".openroutines/plugins/demo/routines/plugin-daily.md": "---\nschedule: \"0 10 * * *\"\n---\nplugin work",
+		".openroutines/credentials.yml.enc":                   "ORV1:ciphertext",
+		"master.key":                                          "hex",
+		"agent_deploy_key":                                    "PRIVATE KEY",
+		"AGENTS.md":                                           "dev rules",
+		"CLAUDE.md":                                           "dev rules",
+		"README.md":                                           "docs",
+		"Dockerfile":                                          "FROM x",
+		".openroutines/version":                               "v0",
+		"skills/s1/SKILL.md":                                  "skill",
+		"memory/events.md":                                    "events",
+		".git/config":                                         "git",
 	}
 	for name, content := range files {
 		path := filepath.Join(dir, name)
@@ -198,12 +198,12 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
-		"openroutines.yaml":                "name: t\n",
-		"routines/daily.md":                "---\nschedule: \"0 9 * * *\"\n---\nwork",
-		"routines/typo.md":                 "---\nschedule: \"0 9 * * *\"\nactve: false\n---\nbroken",
-		"routines/twin.md":                 "---\nschedule: \"0 9 * * *\"\n---\nmine",
-		"plugins/demo/routines/twin.md":    "---\nschedule: \"0 9 * * *\"\n---\ntheirs",
-		"plugins/demo/routines/plugged.md": "---\nschedule: \"0 10 * * *\"\n---\nplugin work",
+		"openroutines.yaml":                              "name: t\n",
+		"routines/daily.md":                              "---\nschedule: \"0 9 * * *\"\n---\nwork",
+		"routines/typo.md":                               "---\nschedule: \"0 9 * * *\"\nactve: false\n---\nbroken",
+		"routines/twin.md":                               "---\nschedule: \"0 9 * * *\"\n---\nmine",
+		".openroutines/plugins/demo/routines/twin.md":    "---\nschedule: \"0 9 * * *\"\n---\ntheirs",
+		".openroutines/plugins/demo/routines/plugged.md": "---\nschedule: \"0 10 * * *\"\n---\nplugin work",
 	}
 	for name, content := range files {
 		path := filepath.Join(dir, name)

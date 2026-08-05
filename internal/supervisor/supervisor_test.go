@@ -480,8 +480,8 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 // own file is fine.
 func TestShadowedRoutineNameIsNotScheduled(t *testing.T) {
 	dir := fixture(t, "ok")
-	os.MkdirAll(filepath.Join(dir, "plugins", "demo", "routines"), 0o755)
-	os.WriteFile(filepath.Join(dir, "plugins", "demo", "routines", "every-minute.md"), []byte(
+	os.MkdirAll(filepath.Join(dir, ".openroutines", "plugins", "demo", "routines"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".openroutines", "plugins", "demo", "routines", "every-minute.md"), []byte(
 		"---\nschedule: \"* * * * *\"\nactve: false\n---\nBroken.\n"), 0o644)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()

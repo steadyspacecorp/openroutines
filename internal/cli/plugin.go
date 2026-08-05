@@ -194,7 +194,7 @@ func pluginList(args []string) int {
 	if len(positional) != 0 {
 		return fail(fmt.Errorf("usage: openroutines plugin list"))
 	}
-	entries, err := os.ReadDir("plugins")
+	entries, err := os.ReadDir(filepath.Join(".openroutines", "plugins"))
 	if os.IsNotExist(err) || len(entries) == 0 {
 		fmt.Println("No plugins installed.")
 		return 0
@@ -207,7 +207,7 @@ func pluginList(args []string) int {
 		if !entry.IsDir() {
 			continue
 		}
-		source, err := plugin.ReadSource(filepath.Join("plugins", entry.Name()))
+		source, err := plugin.ReadSource(filepath.Join(".openroutines", "plugins", entry.Name()))
 		if err != nil {
 			fmt.Printf("%-20s %-12s invalid provenance: %v\n", entry.Name(), "-", err)
 			continue
@@ -274,7 +274,7 @@ func pluginUpdate(args []string) int {
 	if len(conflicts) > 0 {
 		return fail(fmt.Errorf("plugin update has conflicts in %s; resolve the markers and rerun update (recorded revision remains %s)", strings.Join(conflicts, ", "), shortRevision(upd.Old.Revision)))
 	}
-	fmt.Printf("Updated plugins/%s to %s. Review the diff, run openroutines check, and commit.\n", name, shortRevision(upd.New.Revision))
+	fmt.Printf("Updated .openroutines/plugins/%s to %s. Review the diff, run openroutines check, and commit.\n", name, shortRevision(upd.New.Revision))
 	return 0
 }
 

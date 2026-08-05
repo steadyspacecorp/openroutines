@@ -61,7 +61,7 @@ func cmdStatus(args []string) int {
 		names := slices.Sorted(maps.Keys(agent.Variables))
 		fmt.Printf("variables  %s\n", strings.Join(names, ", "))
 	}
-	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines-version")); err == nil {
+	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version")); err == nil {
 		fmt.Printf("framework  %s (pinned; this binary is %s)\n", strings.TrimSpace(string(pin)), version.Version)
 	}
 
