@@ -659,14 +659,14 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// opencode exits 0 on a session whose agent loop died mid-turn. The
 	// session record is what says whether the run actually finished (design
 	// decision "A run is completed only when its session ended cleanly").
-	session := captureSession(workspace, ocExec, attemptLog)
-	res.Usage = session.Usage
+	capture := captureSessions(ocExec, attemptLog)
+	res.Usage = capture.Usage
 	res.SessionsDir = exportSessions(meta, ocExec, attemptLog)
-	if res.Outcome == Completed && session.Failure != "" {
+	if res.Outcome == Completed && capture.Failure != "" {
 		res.Outcome = Crashed
-		res.Hint = session.Failure
+		res.Hint = capture.Failure
 	}
-	if res.Outcome == Crashed && authFailurePattern.MatchString(session.Failure) {
+	if res.Outcome == Crashed && authFailurePattern.MatchString(capture.Failure) {
 		provider := strings.SplitN(model, "/", 2)[0]
 		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
 		res.Hint = authHint(dir, model, injected)
