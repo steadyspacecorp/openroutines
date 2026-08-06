@@ -19,7 +19,7 @@ Usage:
   openroutines configure            fill in openroutines.yml, generate the master key
   openroutines check                validate the agent; made for CI
   openroutines status               show what the agent has and still needs
-  openroutines report               sync memory, then confirm and run the check-in routine
+  openroutines report               sync memory and show the agent's latest check-in
   openroutines usage                token use and reported cost per routine (--json)
   openroutines sync                 pull the agent's latest memory from origin (--push)
   openroutines routines <command>   new, list, run, edit, activate, deactivate, remove

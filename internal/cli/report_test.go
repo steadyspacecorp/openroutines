@@ -3,10 +3,10 @@ package cli
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 )
 
@@ -24,62 +24,97 @@ func memoryAgent(t *testing.T) string {
 	return dir
 }
 
-func TestReportDeclineRunsNothing(t *testing.T) {
+const checkInFM = "---\nschedule: \"0 6 * * *\"\nteamwork: off\nconsumes: memory\n---\nCheck in.\n"
+
+func writeCheckInRoutine(t *testing.T, dir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "routines", "check-in.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeCheckInLedger(t *testing.T, dir string) {
+	t.Helper()
+	wt := memory.At(dir).Worktree()
+	checkIn := "# Check-in 2026-08-06\n\nWhat I did: reviewed 3 PRs.\n"
+	if err := os.WriteFile(filepath.Join(wt, "ledgers", "check-in.md"), []byte(checkIn), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportShowsLatestCheckIn(t *testing.T) {
 	dir := memoryAgent(t)
+	writeCheckInRoutine(t, dir, checkInFM)
+	writeCheckInLedger(t, dir)
 	var code int
-	var out string
-	withStdin(t, "n\n", func() {
-		out = capture(t, dir, func() { code = cmdReport(nil) })
-	})
+	out := capture(t, dir, func() { code = cmdReport(nil) })
 	if code != 0 {
 		t.Fatalf("report returned %d", code)
 	}
 	if !strings.Contains(out, "Memory is local only") {
 		t.Fatalf("report did not report sync state:\n%s", out)
 	}
-	if !strings.Contains(out, "Not running it") {
-		t.Fatalf("declining did not stop the run:\n%s", out)
+	if !strings.Contains(out, "reviewed 3 PRs") {
+		t.Fatalf("report did not show the stored check-in:\n%s", out)
+	}
+	if strings.Contains(out, "note:") {
+		t.Fatalf("healthy routine drew a health note:\n%s", out)
 	}
 }
 
-// Confirming hands off to the routine runner at log level warn. The agent has
-// no check-in routine, so the wiring is observable in the failure -- without
-// spending a model run.
-func TestReportConfirmationRunsCheckIn(t *testing.T) {
+func TestReportWithoutStoredCheckIn(t *testing.T) {
 	dir := memoryAgent(t)
-	t.Setenv(config.EnvLogLevel, "")
+	writeCheckInRoutine(t, dir, checkInFM)
 	var code int
-	withStdin(t, "y\n", func() {
-		capture(t, dir, func() { code = cmdReport(nil) })
-	})
-	if code == 0 {
-		t.Fatal("report reported success with no check-in routine")
+	out := capture(t, dir, func() { code = cmdReport(nil) })
+	if code != 0 {
+		t.Fatalf("report returned %d", code)
 	}
-	if got := os.Getenv(config.EnvLogLevel); got != "warn" {
-		t.Fatalf("check-in run level = %q, want warn", got)
+	if !strings.Contains(out, "No check-in recorded yet") {
+		t.Fatalf("missing ledger was not explained:\n%s", out)
 	}
 }
 
-// An operator's explicit level override outranks the command's warn default.
-func TestReportKeepsOperatorLogLevel(t *testing.T) {
+func TestReportRejectsArguments(t *testing.T) {
 	dir := memoryAgent(t)
-	t.Setenv(config.EnvLogLevel, "debug")
-	withStdin(t, "y\n", func() {
-		capture(t, dir, func() { cmdReport(nil) })
-	})
-	if got := os.Getenv(config.EnvLogLevel); got != "debug" {
-		t.Fatalf("report clobbered the operator's level: %q", got)
+	var code int
+	capture(t, dir, func() { code = cmdReport([]string{"extra"}) })
+	if code == 0 {
+		t.Fatal("report accepted a positional argument")
 	}
 }
 
-func TestConfirmedAcceptsOnlyExplicitYes(t *testing.T) {
-	for input, want := range map[string]bool{
-		"y\n": true, "YES\n": true, "y": true,
-		"n\n": false, "\n": false, "": false, "yeah\n": false,
-	} {
-		if got := confirmed(strings.NewReader(input)); got != want {
-			t.Errorf("confirmed(%q) = %v, want %v", input, got, want)
-		}
+func TestReportNamesMissingRoutine(t *testing.T) {
+	dir := memoryAgent(t)
+	var code int
+	out := capture(t, dir, func() { code = cmdReport(nil) })
+	if code != 0 {
+		t.Fatalf("report returned %d", code)
+	}
+	if !strings.Contains(out, "no check-in routine") {
+		t.Fatalf("missing routine was not named:\n%s", out)
+	}
+	if strings.Contains(out, "routines run") {
+		t.Fatalf("suggested running a routine that does not exist:\n%s", out)
+	}
+}
+
+// A stale report shown without comment reads as current: an inactive
+// check-in routine draws a note above the stored report.
+func TestReportFlagsInactiveRoutine(t *testing.T) {
+	dir := memoryAgent(t)
+	writeCheckInRoutine(t, dir, strings.Replace(checkInFM, "teamwork: off\n", "teamwork: off\nactive: false\n", 1))
+	writeCheckInLedger(t, dir)
+	var code int
+	out := capture(t, dir, func() { code = cmdReport(nil) })
+	if code != 0 {
+		t.Fatalf("report returned %d", code)
+	}
+	if !strings.Contains(out, "note:") || !strings.Contains(out, "inactive") {
+		t.Fatalf("inactive routine was not flagged:\n%s", out)
+	}
+	if !strings.Contains(out, "reviewed 3 PRs") {
+		t.Fatalf("stored report was withheld:\n%s", out)
 	}
 }
 

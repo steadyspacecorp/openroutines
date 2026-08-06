@@ -9,7 +9,7 @@ openroutines scaffold <path>      create a new agent repository
 openroutines configure            fill in openroutines.yml, generate the master key
 openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
-openroutines report               sync memory, then confirm and run the check-in routine
+openroutines report               sync memory and show the agent's latest check-in
 openroutines usage                token use and reported cost per routine (--json)
 openroutines sync                 pull the agent's latest memory from origin (--push)
 openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
@@ -79,9 +79,9 @@ Token use and reported cost per routine. `--json` emits the machine-readable for
 openroutines report
 ```
 
-Fetches and reconciles the `memory` branch, then asks before running the `check-in` routine -- the agent's teammate-style update, composed from the pending memory change feed and echoed to your terminal. This is how you hear the check-in on demand: a supervised run's output never enters the container logs (its record is the exported session), so the interactive run is the delivery.
+Fetches and reconciles the `memory` branch, then shows the latest check-in -- the agent's teammate-style update: what I did, what I intend to do, where I need a human. The check-in routine records each report it delivers in its own ledger (`memory/ledgers/check-in.md`), so the latest one travels with memory and reading it is free: no model run, no confirmation, and no memory changes.
 
-The command changes no memory. The check-in runs with its memory writes discarded (the same `--no-memory` a manual `routines run` offers), so nothing is consumed or committed: the pending changes remain for the scheduled check-in or whatever reporting destination the agent has. The confirmation is about cost, not state -- the check-in is a real run and spends a model invocation; declining (or a non-interactive stdin) runs nothing. The run happens at log level `warn` so the report is not buried in lifecycle chatter; an explicit `OPENROUTINES_LOG_LEVEL` still wins.
+What you see is the report as of the last scheduled check-in (daily, 7am agent time by default). A stored report only refreshes while a healthy check-in routine keeps delivering, so if the routine is missing, fails to load, or is inactive, `report` says so instead of presenting a stale report as current. For a fresh one composed right now, run the routine yourself: `openroutines routines run check-in --no-memory` echoes it to the terminal without consuming the change feed.
 
 The sync half never publishes local memory. It refuses rewritten history and conflicts under the same rules as `openroutines sync`; use `openroutines sync --push` when you intend to publish human curation. The raw records are always readable directly -- `memory/tasks.md`, `memory/events.md`, `memory/context.md`, and `memory/ledgers/` are ordinary Markdown files.
 

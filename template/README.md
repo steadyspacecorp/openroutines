@@ -8,7 +8,7 @@ The agent's name and job description live in `openroutines.yml`, and both become
 
 ```bash
 openroutines status                # what the agent has and still needs
-openroutines report                # sync memory and hear the agent's check-in
+openroutines report                # sync memory and read the agent's latest check-in
 openroutines routines new <name>   # add a routine
 openroutines routines run <name> --no-memory  # real run; memory writes discarded
 openroutines check                 # validate everything; run it in CI

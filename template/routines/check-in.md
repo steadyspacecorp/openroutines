@@ -1,18 +1,19 @@
 ---
-schedule: "0 6,18 * * *"
+schedule: "0 7 * * *"
 timeout: 10m
 teamwork: off
 consumes: memory
 ---
-Compose this agent's twice-daily check-in and print it as your output --
-printed output is the report: a person hears it when this routine runs
-interactively (openroutines report), and every run's copy lands in the
-exported session.
+Compose this agent's daily check-in, record it in your ledger, and print
+it as your output. Your ledger always holds the latest check-in -- it is
+what a person reads with openroutines report.
 
 1. If your inbox has no pending changes, print a one-line check-in saying
-   so and stop without consuming.
+   so and stop without consuming -- leave your ledger's last report in
+   place.
 
-2. Compose a plain, scannable check-in with three short sections:
+2. Compose a plain, scannable check-in, headed by the current date and
+   time, with three short sections:
    - What I did -- compress the inbox's new events; group related items
    - What I intend to do -- ./schedule.md's in-window routines (they run
      before the next check-in), with open Agent-owned tasks from
@@ -20,8 +21,15 @@ exported session.
    - Where I need a human -- every open Human-owned task in memory/tasks.md,
      and any task that names something it is waiting on
 
-   Write it like a good teammate's standup update: full facts, no filler,
-   link or name specifics so a human can follow up.
+   Write it like a good teammate's standup update, for readers who can't
+   see the machine: plain words, one idea per bullet, the result never
+   buried behind its setup. Compression drops rather than condensing
+   evenly -- the scope, the outcome, and the judgment call survive; shas,
+   ids, file paths, time estimates, and blow-by-blow narration die. Link
+   a PR, issue, or page on the words that describe it, never a naked URL
+   or bare filename; name people; task ids are your own bookkeeping --
+   name the ask, never the id.
 
-3. Printing the check-in is this routine's delivery: once it covers the
-   whole inbox, consume it.
+3. Recording the check-in is this routine's delivery: replace your
+   ledger's entire contents with it, print it too, and -- once it covers
+   the whole inbox -- consume.
