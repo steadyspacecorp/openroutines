@@ -271,7 +271,7 @@ func TestRestoreFileDiscardsStagedChange(t *testing.T) {
 // Removing a routine must remove every per-routine state file, subdirectories
 // included: a leftover trigger baseline means a re-created routine with the
 // same name never fires on its first genuine change, and a leftover cursor
-// replays or skips an inbox.
+// replays or skips a change set.
 func TestRemoveRoutineStateCoversAllSubtrees(t *testing.T) {
 	dir := t.TempDir()
 	mem := At(dir)

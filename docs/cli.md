@@ -77,10 +77,9 @@ Token use and reported cost per routine. `--json` emits the machine-readable for
 
 ```
 openroutines memory [--no-sync] [--tasks] [--events] [--context] [--ledger <routine>] [--json]
-openroutines teamwork [same options]
 ```
 
-Fetches and reconciles the `memory` branch, then shows the agent's current working memory as tasks, recent events, shared context, and per-routine state. `teamwork` is an exact alias. The format examples at the top of newly seeded memory files are omitted from the display; the records themselves remain Markdown and are not reinterpreted by the CLI.
+Fetches and reconciles the `memory` branch, then shows the agent's current working memory as tasks, recent events, shared context, and per-routine state. The format examples at the top of newly seeded memory files are omitted from the display; the records themselves remain Markdown and are not reinterpreted by the CLI.
 
 Use the section flags separately or together to narrow the display. `--ledger <routine>` may be repeated. `--no-sync` reads the local memory worktree without contacting origin. `--json` emits the same selected sections as strings and a map of routine names to ledger contents, with no sync progress on stdout.
 

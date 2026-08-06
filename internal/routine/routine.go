@@ -43,19 +43,21 @@ type Frontmatter struct {
 	Model       string        `yaml:"model,omitempty"`
 	Effort      string        `yaml:"effort,omitempty"`    // provider-specific reasoning effort (opencode --variant)
 	Teamwork    string        `yaml:"teamwork,omitempty"`  // participation ladder: "full" (default), "events", "off"
-	Consumes    string        `yaml:"consumes,omitempty"`  // "memory": this routine consumes the memory change feed
+	Reports     bool          `yaml:"reports,omitempty"`   // this routine reports: it receives changes.md, keeps a cursor, consumes the batch
 	Webfetch    bool          `yaml:"webfetch,omitempty"`  // grants the webfetch tool; external content is an injection vector, so off by default
 	Websearch   bool          `yaml:"websearch,omitempty"` // grants the websearch tool (and enables its search backend)
 	MCP         []string      `yaml:"mcp,omitempty"`       // grants a configured MCP server's tools; third-party tool text is an injection vector, so none by default
 
-	// Events is retired, replaced by Teamwork. It is parsed only so Parse can
-	// reject it with the migration mapping: strict decoding alone would call
-	// it an unknown field, which reads as a typo rather than a rename.
-	Events *bool `yaml:"events,omitempty"`
+	// Events and Consumes are retired, replaced by Teamwork and Reports. They
+	// are parsed only so Parse can reject them with the migration mapping:
+	// strict decoding alone would call them unknown fields, which reads as a
+	// typo rather than a rename.
+	Events   *bool  `yaml:"events,omitempty"`
+	Consumes string `yaml:"consumes,omitempty"`
 }
 
-// The teamwork ladder: each value names the highest tier of the teamwork
-// loop the routine participates in. Strictly ordered -- a routine whose
+// The teamwork ladder: each value names the highest tier of teamwork
+// participation. Strictly ordered -- a routine whose
 // fires fill the schedule's tables must record what its runs do -- so of
 // the underlying states only these three are legal, and the contradiction
 // is unrepresentable.
@@ -70,17 +72,26 @@ func (f Frontmatter) IsActive() bool { return f.Active == nil || *f.Active }
 
 // RecordsEvents reports whether runs land in the shared record: every
 // teamwork tier except off.
-func (f Frontmatter) RecordsEvents() bool { return f.Teamwork != TeamworkOff }
+func (f Frontmatter) RecordsEvents() bool { return f.teamwork() != TeamworkOff }
 
-// FullTeamwork reports whether the routine participates fully in the
-// teamwork loop: its runs are recorded and its scheduled fires fill the
-// schedule's tables rather than its fact lines.
-func (f Frontmatter) FullTeamwork() bool {
-	return f.Teamwork == "" || f.Teamwork == TeamworkFull
+// FullTeamwork reports whether the routine participates fully in teamwork:
+// its runs are recorded and its scheduled fires fill the schedule's tables
+// rather than its fact lines.
+func (f Frontmatter) FullTeamwork() bool { return f.teamwork() == TeamworkFull }
+
+// teamwork resolves the ladder's default. A reporting routine defaults to
+// off -- reporting is definitionally not work -- and everything else to
+// full; an explicit teamwork value overrides either default.
+func (f Frontmatter) teamwork() string {
+	switch {
+	case f.Teamwork != "":
+		return f.Teamwork
+	case f.Reports:
+		return TeamworkOff
+	default:
+		return TeamworkFull
+	}
 }
-
-// IsConsumer reports whether the routine declared itself a memory consumer.
-func (f Frontmatter) IsConsumer() bool { return f.Consumes == "memory" }
 
 // EffectiveURL applies the framework default for external records that want
 // a canonical link back to the routine's source or project.
@@ -151,6 +162,9 @@ func Parse(path string) (*Routine, error) {
 	}
 	if fm.Events != nil {
 		return nil, errors.New(`frontmatter: the events key is retired -- "events: false" is now "teamwork: off"; "events: true" was the default, so delete the line`)
+	}
+	if fm.Consumes != "" {
+		return nil, errors.New(`frontmatter: the consumes key is retired -- "consumes: memory" is now "reports: true"`)
 	}
 	body := ""
 	if bodyStart := end + len("\n---\n"); bodyStart <= len(rest) {
