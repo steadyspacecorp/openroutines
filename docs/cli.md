@@ -9,7 +9,6 @@ openroutines scaffold <path>      create a new agent repository
 openroutines configure            fill in openroutines.yml, generate the master key
 openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
-openroutines memory               sync and show the agent's working memory (--json)
 openroutines usage                token use and reported cost per routine (--json)
 openroutines sync                 pull the agent's latest memory from origin (--push)
 openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
@@ -73,18 +72,6 @@ openroutines usage [--json]
 
 Token use and reported cost per routine. `--json` emits the machine-readable form for scripts and monitors.
 
-## memory
-
-```
-openroutines memory [--no-sync] [--tasks] [--events] [--context] [--ledger <routine>] [--json]
-```
-
-Fetches and reconciles the `memory` branch, then shows the agent's current working memory as tasks, recent events, shared context, and per-routine state. The format examples at the top of newly seeded memory files are omitted from the display; the records themselves remain Markdown and are not reinterpreted by the CLI.
-
-Use the section flags separately or together to narrow the display. `--ledger <routine>` may be repeated. `--no-sync` reads the local memory worktree without contacting origin. `--json` emits the same selected sections as strings and a map of routine names to ledger contents, with no sync progress on stdout.
-
-The command never publishes local memory. It refuses rewritten history and conflicts under the same rules as `openroutines sync`; use `openroutines sync --push` when you intend to publish human curation.
-
 ## sync
 
 ```
@@ -92,6 +79,8 @@ openroutines sync [--push]
 ```
 
 Reconciles `memory/` with origin. A deployed agent writes its memory on the `memory` branch, and `git pull` in the agent repository moves the remote-tracking ref without touching the memory worktree -- so a checkout keeps reading old memory until you sync it. `status` and `usage` say when that has happened and name this command.
+
+Syncing is also how you read the agent: the memory primitives are ordinary Markdown files under `memory/`, and `memory/ledgers/check-in.md` holds the latest check-in the agent delivered -- the teammate-style update as of the last scheduled run. For one composed right now, `openroutines routines run check-in --no-memory` echoes a fresh report without consuming the change feed.
 
 Fast-forwards when behind, rebases local commits when both sides moved, and refuses rather than resolving anything itself: a conflict is left for you to resolve inside `memory/`, and rewritten upstream history is refused outright. `--push` also publishes local memory commits.
 
