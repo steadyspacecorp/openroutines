@@ -112,5 +112,6 @@ openroutines check                    # validate config, frontmatter, and schedu
 
 - [Creating routines](routines.md) -- the frontmatter reference, schedules, triggers, and local runs
 - [Extending your agent](extending.md) -- skills, plugins, credentials, and variables
+- [Memory](memory.md) -- the work record the agent keeps, and how to read and curate it
 - [Your agent on the team](teamwork.md) -- how the agent reports its work and improves at its job
 - [Operating in production](operating.md) -- deploying, CI/CD, and updating

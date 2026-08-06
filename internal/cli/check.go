@@ -203,9 +203,6 @@ func cmdCheck(args []string) int {
 		if r.FM.Effort != "" && !effortPattern.MatchString(r.FM.Effort) {
 			errs = append(errs, fmt.Sprintf("effort %q should be a simple token like low, medium, high, or xhigh", r.FM.Effort))
 		}
-		if r.FM.Consumes != "" && r.FM.Consumes != "memory" {
-			errs = append(errs, fmt.Sprintf("consumes %q: the only supported feed is \"memory\"", r.FM.Consumes))
-		}
 		for _, c := range r.FM.Credentials {
 			switch {
 			case !creds.NamePattern.MatchString(c):

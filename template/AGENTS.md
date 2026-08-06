@@ -23,7 +23,7 @@ deployed container runs whatever routine is due.
   change-detection poll; keep a slow `schedule` as its heartbeat backstop),
   `timeout` (capped at the agent-wide `max_timeout` ceiling in
   `openroutines.yml`), `active`, `skills`, `credentials`, `model`,
-  `url` (available as `$OPENROUTINES_URL`), `effort` (reasoning effort, e.g. `high`), `teamwork` (`full`/`events`/`off`), `consumes` -- and the
+  `url` (available as `$OPENROUTINES_URL`), `effort` (reasoning effort, e.g. `high`), `teamwork` (`full`/`events`/`off`), `reports` -- and the
   body is the prompt. The filename is the routine's identity: renaming a
   routine retires it and starts a new one with fresh scheduling state.
 - **Grants are explicit**: a routine gets only the skills and credentials its
@@ -96,10 +96,10 @@ a fenced example of its own format. Aged entries are trimmed to
 
 The runtime injects the full memory discipline into every run -- routine
 prompts should not restate it. Write a routine's prompt as the job itself.
-In particular, a reporting routine just declares `consumes: memory`: the
-runtime hands it an inbox of unseen changes and the consume semantics for
-free, so its prompt only needs the composition, the destination, and what
-counts as delivered.
+In particular, a reporting routine just declares `reports: true`: the
+runtime hands it `changes.md` -- every memory change since it last reported
+-- and the consume semantics for free, so its prompt only needs the
+composition, the destination, and what counts as delivered.
 
 ## Secrets
 

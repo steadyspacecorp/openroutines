@@ -372,14 +372,14 @@ func TestInstructionRendering(t *testing.T) {
 	}
 
 	agent.Variables = map[string]string{"product_repo": "acme/widgets", "docs_url": "https://docs.example.com"}
-	full := render(routine.Frontmatter{Consumes: "memory"})
+	full := render(routine.Frontmatter{Reports: true, Teamwork: routine.TeamworkFull})
 	for _, want := range []string{
 		"You are test-agent",
 		"routine \"sample\" (run run_x)",
 		"memory/ledgers/sample.md",
 		"Every run appends at least one event",
 		"Full facts with real links",
-		"./inbox.md",
+		"./changes.md",
 		"memory/CONSUMED",
 		"$DOCS_URL, $PRODUCT_REPO",
 		"$TMPDIR",
@@ -400,7 +400,7 @@ func TestInstructionRendering(t *testing.T) {
 		t.Fatalf("no-events rule rendered for an events-recording routine:\n%s", full)
 	}
 	plain := render(routine.Frontmatter{Teamwork: routine.TeamworkOff})
-	for _, banned := range []string{"Every run appends", "Delivery inbox", "append an event to memory/events.md"} {
+	for _, banned := range []string{"Every run appends", "This routine reports", "append an event to memory/events.md"} {
 		if strings.Contains(plain, banned) {
 			t.Fatalf("conditional block %q rendered when its flag was off:\n%s", banned, plain)
 		}
@@ -409,6 +409,15 @@ func TestInstructionRendering(t *testing.T) {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("teamwork: off instruction missing %q:\n%s", want, plain)
 		}
+	}
+	// reports: true with no explicit teamwork defaults to off: the reporting
+	// block renders, the event-recording one does not.
+	reporter := render(routine.Frontmatter{Reports: true})
+	if !strings.Contains(reporter, "This routine reports") {
+		t.Fatalf("reports: true should render the reporting block:\n%s", reporter)
+	}
+	if strings.Contains(reporter, "Every run appends") {
+		t.Fatalf("reports: true alone should imply teamwork: off, not record events:\n%s", reporter)
 	}
 	agent.Variables = nil
 	if got := render(routine.Frontmatter{}); strings.Contains(got, "configuration variables") {
@@ -478,9 +487,9 @@ func settleFixture(t *testing.T) string {
 	return dir
 }
 
-// A new consumer's inbox is empty by construction. Its first successful run
-// must still persist the current boundary, or every later run is another
-// "first run" that skips forward and receives nothing forever.
+// A new reporting routine's change set is empty by construction. Its first
+// successful run must still persist the current boundary, or every later run
+// is another "first run" that skips forward and receives nothing forever.
 func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	dir := settleFixture(t)
 	mem := memory.At(dir)
@@ -504,7 +513,7 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 		}
 		return s
 	}
-	r := &routine.Routine{Name: "slack-report", FM: routine.Frontmatter{Consumes: "memory"}}
+	r := &routine.Routine{Name: "slack-report", FM: routine.Frontmatter{Reports: true}}
 	if _, err := Settle(dir, r, stage(true, through), &ExecResult{Outcome: Completed}, Meta{RunID: "run_first", AttemptID: "attempt_01"}, "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -630,7 +639,7 @@ func TestConsumeMarkerLivesInStagedMemory(t *testing.T) {
 		t.Fatal("marker in staged memory not honored")
 	}
 	// It is a receipt for the runtime, not memory content: import drops it.
-	r := &routine.Routine{Name: "report", FM: routine.Frontmatter{Consumes: "memory"}}
+	r := &routine.Routine{Name: "report", FM: routine.Frontmatter{Reports: true}}
 	if _, _, err := importMemory(dir, r, staging); err != nil {
 		t.Fatal(err)
 	}

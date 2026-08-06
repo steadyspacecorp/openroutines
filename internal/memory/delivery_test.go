@@ -281,19 +281,19 @@ func TestCursorRoundTripAndListing(t *testing.T) {
 	}
 }
 
-func TestRenderInboxShapes(t *testing.T) {
-	empty := RenderInbox("check-in", "", "abc123def456", nil)
+func TestRenderChangesShapes(t *testing.T) {
+	empty := RenderChanges("check-in", "", "abc123def456", nil)
 	if !strings.Contains(empty, "first run") || !strings.Contains(empty, "No pending changes") {
-		t.Fatalf("first-run inbox wrong: %s", empty)
+		t.Fatalf("first-run change set wrong: %s", empty)
 	}
 	changes := []CommitChange{{
 		SHA: "abc123def4567890", Date: "2026-07-21", Subject: "Run doc-drift (run_a): completed",
 		Files: []FileDelta{{Path: "events.md", Added: []string{"- 2026-07-21 doc-drift: opened PR #1"}}},
 	}}
-	inbox := RenderInbox("check-in", "000111", "abc123", changes)
-	for _, want := range []string{"# Pending memory changes", "Consumer: check-in", "events.md", "opened PR #1"} {
-		if !strings.Contains(inbox, want) {
-			t.Fatalf("inbox missing %q: %s", want, inbox)
+	rendered := RenderChanges("check-in", "000111", "abc123", changes)
+	for _, want := range []string{"# Pending memory changes", "Routine: check-in", "events.md", "opened PR #1"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("change set missing %q: %s", want, rendered)
 		}
 	}
 }

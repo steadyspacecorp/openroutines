@@ -1,10 +1,10 @@
 package memory
 
 // Delivery: the memory branch is a change feed. Every memory-writing run
-// already leaves a commit; a consumer routine (frontmatter `consumes: memory`)
-// reads the commits since its own cursor as an injected inbox, and the cursor
-// advances only when the routine explicitly consumes the whole change set.
-// See design decision "Delivery: the memory branch is the change feed".
+// already leaves a commit; a reporting routine (frontmatter `reports: true`)
+// reads the commits since its own cursor as an injected changes.md, and the
+// cursor advances only when the routine explicitly consumes the whole change
+// set. See design decision "Delivery: the memory branch is the change feed".
 
 import (
 	"encoding/json"
@@ -101,7 +101,7 @@ func (m *Memory) Cursors() (map[string]Cursor, error) {
 }
 
 // Head returns the memory branch's current commit: the fixed `through`
-// boundary an inbox is prepared against.
+// boundary a change set is prepared against.
 func (m *Memory) Head() (string, error) {
 	return git(m.Worktree(), "rev-parse", "HEAD")
 }
@@ -241,21 +241,21 @@ func (m *Memory) Changes(from, through string) ([]CommitChange, error) {
 	return commits, nil
 }
 
-// InboxFileName is the read-only delivery inbox injected into a consumer
+// ChangesFileName is the read-only change set injected into a reporting
 // routine's workspace; ConsumeMarker is the file the routine creates to
 // consume the whole change set.
 const (
-	InboxFileName = "inbox.md"
-	ConsumeMarker = "CONSUMED"
+	ChangesFileName = "changes.md"
+	ConsumeMarker   = "CONSUMED"
 )
 
-// RenderInbox formats the pending change set as the markdown a consumer run
-// reads. Pure data: the consume instructions live in the generated agent
+// RenderChanges formats the pending change set as the markdown a reporting
+// run reads. Pure data: the consume instructions live in the generated agent
 // definition, not here.
-func RenderInbox(consumer, from, through string, changes []CommitChange) string {
+func RenderChanges(consumer, from, through string, changes []CommitChange) string {
 	var b strings.Builder
 	b.WriteString("# Pending memory changes\n\n")
-	fmt.Fprintf(&b, "- Consumer: %s\n", consumer)
+	fmt.Fprintf(&b, "- Routine: %s\n", consumer)
 	if from == "" {
 		b.WriteString("- From: (first run -- cursor starts at the current state; history before it is not replayed)\n")
 	} else {

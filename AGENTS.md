@@ -19,7 +19,7 @@ Design-first is the workflow here: behavior gets decided in docs/design.md befor
 - `bin/` -- development scripts: `smoke` (CI's end-to-end test) and `release` (guides you through picking the next version, then tags and pushes; the release workflow runs goreleaser to build and publish the GitHub release, and the pages workflow republishes the install site).
 - `Makefile` -- every task entry point: `verify` (what to run before handing work back), plus `build`, `lint`, `fix`, `test`, `test-race`, `check`, `smoke`, `release`, `clean`. CI invokes these same targets rather than spelling out commands, so the two cannot drift.
 - `www/` -- the public install site (`install.sh`), served at `get.openroutines.dev`: `.github/workflows/pages.yml` deploys it to GitHub Pages together with mirrored release binaries and a `version.txt`, so agent Dockerfiles install the pinned release without registry credentials even while this repository is private.
-- `testdata/plugins/` -- three synthetic plugin fixtures (`reporter`, `watcher`, `toolkit`) that `bin/smoke` installs; together they cover the plugin feature matrix (consumer + skill + raw credential + MCP declaration, typed credential + variable + ledger stub, skills-only). Real reference plugins live in the separate openroutines-plugins repository.
+- `testdata/plugins/` -- three synthetic plugin fixtures (`reporter`, `watcher`, `toolkit`) that `bin/smoke` installs; together they cover the plugin feature matrix (reporting routine + skill + raw credential + MCP declaration, typed credential + variable + ledger stub, skills-only). Real reference plugins live in the separate openroutines-plugins repository.
 - Go code: a single binary, `openroutines`, whose subcommands include the supervisor (`supervise`, the container entrypoint) plus `scaffold`, `configure`, `check`, `status`, `usage`, `sync`, `routines`, `skills`, `plugin`, `credentials`, and `update`.
 
 ## Implementation constraints (from docs/design.md -- the short version)
@@ -36,7 +36,8 @@ Use these terms exactly; the docs and code should agree:
 
 - **routine** (not job) -- a markdown file in `routines/` (agent-owned) or `plugins/<name>/routines/` (plugin-owned); the filename is its globally unique identity. A **task** is a memory record in `tasks.md`, never a synonym for routine
 - **ORA** -- an OpenRoutines agent
-- **memory primitives** -- `events.md`, `tasks.md`, `context.md`; per-routine state is a **ledger** (`memory/ledgers/<routine>.md`); per-consumer delivery cursors live under supervisor-owned `state/`
+- **memory primitives** -- `events.md`, `tasks.md`, `context.md`; per-routine state is a **ledger** (`memory/ledgers/<routine>.md`); each reporting routine's delivery cursor lives under supervisor-owned `state/`
+- **teamwork primitives** (never "teamwork loop" or "teamwork system") -- built on part of memory: events, the schedule (`schedule.md`), and the report (`changes.md`, consumed by a routine declaring `reports: true`). Teamwork reports memory; it doesn't own it. Terms of art are artifact names; everything else is plain English -- no "forecast", no "inbox" (docs/design.md "The teamwork lexicon")
 - **supervisor** -- the long-running process in the container; **run** -- one execution of one routine
 
 ## Conventions

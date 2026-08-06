@@ -129,7 +129,7 @@ case "$mode" in
   detach) sleep 60 </dev/null >/dev/null 2>&1 &
      echo $! > "$d/detached.pid"
      echo "detached" ;;
-  consume) cp inbox.md memory/inbox-copy.md
+  consume) cp changes.md memory/changes-copy.md
      : > CONSUMED
      echo "consumed" ;;
   probe) [ -d "$d/replacement" ] || git clone -q -b memory "$(cat "$d/origin")" "$d/replacement" || true
@@ -787,21 +787,22 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	}
 }
 
-// A consumer routine gets an injected inbox, consumes it via the marker, and
-// its cursor advances -- the next inbox starts where the last one ended.
+// A reporting routine gets an injected change set, consumes it via the
+// marker, and its cursor advances -- the next change set starts where the
+// last one ended.
 func TestConsumerCursorAdvances(t *testing.T) {
 	dir := fixture(t, "consume")
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
-		"---\nschedule: \"* * * * *\"\nteamwork: off\nconsumes: memory\n---\nReport the fake thing.\n"), 0o644)
+		"---\nschedule: \"* * * * *\"\nreports: true\n---\nReport the fake thing.\n"), 0o644)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
 	s.tickWait(ctx, t0)                     // register
-	s.tickWait(ctx, t0.Add(61*time.Second)) // run 1: first-run inbox, consume
-	inbox := readFile(t, filepath.Join(dir, "memory", "inbox-copy.md"))
-	if !strings.Contains(inbox, "first run") || !strings.Contains(inbox, "No pending changes") {
-		t.Fatalf("first inbox should be empty-at-current-state: %q", inbox)
+	s.tickWait(ctx, t0.Add(61*time.Second)) // run 1: first-run changes, consume
+	changes := readFile(t, filepath.Join(dir, "memory", "changes-copy.md"))
+	if !strings.Contains(changes, "first run") || !strings.Contains(changes, "No pending changes") {
+		t.Fatalf("first change set should be empty-at-current-state: %q", changes)
 	}
 	c1, err := memory.At(dir).LoadCursor("every-minute")
 	if err != nil || c1 == nil {
@@ -809,9 +810,9 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	}
 
 	s.tickWait(ctx, t0.Add(121*time.Second)) // run 2: feed carries run 1's commit
-	inbox = readFile(t, filepath.Join(dir, "memory", "inbox-copy.md"))
-	if !strings.Contains(inbox, "Run every-minute") {
-		t.Fatalf("second inbox should carry run 1's completion commit: %q", inbox)
+	changes = readFile(t, filepath.Join(dir, "memory", "changes-copy.md"))
+	if !strings.Contains(changes, "Run every-minute") {
+		t.Fatalf("second change set should carry run 1's completion commit: %q", changes)
 	}
 	c2, err := memory.At(dir).LoadCursor("every-minute")
 	if err != nil || c2 == nil || c2.ConsumedThrough == c1.ConsumedThrough {
@@ -819,14 +820,15 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	}
 }
 
-// A consumer cursor pointing off the memory branch fails at inbox assembly,
-// before the model starts, and fails the same way every time. Spending the
-// whole retry budget on it buys nothing but delay and noise: the run is
-// abandoned on its first attempt, with a task naming the file to repair.
+// A reporting routine's cursor pointing off the memory branch fails at
+// change-set assembly, before the model starts, and fails the same way every
+// time. Spending the whole retry budget on it buys nothing but delay and
+// noise: the run is abandoned on its first attempt, with a task naming the
+// file to repair.
 func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
 	dir := fixture(t, "consume")
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
-		"---\nschedule: \"* * * * *\"\nconsumes: memory\n---\nReport the fake thing.\n"), 0o644)
+		"---\nschedule: \"* * * * *\"\nreports: true\n---\nReport the fake thing.\n"), 0o644)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
