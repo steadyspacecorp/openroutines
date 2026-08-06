@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/logging"
 )
 
 // Running any repo-scoped command from outside an agent repository must
@@ -42,30 +44,22 @@ func TestRunRequiresAgentRepoBeforeCommandLogic(t *testing.T) {
 	}
 }
 
-// The dispatch, not the command, installs the process logger: after any
-// repo-bound command, slog's default is gated at the agent's configured
-// level -- a new subcommand gets configured logging without ever hearing
-// of logging.Setup.
-func TestRunConfiguresLoggingFromAgentConfig(t *testing.T) {
+// The dispatch, not the command, configures the process logger: after any
+// repo-bound command, slog's default is gated at the level the environment
+// asked for -- a new subcommand gets configured logging without ever
+// hearing of the logging package.
+func TestRunConfiguresLoggingFromEnvironment(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if code := Run([]string{"scaffold", "agent"}); code != 0 {
 		t.Fatalf("scaffold exit code = %d, want 0", code)
 	}
 	t.Chdir("agent")
-	f, err := os.OpenFile("openroutines.yml", os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString("log_level: debug\n"); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
 
-	prev := slog.Default()
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Setenv(logging.EnvLevel, "debug")
+	t.Cleanup(func() { logging.Level.Set(slog.LevelInfo) })
 	Run([]string{"routines", "list"})
 	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
-		t.Fatal("dispatch did not install the agent's configured log level")
+		t.Fatal("dispatch did not install the environment's log level")
 	}
 }
 

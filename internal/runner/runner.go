@@ -437,7 +437,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	// at and prints it to stderr, where Run passes it into the log stream.
 	// Its --log-level flag takes the same four names slog renders.
 	ocArgs := []string{
-		"--print-logs", "--log-level=" + agent.EffectiveLogLevel().String(),
+		"--print-logs", "--log-level=" + logging.Level.Level().String(),
 		"run", "--agent", "routine", "-m", model,
 	}
 	if r.FM.Effort != "" {
@@ -589,7 +589,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// session, not the stream (design decision "Run history: opencode's log
 	// passed through, sessions exported"). A watched manual run keeps the
 	// rendering -- that is the one place run output reaches a person.
-	oclog := logging.NewPassthrough(os.Stdout, slog.String("routine", r.Name), slog.String("run_id", meta.RunID))
+	oclog := logging.NewPassthrough(slog.String("routine", r.Name), slog.String("run_id", meta.RunID))
 	errOut := scrub.NewWriter(oclog)
 	cmd.Stderr = errOut
 	var out *scrub.Writer

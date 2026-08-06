@@ -25,10 +25,11 @@ type Passthrough struct {
 }
 
 // NewPassthrough decorates every line written to it with attrs and passes
-// it to dst. The attrs are rendered once, by slog's own TextHandler, so
-// their quoting matches the process logger's records exactly.
-func NewPassthrough(dst io.Writer, attrs ...slog.Attr) *Passthrough {
-	return &Passthrough{dst: dst, suffix: renderAttrs(attrs)}
+// it to Writer, the process's log destination. The attrs are rendered
+// once, by slog's own TextHandler, so their quoting matches the process
+// logger's records exactly.
+func NewPassthrough(attrs ...slog.Attr) *Passthrough {
+	return &Passthrough{dst: liveWriter{}, suffix: renderAttrs(attrs)}
 }
 
 func (w *Passthrough) Write(p []byte) (int, error) {

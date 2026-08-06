@@ -17,7 +17,7 @@ import (
 // field rather than matched by shape.
 func TestOutputIsLogfmt(t *testing.T) {
 	var buf bytes.Buffer
-	Setup(&buf, slog.LevelInfo, time.UTC)
+	Writer = &buf
 	slog.With("routine", "check-in").Error("attempt failed -- will retry", "run_id", "run_abc", "attempts", 3, "error", errors.New("exit status 1"))
 
 	got := strings.TrimSpace(buf.String())
@@ -44,7 +44,9 @@ func TestTimestampUsesTheConfiguredZone(t *testing.T) {
 		t.Skip("tzdata unavailable")
 	}
 	var buf bytes.Buffer
-	Setup(&buf, slog.LevelInfo, loc)
+	Writer = &buf
+	Zone = loc
+	t.Cleanup(func() { Zone = time.UTC })
 	slog.Info("supervising")
 
 	stamp := field(t, buf.String(), "time")
@@ -62,7 +64,9 @@ func TestTimestampUsesTheConfiguredZone(t *testing.T) {
 // the only thing that decides.
 func TestLevelGate(t *testing.T) {
 	var buf bytes.Buffer
-	Setup(&buf, slog.LevelWarn, time.UTC)
+	Writer = &buf
+	Level.Set(slog.LevelWarn)
+	t.Cleanup(func() { Level.Set(slog.LevelInfo) })
 
 	slog.Info("lifecycle")
 	if buf.Len() != 0 {
@@ -78,7 +82,7 @@ func TestLevelGate(t *testing.T) {
 // site logs it -- redaction is the installed writer's, not the caller's.
 func TestRegisteredSecretsAreRedacted(t *testing.T) {
 	var buf bytes.Buffer
-	Setup(&buf, slog.LevelInfo, time.UTC)
+	Writer = &buf
 	scrub.Register(map[string]string{"api_token": "tok-hunter2"})
 
 	slog.Error("push failed", "error", errors.New("remote rejected tok-hunter2"))
@@ -95,7 +99,7 @@ func TestRegisteredSecretsAreRedacted(t *testing.T) {
 // log concurrently; mutating a plain map under those readers would be a
 // fatal runtime error, not just a race.
 func TestScrubRegistrationRacesLogging(t *testing.T) {
-	Setup(&bytes.Buffer{}, slog.LevelInfo, time.UTC)
+	Writer = &bytes.Buffer{}
 	scrub.Register(map[string]string{"master key": "seed-value"})
 	done := make(chan struct{})
 	go func() {
@@ -110,6 +114,37 @@ func TestScrubRegistrationRacesLogging(t *testing.T) {
 	<-done
 	if got := scrub.Redacted("bearer-499 and seed-value"); strings.Contains(got, "bearer-499") || strings.Contains(got, "seed-value") {
 		t.Fatalf("registered secrets not redacted: %q", got)
+	}
+}
+
+// The level resolves: the environment override, else a default split by
+// where the process runs -- info in the container, warn locally. An
+// unrecognized override falls back to the default -- IgnoredLevel names
+// it; a typo must not change behavior beyond that.
+func TestConfigureLevel(t *testing.T) {
+	t.Cleanup(func() { Level.Set(slog.LevelInfo) })
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	ConfigureLevel()
+	if got := Level.Level(); got != slog.LevelInfo {
+		t.Fatalf("no override should mean info in the container, got %v", got)
+	}
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "")
+	ConfigureLevel()
+	if got := Level.Level(); got != slog.LevelWarn {
+		t.Fatalf("no override should mean warn locally, got %v", got)
+	}
+	t.Setenv(EnvLevel, "verbose")
+	ConfigureLevel()
+	if got := Level.Level(); got != slog.LevelWarn {
+		t.Fatalf("an unrecognized override should fall back to the default, got %v", got)
+	}
+	if v, ok := IgnoredLevel(); !ok || v != "verbose" {
+		t.Fatalf("the unrecognized override should be reported, got %q ok=%v", v, ok)
+	}
+	t.Setenv(EnvLevel, "debug")
+	ConfigureLevel()
+	if got := Level.Level(); got != slog.LevelDebug {
+		t.Fatalf("%s should set the level, got %v", EnvLevel, got)
 	}
 }
 

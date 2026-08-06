@@ -1,8 +1,6 @@
 package knowledge
 
 import (
-	"bytes"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/logging"
+	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
 )
 
 func TestValidateAcceptsPlainFiles(t *testing.T) {
@@ -381,15 +379,12 @@ func TestEnsureWarnsWhenOriginUnreachable(t *testing.T) {
 	gitT(t, dir, "init", "-q", "-b", "main", dir)
 	gitT(t, dir, "remote", "add", "origin", filepath.Join(dir, "does-not-exist.git"))
 
-	var out bytes.Buffer
-	logging.Setup(&out, slog.LevelInfo, nil)
+	logs := logtest.Capture(t)
 
 	if err := At(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "could not reach origin") {
-		t.Fatalf("expected a could-not-reach-origin warning, got %q", out.String())
-	}
+	logs.Expect("could not reach origin")
 	if _, err := os.Stat(filepath.Join(dir, "knowledge", ".git")); err != nil {
 		t.Fatalf("knowledge worktree not created despite the unreachable origin: %v", err)
 	}

@@ -11,7 +11,8 @@ import (
 // original ones.
 func TestPassthroughDecoratesEachLine(t *testing.T) {
 	var out bytes.Buffer
-	w := NewPassthrough(&out, slog.String("routine", "check-in"), slog.String("run_id", "run_x"))
+	Writer = &out
+	w := NewPassthrough(slog.String("routine", "check-in"), slog.String("run_id", "run_x"))
 	line := `timestamp=2026-08-03T19:42:06.412Z level=INFO run=c613738c message="creating instance" directory=/work`
 	if _, err := w.Write([]byte(line + "\n")); err != nil {
 		t.Fatal(err)
@@ -25,7 +26,8 @@ func TestPassthroughDecoratesEachLine(t *testing.T) {
 // quoted exactly as the process logger's own handler quotes it.
 func TestPassthroughQuotesLikeTheHandler(t *testing.T) {
 	var out bytes.Buffer
-	w := NewPassthrough(&out, slog.String("routine", "my routine"))
+	Writer = &out
+	w := NewPassthrough(slog.String("routine", "my routine"))
 	if _, err := w.Write([]byte("level=INFO message=hi\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +41,8 @@ func TestPassthroughQuotesLikeTheHandler(t *testing.T) {
 // lines are not records and land nowhere.
 func TestPassthroughBuffersPartialLines(t *testing.T) {
 	var out bytes.Buffer
-	w := NewPassthrough(&out, slog.String("run_id", "run_x"))
+	Writer = &out
+	w := NewPassthrough(slog.String("run_id", "run_x"))
 	for _, chunk := range []string{"level=INFO mess", "age=first\n\nlevel=WARN message=last"} {
 		if _, err := w.Write([]byte(chunk)); err != nil {
 			t.Fatal(err)

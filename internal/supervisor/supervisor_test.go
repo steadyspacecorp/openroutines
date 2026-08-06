@@ -1,12 +1,9 @@
 package supervisor
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +14,7 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
-	"github.com/steadyspacecorp/openroutines/internal/logging"
+	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
@@ -606,57 +603,31 @@ func TestCatchupCollapsesMissedFirings(t *testing.T) {
 	}
 }
 
-// captureStdout collects what fn prints -- the opencode-log passthrough
-// writes to the process's stdout directly, not through the logger.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	orig := os.Stdout
-	os.Stdout = w
-	defer func() { os.Stdout = orig }()
-	read := make(chan string, 1)
-	go func() {
-		b, _ := io.ReadAll(r)
-		read <- string(b)
-	}()
-	fn()
-	w.Close()
-	out := <-read
-	r.Close()
-	return out
-}
-
 // A failed attempt must never fail invisibly: opencode's stderr is its
 // diagnostic log, and every line of it passes through to the process log
 // stream decorated with the attempt's identity -- with or without session
 // storage.
 func TestFailedAttemptDiagnosticsPassThrough(t *testing.T) {
-	failOnce := func(t *testing.T) string {
+	failOnce := func(t *testing.T) *logtest.Log {
 		t.Helper()
 		s := newSupervisor(t, fixture(t, "fail"))
+		logs := logtest.Capture(t)
 		ctx := context.Background()
 		t0 := time.Now().Truncate(time.Minute)
 		s.tickWait(ctx, t0) // register
-		return captureStdout(t, func() { s.tickWait(ctx, t0.Add(time.Minute)) })
+		s.tickWait(ctx, t0.Add(time.Minute))
+		return logs
 	}
 
 	t.Run("no session storage designated", func(t *testing.T) {
 		t.Setenv(runner.EnvSessionDir, "")
-		if out := failOnce(t); !strings.Contains(out, "boom routine=every-minute run_id=run_") {
-			t.Fatalf("the failing run's diagnostics must land in the log decorated, got %q", out)
-		}
+		failOnce(t).Expect("boom routine=every-minute run_id=run_")
 	})
 
 	t.Run("session storage designated", func(t *testing.T) {
 		sessions := t.TempDir()
 		t.Setenv(runner.EnvSessionDir, sessions)
-		out := failOnce(t)
-		if !strings.Contains(out, "boom routine=every-minute run_id=run_") {
-			t.Fatalf("session storage must not swallow the log passthrough, got %q", out)
-		}
+		failOnce(t).Expect("boom routine=every-minute run_id=run_")
 		stored, err := filepath.Glob(filepath.Join(sessions, "run_*.attempt_01", "ses_fake.json"))
 		if err != nil || len(stored) != 1 {
 			t.Fatalf("the failed attempt's sessions should have landed, got %v (%v)", stored, err)
@@ -715,14 +686,13 @@ func TestRetrySameRunIDThenAbandon(t *testing.T) {
 func TestAbandonedRunNamesItsSessions(t *testing.T) {
 	t.Setenv(runner.EnvSessionDir, t.TempDir())
 	s := newSupervisor(t, fixture(t, "fail"))
-	var out bytes.Buffer
-	logging.Setup(&out, slog.LevelInfo, time.UTC)
+	logs := logtest.Capture(t)
 
 	t0 := time.Now().Truncate(time.Minute)
 	s.tickWait(context.Background(), t0) // register
 	driveToAbandonment(t, s, t0)
 
-	for _, line := range strings.Split(out.String(), "\n") {
+	for _, line := range strings.Split(logs.String(), "\n") {
 		if !strings.Contains(line, "run abandoned") {
 			continue
 		}
@@ -731,7 +701,7 @@ func TestAbandonedRunNamesItsSessions(t *testing.T) {
 		}
 		return
 	}
-	t.Fatalf("no abandonment record in the log: %q", out.String())
+	t.Fatalf("no abandonment record in the log: %q", logs.String())
 }
 
 func TestBackoffHoldsBetweenAttempts(t *testing.T) {
@@ -1268,8 +1238,7 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 
 	holder := newSupervisor(t, dir)
 	holder.leaseTTL = 1500 * time.Millisecond
-	var logs bytes.Buffer
-	logging.Setup(&logs, slog.LevelInfo, time.UTC)
+	logs := logtest.Capture(t)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 	holder.tickWait(ctx, t0) // register
@@ -1512,14 +1481,13 @@ func TestBlockedLogsOnceAcrossTicks(t *testing.T) {
 	}
 	defer os.Rename(gone, bare)
 
-	var out bytes.Buffer
-	logging.Setup(&out, slog.LevelInfo, time.UTC)
+	logs := logtest.Capture(t)
 	for i := 1; i <= 3; i++ {
 		s.tickWait(ctx, t0.Add(time.Duration(i)*time.Minute))
 	}
 
-	if got := strings.Count(out.String(), "kind=origin"); got != 1 {
-		t.Fatalf("BLOCKED should log once across a persisting blocker, got %d: %q", got, out.String())
+	if got := strings.Count(logs.String(), "kind=origin"); got != 1 {
+		t.Fatalf("BLOCKED should log once across a persisting blocker, got %d: %q", got, logs.String())
 	}
 }
 
@@ -1581,36 +1549,33 @@ func TestRunRecordCarriesUsage(t *testing.T) {
 func TestBootWarnsOnEnvDeliveredMasterKey(t *testing.T) {
 	dir := fixture(t, "ok")
 	s := newSupervisor(t, dir)
-	var out bytes.Buffer
-	logging.Setup(&out, slog.LevelInfo, time.UTC)
+	logs := logtest.Capture(t)
 
 	t.Setenv(creds.EnvMasterKey, creds.GenerateKey())
 	s.warnKeyDelivery()
-	if out.Len() > 0 {
-		t.Errorf("outside the container there is nothing to warn about: %q", out.String())
+	if got := logs.String(); got != "" {
+		t.Errorf("outside the container there is nothing to warn about: %q", got)
 	}
 
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
 	s.warnKeyDelivery()
-	if !strings.Contains(out.String(), creds.EnvMasterKeyFile) {
-		t.Errorf("warning should point at the file delivery: %q", out.String())
-	}
+	logs.Expect(creds.EnvMasterKeyFile)
 
 	keyFile := filepath.Join(t.TempDir(), "master.key")
 	if err := os.WriteFile(keyFile, []byte(creds.GenerateKey()), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(creds.EnvMasterKeyFile, keyFile)
-	out.Reset()
+	logs.Reset()
 	s.warnKeyDelivery()
-	if !strings.Contains(out.String(), creds.EnvMasterKey) {
-		t.Errorf("a leftover variable still publishes the value, file delivery or not: %q", out.String())
+	if !strings.Contains(logs.String(), creds.EnvMasterKey) {
+		t.Errorf("a leftover variable still publishes the value, file delivery or not: %q", logs.String())
 	}
 
 	t.Setenv(creds.EnvMasterKey, "")
-	out.Reset()
+	logs.Reset()
 	s.warnKeyDelivery()
-	if out.Len() > 0 {
-		t.Errorf("file delivery with no leftover variable is the recommended path: %q", out.String())
+	if got := logs.String(); got != "" {
+		t.Errorf("file delivery with no leftover variable is the recommended path: %q", got)
 	}
 }
