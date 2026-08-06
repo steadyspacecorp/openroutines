@@ -1,19 +1,17 @@
 package creds
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/steadyspacecorp/openroutines/internal/logging"
+	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
 )
 
 func testKeyPEM(t *testing.T) string {
@@ -135,8 +133,7 @@ func TestDeriveGitHubAppLogsFailedRevocation(t *testing.T) {
 	srv := stub.server(t)
 	defer srv.Close()
 
-	var out bytes.Buffer
-	logging.Setup(&out, slog.LevelInfo, nil)
+	logs := logtest.Capture(t)
 
 	d, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "456"}, testKeyPEM(t), srv.URL)
 	if err != nil {
@@ -144,10 +141,7 @@ func TestDeriveGitHubAppLogsFailedRevocation(t *testing.T) {
 	}
 	d.Cleanup()
 
-	line := out.String()
-	if !strings.Contains(line, "revocation failed") || !strings.Contains(line, "credential=gh") {
-		t.Fatalf("expected a revocation-failure warning naming the credential, got %q", line)
-	}
+	logs.Expect("revocation failed", "credential=gh")
 }
 
 func TestDeriveGitHubAppRefusesAmbiguity(t *testing.T) {
@@ -192,19 +186,13 @@ func TestDeriveGitHubAppRedactsTokenInMintWindow(t *testing.T) {
 	srv := stub.server(t)
 	defer srv.Close()
 
-	var out bytes.Buffer
-	logging.Setup(&out, slog.LevelInfo, nil)
+	logs := logtest.Capture(t)
 
 	if _, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "456"}, testKeyPEM(t), srv.URL); err == nil {
 		t.Fatal("a failed bot lookup must fail derivation")
 	}
-	log := out.String()
-	if strings.Contains(log, "test-installation-token") {
-		t.Fatalf("the minted token reached the log unredacted: %s", log)
-	}
-	if !strings.Contains(log, "[REDACTED:") {
-		t.Fatalf("expected the revocation warning to carry a redaction marker, got %s", log)
-	}
+	logs.Reject("test-installation-token")
+	logs.Expect("[REDACTED:")
 }
 
 func TestDeriveGitHubAppRejectsBadKey(t *testing.T) {

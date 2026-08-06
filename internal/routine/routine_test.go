@@ -1,16 +1,13 @@
 package routine
 
 import (
-	"bytes"
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/steadyspacecorp/openroutines/internal/logging"
+	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
 )
 
 func writeTemp(t *testing.T, content string) string {
@@ -308,14 +305,8 @@ func TestAgentOwnedRoutineShadowsBrokenPluginRoutine(t *testing.T) {
 // share one stdout, so every line carries routine= (and whatever the caller
 // adds, like run_id) without the call site repeating it.
 func TestLogBindsRoutineIdentity(t *testing.T) {
-	var buf bytes.Buffer
-	logging.Setup(&buf, slog.LevelInfo, time.UTC)
+	logs := logtest.Capture(t)
 	(&Routine{Name: "check-in"}).Log().With("run_id", "run_abc").Error("attempt failed -- will retry", "detail", "exit status 1")
 
-	got := strings.TrimSpace(buf.String())
-	for _, want := range []string{`level=ERROR`, `msg="attempt failed -- will retry"`, "routine=check-in", "run_id=run_abc", `detail="exit status 1"`} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("missing %q in %q", want, got)
-		}
-	}
+	logs.Expect(`level=ERROR`, `msg="attempt failed -- will retry"`, "routine=check-in", "run_id=run_abc", `detail="exit status 1"`)
 }

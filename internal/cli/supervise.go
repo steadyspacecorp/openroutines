@@ -34,9 +34,9 @@ func cmdSupervise(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := s.Run(ctx); err != nil {
-		// logging.Setup runs inside supervisor.New, above, so by the time
-		// Run can fail the process logger -- and its scrubbing -- are
-		// already installed; fail() is for the pre-logger case only.
+		// The process logger -- scrubbing included -- has existed since
+		// package load and was configured by the dispatch, so Run's
+		// failure is logged rather than handed to fail().
 		slog.Error("supervisor stopped", "error", err, "instance", s.InstanceID, "dir", s.Dir)
 		return 1
 	}

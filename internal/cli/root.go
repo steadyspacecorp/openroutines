@@ -128,21 +128,21 @@ func warnOnPinMismatch(dir string) {
 	}
 }
 
-// setupLogging points the process logger at stdout, gated and stamped from
-// the agent's configuration, before any command runs -- commands and the
-// packages under them never call logging.Setup themselves. Best effort: a
-// broken config or timezone keeps the load-time default so `check` can
-// still run and name the problem itself.
+// setupLogging assigns the process logger's level and timezone from the
+// agent's configuration before any command runs -- the handler itself is
+// installed at the logging package's load and reads the knobs live, so
+// commands and the packages under them never configure logging themselves.
+// Best effort: a broken config or timezone keeps the load-time defaults so
+// `check` can still run and name the problem itself.
 func setupLogging(dir string) {
 	agent, err := config.Load(dir)
 	if err != nil {
 		return
 	}
-	loc, _ := time.LoadLocation(agent.Timezone)
-	level := agent.EffectiveLogLevel()
-	logging.Setup(os.Stdout, level, loc)
-	if v, ok := config.IgnoredLogLevel(); ok {
-		slog.Warn("ignoring an unrecognized log level", "env", config.EnvLogLevel, "value", v, "using", level)
+	logging.Zone, _ = time.LoadLocation(agent.Timezone)
+	logging.ConfigureLevel()
+	if v, ok := logging.IgnoredLevel(); ok {
+		slog.Warn("ignoring an unrecognized log level", "env", logging.EnvLevel, "value", v, "using", logging.Level.Level())
 	}
 }
 

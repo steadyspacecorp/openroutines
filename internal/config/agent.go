@@ -92,7 +92,6 @@ type Agent struct {
 	Defaults    Defaults              `yaml:"defaults"`
 	MaxTimeout  string                `yaml:"max_timeout,omitempty"`
 	Concurrency int                   `yaml:"concurrency,omitempty"`
-	LogLevel    string                `yaml:"log_level,omitempty"`
 	Knowledge   *Knowledge            `yaml:"knowledge,omitempty"`
 	Variables   map[string]string     `yaml:"variables,omitempty"`
 	Credentials map[string]creds.Spec `yaml:"credentials,omitempty"`
@@ -224,11 +223,6 @@ func (a *Agent) Problems() []string {
 	}
 	if _, err := knowledge.ParseRetention(a.Retention()); err != nil {
 		out = append(out, fmt.Sprintf("knowledge.retention: %v", err))
-	}
-	if a.LogLevel != "" {
-		if _, err := ParseLogLevel(a.LogLevel); err != nil {
-			out = append(out, err.Error())
-		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(a.Variables)) {
 		switch {
