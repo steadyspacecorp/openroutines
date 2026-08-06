@@ -102,7 +102,7 @@ step "check accepts provider config and flags unreferenced ids"
 
 # Plugins install from local paths too (the fixture and development path).
 # The synthetic fixtures in testdata/plugins/ cover the feature matrix:
-# reporter (consumer routine + skill + raw credential + declared MCP server),
+# reporter (reporting routine + skill + raw credential + declared MCP server),
 # watcher (routine-only, typed credential + variable + ledger stub), and
 # toolkit (skills-only). The grant summary must state what each asks for,
 # each stays grouped under .openroutines/plugins/<name>/, ledger stubs wait for the memory

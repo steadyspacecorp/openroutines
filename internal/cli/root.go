@@ -47,7 +47,6 @@ var commands = map[string]func([]string) int{
 	"supervise":           cmdSupervise,
 	"status":              cmdStatus,
 	"memory":              cmdMemory,
-	"teamwork":            cmdMemory,
 	"usage":               cmdUsage,
 	"sync":                cmdSync,
 	"skills":              cmdSkills,

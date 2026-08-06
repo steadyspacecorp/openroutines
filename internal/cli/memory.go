@@ -41,7 +41,7 @@ func cmdMemory(args []string) int {
 	mem := memory.At(".")
 	_, noSync := flags["--no-sync"]
 	if noSync && !mem.Status().Materialized {
-		return fail(errors.New("memory is not materialized in this checkout; run openroutines memory (or teamwork) without --no-sync to fetch it"))
+		return fail(errors.New("memory is not materialized in this checkout; run openroutines memory without --no-sync to fetch it"))
 	}
 	if err := mem.Ensure(); err != nil {
 		return fail(err)

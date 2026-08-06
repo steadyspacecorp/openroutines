@@ -81,12 +81,6 @@ func TestMemorySectionsAndJSON(t *testing.T) {
 	}
 }
 
-func TestTeamworkIsMemoryAlias(t *testing.T) {
-	if commands["teamwork"] == nil || commands["memory"] == nil {
-		t.Fatal("memory command or teamwork alias is not registered")
-	}
-}
-
 func appendFile(t *testing.T, path, content string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)

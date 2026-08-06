@@ -367,8 +367,8 @@ func (p *Plugin) Summary() string {
 			if r.FM.Model != "" {
 				w("  model %s", r.FM.Model)
 			}
-			if r.FM.Consumes != "" {
-				w("  consumes %s", r.FM.Consumes)
+			if r.FM.Reports {
+				w("  reports")
 			}
 			w("\n")
 			if len(r.FM.Credentials) > 0 {

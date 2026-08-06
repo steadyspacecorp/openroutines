@@ -1,36 +1,91 @@
 # Your agent on the team
 
-An ORA's memory is not the "remembers your preferences" memory of a chat assistant. It's a work record -- and the work record is what lets an autonomous agent participate in the rituals of a team: state intentions, report progress, surface blockers, and fold what worked back into how it does the job. Out of the box, every agent checks in twice a day like a teammate would.
+Most of what makes a good teammate is communication: they say what they're planning, what they did, where they're stuck, and what's still on their list. OpenRoutines teamwork primitives give your agent the same habits: declaring intentions, reporting progress, calling out blockers, and tracking tasks.
 
-The mechanism is a small set of versioned memory primitives, and a change feed built on top of them.
+The primitives are built on the agent's [memory](memory.md). **Routines that do work** write down plain facts as they go, and **reporting routines** read those facts later to compose updates for the team. That split means you can write working routines without thinking about reporting at all, and point any number of reports and destinations at the facts they leave behind.
 
-## What the agent records
+## The pieces
 
-One rule routes everything an agent wants to remember, into files any autonomous agent ends up needing -- so you never have to invent them:
+Every outcome is carried by a small set of plain files:
 
-- It happened → an event in **events.md** -- raw facts, including NO-OPs ("checked 5 PRs, no doc drift")
-- Someone must do it → a task in **tasks.md**, owned by the agent or a human -- one canonical record with a stable id, from discovery to resolution. The supervisor writes here too: a run it had to give up on becomes a human-owned task, so even failures that never got to explain themselves land on someone's list
-- It may inform future decisions but requires no action → a line in **context.md**
-- Only one routine needs it → that routine's private ledger in `memory/ledgers/` -- working state for its next run, not a run log
+| Outcome | Carried by |
+|---|---|
+| Declare intentions | Every run receives `schedule.md`, the runtime's list of what runs next. A report pairs it with the open Agent-owned tasks in `tasks.md` to say what the agent will do next and what it still owes. |
+| Report progress | Working routines record what happened as events in `events.md`. When a reporting routine runs, the runtime hands it `changes.md`: everything added to memory since that routine last reported. |
+| Call out blockers | Anything that needs a person becomes a Human-owned task in `tasks.md`. Routines file them when they hit a wall, and the supervisor files its own when a run fails or gives up. |
+| Track tasks | Any routine that finds work someone must do files a task in `tasks.md`. Each task is one record with a stable id and an owner, updated in place from discovery to resolution. |
 
-Records hold facts, never polished prose -- compression and voice are a reader's job. The rule is injected into every run by the runtime, not left to routine authors; a reporting routine opts out of recording events with `teamwork: off` (checking in is not work), and a conditional check declares `teamwork: events` -- its runs still land in the record, but its fires appear in `schedule.md` as `fact:` lines, to know about rather than report on.
+To read what your agent has recorded, run `openroutines memory` from an agent checkout -- it syncs the memory branch and shows current tasks, recent events, shared context, and per-routine state together. You can also open the files under `memory/` directly, and browse history with `git log memory`.
 
-## Memory lives on a git branch
+There's one piece you never see in a prompt: the runtime injects standing instructions into every run that teach the model these files and the rules for using them -- what goes where, who owns what, when to consume. Routine prompts never explain the primitives; they only describe the job.
 
-The memory an agent builds as it works travels through git, on its own branch -- backed up with every push, kept separate from your routines. Memory survives redeploys and rollbacks like a database, but versioned and inspectable: reviewing what your agent has learned is `git log memory`, and pruning bad learnings is part of maintaining an agent -- humans can curate the branch, and the agent pulls it before each run. Memory is the only branch a running agent syncs with origin: routines and code travel the other way, baked into the image at build time (see [Operating in production](operating.md)).
+## Declaring intentions
 
-Run `openroutines memory` (or its `openroutines teamwork` alias) from an agent checkout to fetch and read the current tasks, events, context, and routine ledgers together. Use `--no-sync` when you deliberately want the already-materialized local snapshot.
+Declaring intentions is a reporting routine's job, and the runtime does the hard part. It parses every routine's `schedule`, works out which ones will run before the next report, and hands the reporting run that list as a read-only `./schedule.md`. The reporting routine pairs those routines with any open Agent-owned tasks in `tasks.md` they can pick up within the reporting window. See [Creating routines](routines.md#scheduling) for the file's details.
 
-The working files stay lean, too: entries older than the retention window (`memory.retention` in `openroutines.yml`, default 30 days) are trimmed daily, and git history keeps everything forever -- including changes a consumer hasn't seen yet. Trimming is housekeeping and is never reported: a consumer already past those entries hears nothing about them being pruned.
+## Reporting progress
 
-## Reporting: the memory branch is the change feed
+Progress has two halves: recording and delivery.
 
-Because memory is a git branch, its commits are a change feed: a reporting routine declares `consumes: memory`, receives an inbox of everything since it last reported, and marks the batch consumed when its report covers it. Each consumer keeps its own cursor, so pointing a second destination at the same agent -- Steady and Slack, say -- takes no changes to the routines doing the work. A new consumer starts at the current state rather than replaying history; its first successful run durably establishes that starting cursor even though the initial inbox is empty. Nothing is delivered twice or lost: an unconsumed change remains available and returns next time.
+**Recording is automatic.** As a working routine does its job, its runs land as events in `events.md`: raw facts with links, including finding nothing ("checked 5 PRs, no doc drift"). Routine authors don't write any of this -- the runtime injects the recording rules into every run. Events stay rough on purpose; polishing them into something readable is the delivery half's job.
 
-Cursors live on the memory branch under `state/cursors/`, and rewriting that branch's history can leave one pointing at a commit that is no longer on it. That consumer stops: there is no change set to assemble, so its runs are abandoned as they come due rather than retried, and both `openroutines status` and a human-owned task in `tasks.md` name the file to fix. Delete the cursor file and commit, and the consumer restarts from the current state -- history before that point is not replayed, so anything it had not yet reported is skipped. Repair the SHA by hand instead when you need those changes reported and know they were not already sent.
+**Delivery is reading the record and passing it on.** A routine that declares `reports: true` receives `changes.md`, everything recorded since its last report. It turns that into an update, sends it wherever it's pointed, and marks the batch consumed once the update actually lands. A failed send just means the same changes come back next run -- nothing is lost, and nothing goes out twice. Each reporting routine keeps its own place in the feed, so a second destination (Steady and Slack, say) is just a second routine, and a new one starts from the current state instead of replaying history.
 
-## The check-in routine
+If someone rewrites the memory branch's history, a reporting routine's saved place can point at a commit that no longer exists. The routine stops rather than guessing, and `openroutines status` plus a Human-owned task name the cursor file to fix: delete it to start fresh from the current state, or repair the SHA if the unreported changes still need to go out.
 
-The starter check-in routine is the first consumer: twice a day it turns the feed into a teammate-style update in your logs -- what I did, what I intend to do, where I need a human. It ships active by default, declares no skills and no credentials, and makes every agent observable from day one. Pointing it at Steady, Slack, or anywhere else is a frontmatter diff that adds a skill and a credential.
+## Calling out blockers
 
-The full reasoning -- why these primitives, why a branch, why cursors per consumer -- is in [docs/design.md](design.md) ("Memory", "Memory records events, tasks, and context", "Delivery", "Every agent checks in").
+A blocker is a Human-owned task in `tasks.md` -- there is no separate blockers file or alert channel to wire up. A handoff a routine cannot complete becomes a Human-owned task; a genuinely blocked task names the dependency it waits on. The supervisor files them too: a run it had to give up on, a tripped circuit breaker, a sync it cannot complete each become a Human-owned task, because a run that falls over never gets to explain itself and a person is the only one who can act. When the condition heals, the supervisor completes its own stale task in place, so a three-minute outage never reads as an open blocker days later.
+
+A report's "where I need a human" section is then just a read: every open Human-owned task, plus any task naming what it waits on. The injected instructions already tell the model what those are and where to find them -- a reporting prompt names the section it wants, nothing more.
+
+Blockers are two-way. Answer one through any channel a routine watches -- a reply to the check-in in Steady or Slack, say -- and the next relevant run reads your answer, files the follow-up as an Agent-owned task, and gets on with the work.
+
+## Tracking tasks
+
+A task is one canonical record from discovery to resolution: a stable id (`task-YYYYMMDD-<n>`), a section naming the owner (`## Agent-owned` / `## Human-owned`), and in-place transitions -- complete, cancel, transfer -- that show up as diffs on one entry, never re-recorded elsewhere. A task tracks where things stand, where events record what happened -- and a transition is itself a change the feed delivers, so completing a task is also how it gets reported. `tasks.md` is exempt from retention trimming -- age doesn't make a task done -- and `openroutines memory --tasks` reads the current list from an agent checkout.
+
+## How loudly a routine participates
+
+One frontmatter key controls it, a three-value ladder:
+
+- `teamwork: full` (the default) -- runs are recorded as events, and upcoming runs appear in the schedule
+- `teamwork: events` -- runs are still recorded as events, but upcoming runs are excluded from the schedule, and in turn from reported intentions
+- `teamwork: off` -- invisible to the team: for reporting routines, where checking in is not work
+
+Declaring `reports: true` defaults `teamwork` to `off`; set it explicitly for a routine that both reports and does record-worthy work of its own. Whatever the tier, tasks and context stay writable -- even an invisible routine must be able to file a task.
+
+## What this looks like in routines
+
+A working routine needs no teamwork instructions at all -- the runtime injects the recording rules, so the prompt is just the job:
+
+```yaml
+---
+schedule: "0 9 * * 1-5"
+credentials: [github_token]
+---
+Review yesterday's merged PRs in acme/widgets for documentation drift, and
+open a PR fixing whatever you find.
+```
+
+Everything this routine contributes comes free: its runs land as events (a no-drift day included), work it can't finish becomes a task with an owner, and its fires appear in every other run's `schedule.md`.
+
+A reporting routine declares the role and decides only three things -- composition, destination, and what counts as delivered:
+
+```yaml
+---
+schedule: "0 17 * * 1-5"
+reports: true
+skills: [slack-post]
+credentials: [slack_webhook]
+---
+Post this agent's end-of-day summary to #eng-agents, with three short
+sections: what happened (group related items), what's coming before
+tomorrow's summary, and where a human is needed.
+
+Posting is delivery.
+```
+
+Notice what the prompt never mentions: no file names, no instructions about where events, the schedule, or tasks live -- the injected instructions cover all of that. It decides the sections, the destination, and what counts as delivered. That last line matters: the routine consumes its changes only once the post lands, so a failed post means the same changes return next run.
+
+The check-in routine the template scaffolds is a worked example of the same shape, printing to the container logs instead of a real destination. Treat it as a starting point, not a fixture: change its cadence and sections, point it somewhere real by granting a skill and a credential, or replace it with reporting routines of your own.

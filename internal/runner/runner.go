@@ -132,8 +132,9 @@ type Staging struct {
 	// paths the model process chmodded away from the group.
 	attemptUID uint32
 
-	// ConsumerThrough is the memory commit the delivery inbox was prepared
-	// against -- set only for consumer routines, fixed before the run starts.
+	// ConsumerThrough is the memory commit the delivery change set was
+	// prepared against -- set only for reporting routines, fixed before the
+	// run starts.
 	ConsumerThrough string
 	// ConsumerFirstRun is true when no durable cursor existed at preparation.
 	// A successful empty bootstrap establishes that cursor without asking the
@@ -185,7 +186,7 @@ func reclaimAttemptTrees(uid uint32, root string) error {
 }
 
 // Consumed reports whether the routine created the consume marker: its
-// explicit claim to have covered the whole injected inbox. The canonical
+// explicit claim to have covered the whole injected change set. The canonical
 // location is the staged memory directory -- the one workspace path the
 // filesystem sandbox leaves writable; the workspace root is still accepted
 // for unsandboxed runs.
@@ -270,7 +271,7 @@ func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Dura
 }
 
 // StagedRun is a fully prepared attempt: credentials resolved, workspace
-// built, memory snapshotted, inbox and schedule written -- everything that
+// built, memory snapshotted, changes and schedule written -- everything that
 // reads the memory worktree or supervisor-owned state is done by the time
 // Stage returns. Run spawns the model process and waits, touching neither
 // again, which is what lets attempts execute in parallel while staging and
@@ -386,10 +387,10 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		if err := memory.CloneTree(staging.BaseDir, staging.MemoryDir); err != nil {
 			return err
 		}
-		if r.FM.IsConsumer() {
-			through, firstRun, err := prepareInbox(dir, workspace, r.Name)
+		if r.FM.Reports {
+			through, firstRun, err := prepareChanges(dir, workspace, r.Name)
 			if err != nil {
-				return fmt.Errorf("delivery inbox: %w", err)
+				return fmt.Errorf("delivery changes: %w", err)
 			}
 			staging.ConsumerThrough = through
 			staging.ConsumerFirstRun = firstRun
@@ -835,12 +836,12 @@ func importMemory(dir string, r *routine.Routine, staging *Staging) (discarded b
 	return discarded, conflicted, err
 }
 
-// prepareInbox fixes the delivery boundary at the memory branch's current
-// commit, renders every change since the consumer's cursor into inbox.md in
-// the workspace, and returns the fixed `through` commit. A consumer with no
-// cursor starts at the current state: nothing to replay, first consume
-// initializes the cursor.
-func prepareInbox(dir, workspace, consumer string) (string, bool, error) {
+// prepareChanges fixes the delivery boundary at the memory branch's current
+// commit, renders every change since the routine's cursor into changes.md in
+// the workspace, and returns the fixed `through` commit. A reporting routine
+// with no cursor starts at the current state: nothing to replay, first
+// consume initializes the cursor.
+func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
 	mem := memory.At(dir)
 	through, err := mem.Head()
 	if err != nil {
@@ -862,18 +863,18 @@ func prepareInbox(dir, workspace, consumer string) (string, bool, error) {
 			return "", false, err
 		}
 	}
-	inbox := memory.RenderInbox(consumer, from, through, changes)
-	return through, firstRun, os.WriteFile(filepath.Join(workspace, memory.InboxFileName), []byte(inbox), 0o644)
+	rendered := memory.RenderChanges(consumer, from, through, changes)
+	return through, firstRun, os.WriteFile(filepath.Join(workspace, memory.ChangesFileName), []byte(rendered), 0o644)
 }
 
-// advanceConsumer moves a consumer routine's cursor through the inbox it just
-// consumed. Runs after a successful import, before the completion commit, so
-// consumption and results land in the same commit. The one exception to the
-// marker rule is a successful first run: its inbox is empty by construction,
-// so completion establishes the starting cursor and prevents every later run
-// from being mistaken for another first run.
+// advanceConsumer moves a reporting routine's cursor through the change set
+// it just consumed. Runs after a successful import, before the completion
+// commit, so consumption and results land in the same commit. The one
+// exception to the marker rule is a successful first run: its change set is
+// empty by construction, so completion establishes the starting cursor and
+// prevents every later run from being mistaken for another first run.
 func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID string) {
-	if !r.FM.IsConsumer() || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
+	if !r.FM.Reports || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
 		return
 	}
 	if err := memory.At(dir).SaveCursor(r.Name, memory.Cursor{
@@ -881,7 +882,7 @@ func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID str
 		ByRun:           runID,
 		At:              time.Now().UTC(),
 	}); err != nil {
-		r.Log().Error("consumer cursor not advanced -- this inbox will be delivered again", "run_id", runID, "through", staging.ConsumerThrough, "error", err)
+		r.Log().Error("cursor not advanced -- this change set will be delivered again", "run_id", runID, "through", staging.ConsumerThrough, "error", err)
 	}
 }
 
@@ -1010,7 +1011,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 // buildWorkspace assembles the run workspace by allow-list: exactly what a
 // run needs -- the configuration file, opencode.json, and routines/. Everything else a
 // run sees is staged deliberately by the pipeline: declared skills, the
-// memory snapshot, the delivery inbox, the generated definition. A file not
+// memory snapshot, the delivery change set, the generated definition. A file not
 // on the list -- the encrypted credential store, a stray key, dev rules like
 // AGENTS.md -- does not exist in a run. (This replaced a deny-list that
 // missed exactly one entry, .openroutines/credentials.yml.enc; allow-lists don't have
@@ -1163,7 +1164,7 @@ func applyDeclaredMCP(workspace string, granted []string) error {
 
 // The standing instruction lives in instruction.md -- editable prose,
 // compiled into the binary. Dynamic values and the conditional blocks
-// (event recording, delivery inbox) render through text/template;
+// (event recording, delivery changes) render through text/template;
 // the permission frontmatter stays code-generated because rule order is
 // load-bearing.
 //
@@ -1178,8 +1179,8 @@ type instructionData struct {
 	RoutineName   string
 	RunID         string
 	RecordsEvents bool
-	IsConsumer    bool
-	Inbox         string
+	Reports       bool
+	Changes       string
 	Marker        string
 	Variables     string // "$PRODUCT_REPO, $DOCS_URL" -- empty when none configured
 }
@@ -1247,8 +1248,8 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 		RoutineName:   r.Name,
 		RunID:         meta.RunID,
 		RecordsEvents: r.FM.RecordsEvents(),
-		IsConsumer:    r.FM.IsConsumer(),
-		Inbox:         memory.InboxFileName,
+		Reports:       r.FM.Reports,
+		Changes:       memory.ChangesFileName,
 		Marker:        memory.ConsumeMarker,
 		Variables:     variablesLine(agent),
 	}); err != nil {

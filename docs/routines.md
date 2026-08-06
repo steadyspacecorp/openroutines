@@ -35,8 +35,8 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 | `mcp` | Names of MCP servers (defined in `opencode.json`) whose tools this routine may call. Denied by default: a server's tool descriptions are third-party text entering model context -- a grant to review like a skill or credential. See [MCP servers](#mcp-servers). |
 | `model` | Provider/model override of the agent default, e.g. `anthropic/claude-sonnet-5`. |
 | `effort` | Provider-specific reasoning effort. |
-| `teamwork` | Participation in the teamwork loop. `full` (default): runs are recorded as events, and scheduled fires fill `schedule.md`'s tables. `events`: runs are still recorded, but fires appear as `fact:` lines -- the work still happens on schedule, it just isn't advertised. `off`: neither -- for reporting routines, where checking in is not work. See [Your agent on the team](teamwork.md). |
-| `consumes` | `memory`: this routine consumes the memory change feed -- it receives an inbox of everything since it last reported. See [Your agent on the team](teamwork.md). |
+| `teamwork` | How this routine participates in teamwork. `full` (default): runs are recorded as events, and scheduled fires fill `schedule.md`'s tables. `events`: runs are still recorded, but fires appear as `fact:` lines -- the work still happens on schedule, it just isn't advertised. `off`: neither -- for reporting routines, where checking in is not work. See [Your agent on the team](teamwork.md). |
+| `reports` | `true`: this routine reports -- it receives `changes.md`, every memory change since it last reported, and consumes the batch when its report covers it. Declaring it defaults `teamwork` to `off` (reporting is not work); set `teamwork` explicitly to override. See [Your agent on the team](teamwork.md). |
 
 ## Scheduling
 
@@ -113,4 +113,4 @@ Both forms are real runs. They receive the routine's credentials and tools and m
 
 ## Recording work
 
-Every run carries a standing instruction that routes what the routine wants to remember into the agent's memory primitives -- events, tasks, context, and the routine's private ledger. You don't design a memory scheme per routine; the rule is injected by the runtime. [Your agent on the team](teamwork.md) covers the primitives and how recorded work becomes reports.
+Every run carries a standing instruction that routes what the routine wants to remember into the agent's memory primitives -- events, tasks, context, and the routine's private ledger. You don't design a memory scheme per routine; the rule is injected by the runtime. [Memory](memory.md) covers the primitives; [Your agent on the team](teamwork.md) covers how recorded work becomes reports.

@@ -12,7 +12,7 @@ func boolPtr(v bool) *bool { return &v }
 
 func scheduleFixture() []*routine.Routine {
 	return []*routine.Routine{
-		{Name: "steady-check-in", FM: routine.Frontmatter{Schedule: "0 7,8 * * 1-5", Teamwork: routine.TeamworkOff, Consumes: "memory"}},
+		{Name: "steady-check-in", FM: routine.Frontmatter{Schedule: "0 7,8 * * 1-5", Reports: true}},
 		{Name: "steady-inbox", FM: routine.Frontmatter{Schedule: "45 8-17/3 * * 1-5", Teamwork: routine.TeamworkOff}},
 		{Name: "announcements", FM: routine.Frontmatter{Schedule: "30 8 * * 2", Teamwork: routine.TeamworkEvents}},
 		{Name: "doc-drift", FM: routine.Frontmatter{Schedule: "0 9 * * 1-5"}},
