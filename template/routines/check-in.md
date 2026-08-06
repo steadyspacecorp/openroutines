@@ -6,7 +6,7 @@ consumes: memory
 ---
 Compose this agent's daily check-in, record it in your ledger, and print
 it as your output. Your ledger always holds the latest check-in -- it is
-what a person reads with openroutines report.
+the file a person opens to catch up on this agent.
 
 1. If your inbox has no pending changes, print a one-line check-in saying
    so and stop without consuming -- leave your ledger's last report in

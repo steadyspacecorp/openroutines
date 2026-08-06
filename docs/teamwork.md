@@ -19,7 +19,7 @@ Records hold facts, never polished prose -- compression and voice are a reader's
 
 The memory an agent builds as it works travels through git, on its own branch -- backed up with every push, kept separate from your routines. Memory survives redeploys and rollbacks like a database, but versioned and inspectable: reviewing what your agent has learned is `git log memory`, and pruning bad learnings is part of maintaining an agent -- humans can curate the branch, and the agent pulls it before each run. Memory is the only branch a running agent syncs with origin: routines and code travel the other way, baked into the image at build time (see [Operating in production](operating.md)).
 
-Run `openroutines report` from an agent checkout to read the latest check-in: it syncs memory and prints the report the check-in routine recorded in its ledger on its last delivering run. It is a read -- no model run, nothing consumed. For a check-in composed right now, `openroutines routines run check-in --no-memory` echoes a fresh one without consuming the feed; for the uncompressed view, the records are ordinary Markdown files under `memory/`.
+There is no read command in front of any of this: run `openroutines sync` from an agent checkout and read the files -- `memory/tasks.md`, `memory/events.md`, `memory/context.md`, and the ledgers, with `memory/ledgers/check-in.md` holding the latest check-in the routine recorded. For a check-in composed right now, `openroutines routines run check-in --no-memory` echoes a fresh one without consuming the feed.
 
 The working files stay lean, too: entries older than the retention window (`memory.retention` in `openroutines.yml`, default 30 days) are trimmed daily, and git history keeps everything forever -- including changes a consumer hasn't seen yet. Trimming is housekeeping and is never reported: a consumer already past those entries hears nothing about them being pruned.
 
@@ -31,6 +31,6 @@ Cursors live on the memory branch under `state/cursors/`, and rewriting that bra
 
 ## The check-in routine
 
-The starter check-in routine is the first consumer: once a day it turns the feed into a teammate-style update -- what I did, what I intend to do, where I need a human -- and records it in its ledger, where `openroutines report` reads it from any checkout. It ships active by default, declares no skills and no credentials, and makes every agent observable from day one. Pointing it at Steady, Slack, or anywhere else is a frontmatter diff that adds a skill and a credential.
+The starter check-in routine is the first consumer: once a day it turns the feed into a teammate-style update -- what I did, what I intend to do, where I need a human -- and records it in its ledger, where any synced checkout reads it (`memory/ledgers/check-in.md`). It ships active by default, declares no skills and no credentials, and makes every agent observable from day one. Pointing it at Steady, Slack, or anywhere else is a frontmatter diff that adds a skill and a credential.
 
 The full reasoning -- why these primitives, why a branch, why cursors per consumer -- is in [docs/design.md](design.md) ("Memory", "Memory records events, tasks, and context", "Delivery", "Every agent checks in").
