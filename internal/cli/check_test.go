@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
 const checkAgentYAML = `name: test-agent
@@ -43,6 +44,33 @@ func checkOutput(t *testing.T, dir string) string {
 // A run may not outlast the agent's max_timeout ceiling. The runner enforces
 // that; check is where an operator learns their setting will be cut down,
 // before a routine is quietly killed at the ceiling in production.
+// A binary that doesn't match the agent's pin reads the repo through the
+// wrong schema; check names that first, before the schema-shaped noise.
+func TestCheckNamesBinaryPinMismatchFirst(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
+	os.MkdirAll(filepath.Join(dir, ".openroutines"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".openroutines", "version"), []byte("v9.9.9\n"), 0o644)
+
+	was := version.Version
+	version.Version = "v1.0.0"
+	defer func() { version.Version = was }()
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, "this binary is v1.0.0 but the agent pins v9.9.9") {
+		t.Fatalf("expected the mismatch named:\n%s", out)
+	}
+	if strings.Index(out, "binary") > strings.Index(out, "openroutines.yml") {
+		t.Fatalf("the mismatch must come first:\n%s", out)
+	}
+
+	// A source build is exempt: development runs against pinned agents.
+	version.Version = "v0.0.0-dev"
+	if out := checkOutput(t, dir); strings.Contains(out, "but the agent pins") {
+		t.Fatalf("a dev binary must not report a pin mismatch:\n%s", out)
+	}
+}
+
 func TestCheckWarnsOnTimeoutsAboveTheCeiling(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML+"max_timeout: 1h\n"), 0o644)

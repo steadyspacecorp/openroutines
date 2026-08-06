@@ -20,6 +20,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
+	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
 // effortPattern loosely constrains reasoning-effort values -- providers
@@ -57,6 +58,18 @@ func cmdCheck(args []string) int {
 	}
 	okf := func(format string, a ...any) {
 		fmt.Printf("  ✓ %s\n", fmt.Sprintf(format, a...))
+	}
+
+	// A binary that doesn't match the agent's pinned framework version reads
+	// the repo through the wrong schema, so every divergence below surfaces
+	// as a confusing field-level error. Name the real problem first, before
+	// any of those can. Source builds are exempt: development runs against
+	// pinned agents on purpose.
+	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version")); err == nil {
+		if v := strings.TrimSpace(string(pin)); v != version.Version && !strings.Contains(version.Version, "-dev") {
+			fmt.Println("binary")
+			failf("this binary is %s but the agent pins %s -- every finding below is suspect until they match: update the binary (curl -fsSL https://get.openroutines.dev/install.sh | bash) or the agent (openroutines update)", version.Version, v)
+		}
 	}
 
 	configName := filepath.Base(config.Path(dir))
