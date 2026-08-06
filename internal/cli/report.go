@@ -12,27 +12,28 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/memory"
 )
 
-const teamworkUsage = "usage: openroutines teamwork"
+const reportUsage = "usage: openroutines report"
 
-// checkInRoutine is the reporting routine teamwork runs: the template's
+// checkInRoutine is the reporting routine report runs: the template's
 // default delivery consumer (design decision "Every agent checks in").
 const checkInRoutine = "check-in"
 
-// cmdTeamwork syncs memory, then -- after the operator confirms -- runs the
-// check-in routine so its report echoes to the terminal. This is the
-// interactive delivery path for the default check-in: supervised run output
-// never enters the log stream, so on demand is how a person hears it.
-func cmdTeamwork(args []string) int {
+// cmdReport syncs memory, then -- after the operator confirms -- runs the
+// check-in routine with its memory writes discarded, so its report echoes
+// to the terminal without consuming the change feed. This is the interactive
+// delivery path for the default check-in: supervised run output never enters
+// the log stream, so on demand is how a person hears it.
+func cmdReport(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {
 		return fail(err)
 	}
 	if help {
-		fmt.Println(teamworkUsage)
+		fmt.Println(reportUsage)
 		return 0
 	}
 	if len(positional) != 0 {
-		return fail(errors.New(teamworkUsage))
+		return fail(errors.New(reportUsage))
 	}
 
 	mem := memory.At(".")
@@ -45,12 +46,13 @@ func cmdTeamwork(args []string) int {
 	}
 	fmt.Printf("%s\n\n", message)
 
-	// The check-in is a real run: it spends a model invocation and, when it
-	// delivers, consumes the pending change feed -- the scheduled check-in
-	// then reports nothing new. It never starts without a person saying so.
-	fmt.Printf("Run the %s routine now? Delivered changes are consumed. [y/N] ", checkInRoutine)
+	// The check-in is a real run and spends a model invocation, so it never
+	// starts without a person saying so. It writes nothing: --no-memory
+	// discards the run's staged memory, so the pending change feed stays for
+	// the scheduled check-in to consume.
+	fmt.Printf("Run the %s routine now? It spends a model invocation; memory is untouched. [y/N] ", checkInRoutine)
 	if !confirmed(os.Stdin) {
-		fmt.Println("Not running it; the pending changes remain.")
+		fmt.Println("Not running it.")
 		return 0
 	}
 
@@ -66,7 +68,7 @@ func cmdTeamwork(args []string) int {
 		}
 		setupLogging(".")
 	}
-	return routinesRun([]string{checkInRoutine})
+	return routinesRun([]string{checkInRoutine, "--no-memory"})
 }
 
 // confirmed reads one line and accepts only an explicit yes: a closed or
@@ -97,7 +99,7 @@ func syncMemoryForRead(mem *memory.Memory) (string, error) {
 		return "", errors.New(rep.Detail)
 	case rep.Conflict:
 		reportStranded(mem)
-		return "", fmt.Errorf("memory does not reconcile cleanly: %s\n\nresolve inside memory/, commit, then rerun openroutines teamwork", rep.Detail)
+		return "", fmt.Errorf("memory does not reconcile cleanly: %s\n\nresolve inside memory/, commit, then rerun openroutines report", rep.Detail)
 	case rep.Detail != "":
 		return "", errors.New(rep.Detail)
 	default:

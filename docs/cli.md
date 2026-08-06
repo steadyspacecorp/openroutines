@@ -9,7 +9,7 @@ openroutines scaffold <path>      create a new agent repository
 openroutines configure            fill in openroutines.yml, generate the master key
 openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
-openroutines teamwork             sync memory, then confirm and run the check-in routine
+openroutines report               sync memory, then confirm and run the check-in routine
 openroutines usage                token use and reported cost per routine (--json)
 openroutines sync                 pull the agent's latest memory from origin (--push)
 openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
@@ -73,15 +73,15 @@ openroutines usage [--json]
 
 Token use and reported cost per routine. `--json` emits the machine-readable form for scripts and monitors.
 
-## teamwork
+## report
 
 ```
-openroutines teamwork
+openroutines report
 ```
 
 Fetches and reconciles the `memory` branch, then asks before running the `check-in` routine -- the agent's teammate-style update, composed from the pending memory change feed and echoed to your terminal. This is how you hear the check-in on demand: a supervised run's output never enters the container logs (its record is the exported session), so the interactive run is the delivery.
 
-The confirmation matters because the check-in is a real run: it spends a model invocation, and once its report covers the whole inbox it consumes the change set -- the next scheduled check-in then reports nothing new. Declining (or a non-interactive stdin) leaves the pending changes exactly as they were. The run happens at log level `warn` so the report is not buried in lifecycle chatter; an explicit `OPENROUTINES_LOG_LEVEL` still wins.
+The command changes no memory. The check-in runs with its memory writes discarded (the same `--no-memory` a manual `routines run` offers), so nothing is consumed or committed: the pending changes remain for the scheduled check-in or whatever reporting destination the agent has. The confirmation is about cost, not state -- the check-in is a real run and spends a model invocation; declining (or a non-interactive stdin) runs nothing. The run happens at log level `warn` so the report is not buried in lifecycle chatter; an explicit `OPENROUTINES_LOG_LEVEL` still wins.
 
 The sync half never publishes local memory. It refuses rewritten history and conflicts under the same rules as `openroutines sync`; use `openroutines sync --push` when you intend to publish human curation. The raw records are always readable directly -- `memory/tasks.md`, `memory/events.md`, `memory/context.md`, and `memory/ledgers/` are ordinary Markdown files.
 

@@ -6,7 +6,7 @@ consumes: memory
 ---
 Compose this agent's twice-daily check-in and print it as your output --
 printed output is the report: a person hears it when this routine runs
-interactively (openroutines teamwork), and every run's copy lands in the
+interactively (openroutines report), and every run's copy lands in the
 exported session.
 
 1. If your inbox has no pending changes, print a one-line check-in saying

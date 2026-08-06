@@ -24,36 +24,36 @@ func memoryAgent(t *testing.T) string {
 	return dir
 }
 
-func TestTeamworkDeclineLeavesFeedAlone(t *testing.T) {
+func TestReportDeclineRunsNothing(t *testing.T) {
 	dir := memoryAgent(t)
 	var code int
 	var out string
 	withStdin(t, "n\n", func() {
-		out = capture(t, dir, func() { code = cmdTeamwork(nil) })
+		out = capture(t, dir, func() { code = cmdReport(nil) })
 	})
 	if code != 0 {
-		t.Fatalf("teamwork returned %d", code)
+		t.Fatalf("report returned %d", code)
 	}
 	if !strings.Contains(out, "Memory is local only") {
-		t.Fatalf("teamwork did not report sync state:\n%s", out)
+		t.Fatalf("report did not report sync state:\n%s", out)
 	}
-	if !strings.Contains(out, "pending changes remain") {
-		t.Fatalf("declining did not leave the feed alone:\n%s", out)
+	if !strings.Contains(out, "Not running it") {
+		t.Fatalf("declining did not stop the run:\n%s", out)
 	}
 }
 
 // Confirming hands off to the routine runner at log level warn. The agent has
 // no check-in routine, so the wiring is observable in the failure -- without
 // spending a model run.
-func TestTeamworkConfirmationRunsCheckIn(t *testing.T) {
+func TestReportConfirmationRunsCheckIn(t *testing.T) {
 	dir := memoryAgent(t)
 	t.Setenv(config.EnvLogLevel, "")
 	var code int
 	withStdin(t, "y\n", func() {
-		capture(t, dir, func() { code = cmdTeamwork(nil) })
+		capture(t, dir, func() { code = cmdReport(nil) })
 	})
 	if code == 0 {
-		t.Fatal("teamwork reported success with no check-in routine")
+		t.Fatal("report reported success with no check-in routine")
 	}
 	if got := os.Getenv(config.EnvLogLevel); got != "warn" {
 		t.Fatalf("check-in run level = %q, want warn", got)
@@ -61,14 +61,14 @@ func TestTeamworkConfirmationRunsCheckIn(t *testing.T) {
 }
 
 // An operator's explicit level override outranks the command's warn default.
-func TestTeamworkKeepsOperatorLogLevel(t *testing.T) {
+func TestReportKeepsOperatorLogLevel(t *testing.T) {
 	dir := memoryAgent(t)
 	t.Setenv(config.EnvLogLevel, "debug")
 	withStdin(t, "y\n", func() {
-		capture(t, dir, func() { cmdTeamwork(nil) })
+		capture(t, dir, func() { cmdReport(nil) })
 	})
 	if got := os.Getenv(config.EnvLogLevel); got != "debug" {
-		t.Fatalf("teamwork clobbered the operator's level: %q", got)
+		t.Fatalf("report clobbered the operator's level: %q", got)
 	}
 }
 
@@ -84,11 +84,13 @@ func TestConfirmedAcceptsOnlyExplicitYes(t *testing.T) {
 }
 
 func TestMemoryCommandRetired(t *testing.T) {
-	if commands["teamwork"] == nil {
-		t.Fatal("teamwork command is not registered")
+	if commands["report"] == nil {
+		t.Fatal("report command is not registered")
 	}
-	if commands["memory"] != nil {
-		t.Fatal("the memory command was replaced by teamwork and should be gone")
+	for _, retired := range []string{"memory", "teamwork"} {
+		if commands[retired] != nil {
+			t.Fatalf("the %s command was replaced by report and should be gone", retired)
+		}
 	}
 }
 
