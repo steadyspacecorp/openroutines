@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -131,7 +133,7 @@ func hostOpencodeExec(workspace string) opencodeExec {
 			}
 			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: gid, Gid: gid}}
 		}
-		return cmd.Output()
+		return runToFile(cmd)
 	}
 }
 
@@ -165,9 +167,16 @@ func nativeOpencodeExec(workspace string) opencodeExec {
 		cmd := exec.CommandContext(ctx, "opencode", args...)
 		cmd.Dir = workspace
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
-		return cmd.Output()
+		return runToFile(cmd)
 	}
 }
+
+// captureOutName is where an in-container capture exec's stdout lands,
+// inside the mounted workspace. docker's own stdout is a pipe from the
+// container runtime to the client, so the file that defeats opencode's
+// lossy exit (see runToFile) has to sit on opencode's side of that
+// boundary.
+const captureOutName = ".capture-out"
 
 // containerOpencodeExec re-enters the runtime image with the workspace
 // mounted -- local runs, where opencode exists only inside the image. No
@@ -176,6 +185,14 @@ func containerOpencodeExec(workspace, image string) opencodeExec {
 	return func(args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
 		defer cancel()
+		// The workspace is model-written, so clear the landing path first:
+		// a file the attempt planted there -- a symlink especially -- must
+		// not decide where the redirect writes or what the read returns.
+		outPath := filepath.Join(workspace, captureOutName)
+		if err := os.Remove(outPath); err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		defer func() { _ = os.Remove(outPath) }()
 		dargs := []string{
 			"run", "--rm",
 			"-v", workspace + ":/work",
@@ -189,9 +206,60 @@ func containerOpencodeExec(workspace, image string) opencodeExec {
 			"-e", "HOME=" + captureHomeMount,
 			"-e", "XDG_CONFIG_HOME=" + captureHomeMount + "/.config",
 			"-e", "XDG_DATA_HOME=/work/" + attemptHomeName + "/.local/share",
-			image, "opencode",
+			image, "sh", "-c", `exec opencode "$@" > /work/` + captureOutName, "opencode",
 		}
 		cmd := exec.CommandContext(ctx, "docker", append(dargs, args...)...)
-		return cmd.Output()
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return nil, execError(err, &stderr)
+		}
+		return os.ReadFile(outPath)
 	}
+}
+
+// runToFile runs one capture exec with its stdout connected to a plain
+// file and returns what landed there. opencode's CLI calls process.exit()
+// as soon as its command handler returns, without draining the final
+// stdout write -- and stream writes to a pipe are asynchronous, so a large
+// `export` read through a pipe arrives cut at a 64 KiB boundary with exit
+// code 0. Writes to a file are synchronous: a file as fd 1 is what makes
+// the document arrive whole.
+//
+// The file comes from the supervisor's own TMPDIR like every supervisor
+// temp -- never runTmp, the attempt's space -- but needs none of
+// captureHome's discipline: nothing is loaded from it, the child inherits
+// only the open descriptor, and the readback goes through that same
+// descriptor, so no path the attempt could influence is ever resolved.
+func runToFile(cmd *exec.Cmd) ([]byte, error) {
+	out, err := os.CreateTemp("", "openroutines-capture-out-*")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.Remove(out.Name()) }()
+	defer out.Close()
+	cmd.Stdout = out
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	// With stdout on a file, stderr is the one pipe left that a descendant
+	// opencode leaked could hold open past the exec's own death.
+	cmd.WaitDelay = time.Second
+	if err := cmd.Run(); err != nil {
+		return nil, execError(err, &stderr)
+	}
+	// The child wrote through a dup of this descriptor, so the shared
+	// offset now sits at end of file.
+	if _, err := out.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(out)
+}
+
+// execError keeps what a failed capture exec said on stderr: the log line
+// built from it is the only trace of why bookkeeping degraded.
+func execError(err error, stderr *bytes.Buffer) error {
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		return fmt.Errorf("%w: %s", err, s)
+	}
+	return err
 }
