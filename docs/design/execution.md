@@ -33,8 +33,8 @@ Verified, not assumed (opencode 1.18.3, the pinned version): a plugin planted in
 Each capture exec therefore gets a fresh, supervisor-owned empty directory as `HOME` with `XDG_CONFIG_HOME` under it, removed when the exec returns -- a `tmpfs` at `/capture-home` in the local-container variant, which keeps it outside `/work` and needs no world-writable host directory.
 It reaches the attempt's session store through `XDG_DATA_HOME` alone: that path carries the attempt's data, never its code, and `opencode.db` follows it, so detaching `HOME` does not orphan the store.
 The home is minted in `TMPDIR`, so capture **fails closed** if that ever resolves inside the workspace.
-In the production container the exec runs as the attempt's own identity (gid equals uid by design): the store's files are attempt-owned and opencode writes there even to answer a read -- its startup log, sqlite's WAL side files -- which the supervisor's group access cannot cover, since files opencode creates 0644 carry no group-write bit.
-The minted home is handed to that identity on the group axis for the exec's lifetime and removed like the run workspace, a denied removal retried through the capless helper run as that identity; the supervisor never needs `CAP_DAC_OVERRIDE`.
+In the production container the exec is an ordinary child of the supervisor at the supervisor's own uid -- a sandboxed run keeps that uid too, so everything under the attempt's store is already the supervisor's to read and remove.
+The minted home is removed the way the run workspace is: opencode may leave modes under it that stop a plain walk, so a denied removal retries after restoring owner access on the way down (`removeTree`).
 
 The working directory stays the run workspace, because opencode scopes sessions to the directory they ran in.
 opencode also auto-loads `.opencode/plugin` from that directory and its ancestors, and mounting the workspace read-only would not help -- loading needs only that the file exist.
