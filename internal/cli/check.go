@@ -50,14 +50,14 @@ func cmdCheck(args []string) int {
 	warnings := 0
 	failf := func(format string, a ...any) {
 		failures++
-		fmt.Printf("  ✗ %s\n", fmt.Sprintf(format, a...))
+		fmt.Printf("  %s %s\n", red("✗"), fmt.Sprintf(format, a...))
 	}
 	warnf := func(format string, a ...any) {
 		warnings++
-		fmt.Printf("  ! %s\n", fmt.Sprintf(format, a...))
+		fmt.Printf("  %s %s\n", warnMark, fmt.Sprintf(format, a...))
 	}
 	okf := func(format string, a ...any) {
-		fmt.Printf("  ✓ %s\n", fmt.Sprintf(format, a...))
+		fmt.Printf("  %s %s\n", green("✓"), fmt.Sprintf(format, a...))
 	}
 
 	// A binary that doesn't match the agent's pinned framework version reads
@@ -67,13 +67,13 @@ func cmdCheck(args []string) int {
 	// pinned agents on purpose.
 	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version")); err == nil {
 		if v := strings.TrimSpace(string(pin)); v != version.Version && !strings.Contains(version.Version, "-dev") {
-			fmt.Println("binary")
+			fmt.Println(bold("binary"))
 			failf("this binary is %s but the agent pins %s -- every finding below is suspect until they match: update the binary (curl -fsSL https://get.openroutines.dev/install.sh | bash) or the agent (openroutines update)", version.Version, v)
 		}
 	}
 
 	configName := filepath.Base(config.Path(dir))
-	fmt.Println(configName)
+	fmt.Println(bold(configName))
 	// opencode.json is loaded alongside: routine MCP grants are validated
 	// against its server names, so a file opencode itself could not parse
 	// must fail here, not surface as every grant looking undefined.
@@ -102,7 +102,7 @@ func cmdCheck(args []string) int {
 	// skill names. A duplicate global name is dropped from the list rather
 	// than returned, so the namespace errors have to be reported here or
 	// nothing downstream will ever mention them.
-	fmt.Println("skills/")
+	fmt.Println(bold("skills/"))
 	allSkills, skillErrs := skill.ListAgent(dir)
 	for _, e := range skillErrs {
 		failf("%v", e)
@@ -120,7 +120,7 @@ func cmdCheck(args []string) int {
 	}
 
 	// Plugins
-	fmt.Println(".openroutines/plugins/")
+	fmt.Println(bold(".openroutines/plugins/"))
 	pluginEntries, pluginDirErr := os.ReadDir(filepath.Join(dir, ".openroutines", "plugins"))
 	if pluginDirErr != nil && !os.IsNotExist(pluginDirErr) {
 		failf("%v", pluginDirErr)
@@ -153,7 +153,7 @@ func cmdCheck(args []string) int {
 	}
 
 	// Routines
-	fmt.Println("routines/")
+	fmt.Println(bold("routines/"))
 	routines, parseErrs := routine.LoadAgent(dir)
 	pluginRoutines, _ := routine.LoadPlugins(dir)
 	pluginPaths := map[string][]string{}
@@ -265,7 +265,7 @@ func cmdCheck(args []string) int {
 			if r.FM.IsActive() {
 				okf("%s (%s, active)", r.Name, scheduleSummary(r))
 			} else {
-				fmt.Printf("  ○ %s (%s, inactive)\n", r.Name, scheduleSummary(r))
+				fmt.Printf("  %s %s\n", dim("○"), dim(fmt.Sprintf("%s (%s, inactive)", r.Name, scheduleSummary(r))))
 			}
 		} else {
 			for _, e := range errs {
@@ -298,7 +298,7 @@ func cmdCheck(args []string) int {
 	}
 
 	// Credentials store
-	fmt.Println("credentials")
+	fmt.Println(bold("credentials"))
 	if key, err := creds.LoadKey(dir); err != nil {
 		if len(providerNeeds) > 0 {
 			failf("%v -- active routines cannot authenticate to their model provider without it", err)
@@ -382,7 +382,7 @@ func cmdCheck(args []string) int {
 	}
 
 	// Deploy prerequisites
-	fmt.Println("deploy")
+	fmt.Println(bold("deploy"))
 	if out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output(); err != nil {
 		warnf("no git origin -- required before deploy (knowledge needs a durable home)")
 	} else {
@@ -404,9 +404,9 @@ func cmdCheck(args []string) int {
 
 	fmt.Println()
 	if failures > 0 {
-		fmt.Printf("check failed: %d problem(s), %d warning(s)\n", failures, warnings)
+		fmt.Printf("%s: %d problem(s), %d warning(s)\n", red(bold("check failed")), failures, warnings)
 		return 1
 	}
-	fmt.Printf("check passed (%d warning(s))\n", warnings)
+	fmt.Printf("%s (%d warning(s))\n", green(bold("check passed")), warnings)
 	return 0
 }
