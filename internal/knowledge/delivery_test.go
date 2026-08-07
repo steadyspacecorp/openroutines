@@ -1,4 +1,4 @@
-package memory
+package knowledge
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// deliveryFixture inits an agent repo with a materialized memory worktree.
+// deliveryFixture inits an agent repo with a materialized knowledge worktree.
 func deliveryFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -26,7 +26,7 @@ func deliveryFixture(t *testing.T) string {
 	return dir
 }
 
-func appendMemory(t *testing.T, dir, file, line string) {
+func appendKnowledge(t *testing.T, dir, file, line string) {
 	t.Helper()
 	p := filepath.Join(At(dir).Worktree(), file)
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -46,15 +46,15 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: opened PR #1")
+	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: opened PR #1")
 	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
-	appendMemory(t, dir, "events.md", "- 2026-07-21 a11y-sweep NO-OP: all clean")
-	appendMemory(t, dir, "tasks.md", "- [ ] `task-20260721-1` decide the thing (source: doc-drift; added 2026-07-21)")
+	appendKnowledge(t, dir, "events.md", "- 2026-07-21 a11y-sweep NO-OP: all clean")
+	appendKnowledge(t, dir, "tasks.md", "- [ ] `task-20260721-1` decide the thing (source: doc-drift; added 2026-07-21)")
 	// Ledger and supervisor-owned writes must never reach a consumer.
-	appendMemory(t, dir, "ledgers/doc-drift.md", "- private cursor note")
-	appendMemory(t, dir, "runs.jsonl", `{"run_id":"run_b"}`)
+	appendKnowledge(t, dir, "ledgers/doc-drift.md", "- private cursor note")
+	appendKnowledge(t, dir, "runs.jsonl", `{"run_id":"run_b"}`)
 	if _, err := At(dir).Commit("Run a11y-sweep (run_b): completed"); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 // the way the supervisor does. Returns the commit the event landed in.
 func trimFixture(t *testing.T, dir string) string {
 	t.Helper()
-	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
+	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
 	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
@@ -157,14 +157,14 @@ func TestRetentionTrimIsNotDelivered(t *testing.T) {
 // otherwise ride along into it and never reach a consumer at all.
 func TestTrimCommitLeavesUnrelatedWorkDeliverable(t *testing.T) {
 	dir := deliveryFixture(t)
-	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
+	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
 	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
 	cursor, _ := At(dir).Head()
 
 	// Curation sitting in the worktree when the daily trim fires.
-	appendMemory(t, dir, "tasks.md", "- [ ] `task-20260721-1` hand-curated ask (source: a human; added 2026-07-21)")
+	appendKnowledge(t, dir, "tasks.md", "- [ ] `task-20260721-1` hand-curated ask (source: a human; added 2026-07-21)")
 	if changed, err := At(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
 		t.Fatalf("trim: changed=%v err=%v", changed, err)
 	}
@@ -191,7 +191,7 @@ func TestTrimCommitLeavesUnrelatedWorkDeliverable(t *testing.T) {
 	}
 }
 
-// A cursor whose commit is not on the memory branch names no change set, and
+// A cursor whose commit is not on the knowledge branch names no change set, and
 // no retry will make it name one: the feed reports that as its own error so
 // the caller can tell it apart from an attempt worth repeating.
 func TestChangesRejectsUnreachableCursor(t *testing.T) {
@@ -204,7 +204,7 @@ func TestChangesRejectsUnreachableCursor(t *testing.T) {
 
 	// Present but off the branch: a repaired history leaves the old commit in
 	// the object store, where from..through would deliver the wrong set.
-	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: a fact")
+	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: a fact")
 	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestChangesRejectsUnreachableCursor(t *testing.T) {
 	if _, err := git(At(dir).Worktree(), "reset", "--hard", "HEAD~1"); err != nil {
 		t.Fatal(err)
 	}
-	appendMemory(t, dir, "events.md", "- 2026-07-21 doc-drift: the repaired fact")
+	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: the repaired fact")
 	if _, err := At(dir).Commit("Run doc-drift (run_b): completed"); err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestCursorRoundTripAndListing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(staging, "state", "cursors", "check-in.json")); !os.IsNotExist(err) {
-		t.Fatal("cursor leaked into staged memory")
+		t.Fatal("cursor leaked into staged knowledge")
 	}
 }
 
@@ -291,7 +291,7 @@ func TestRenderChangesShapes(t *testing.T) {
 		Files: []FileDelta{{Path: "events.md", Added: []string{"- 2026-07-21 doc-drift: opened PR #1"}}},
 	}}
 	rendered := RenderChanges("check-in", "000111", "abc123", changes)
-	for _, want := range []string{"# Pending memory changes", "Routine: check-in", "events.md", "opened PR #1"} {
+	for _, want := range []string{"# Pending knowledge changes", "Routine: check-in", "events.md", "opened PR #1"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("change set missing %q: %s", want, rendered)
 		}
@@ -319,7 +319,7 @@ func TestAppendHumanTaskSectionsAndDedup(t *testing.T) {
 }
 
 // Cursor values become git rev-range argv, and cursor files ride the
-// untrusted memory branch: anything but a commit SHA is rejected on load.
+// untrusted knowledge branch: anything but a commit SHA is rejected on load.
 func TestLoadCursorRejectsNonSHA(t *testing.T) {
 	dir := t.TempDir()
 	for _, bad := range []string{"--output=/tmp/evil", "HEAD", "refs/heads/main", "abc", ""} {

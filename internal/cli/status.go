@@ -13,7 +13,7 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
@@ -24,7 +24,7 @@ import (
 const statusUsage = "usage: openroutines status"
 
 // cmdStatus shows what the agent has and still needs: identity, key, model,
-// routines with their next firing, skills, and memory sync state.
+// routines with their next firing, skills, and knowledge sync state.
 func cmdStatus(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {
@@ -84,7 +84,7 @@ func cmdStatus(args []string) int {
 
 	// Routines.
 	now := time.Now().In(loc)
-	stateDir := memory.At(dir).StateDir()
+	stateDir := knowledge.At(dir).StateDir()
 	settled := settledAttempts(dir)
 	routines, parseErrs := routine.LoadAgent(dir)
 	fmt.Printf("\nroutines (%d):\n", len(routines))
@@ -118,13 +118,13 @@ func cmdStatus(args []string) int {
 			fmt.Printf("      %s\n", line)
 		}
 	}
-	// The lines above came out of the memory worktree, so they are only as
-	// current as the last fetch. The memory section says so too, but it is
+	// The lines above came out of the knowledge worktree, so they are only as
+	// current as the last fetch. The knowledge section says so too, but it is
 	// screens away by then and these are the most staleness-sensitive numbers
 	// the command prints.
 	if reported {
-		if ms := memory.At(dir).Status(); ms.Behind > 0 {
-			fmt.Printf("  ! scheduling state above is from memory %d commit(s) behind origin/%s -- run openroutines sync\n", ms.Behind, memory.Branch)
+		if ms := knowledge.At(dir).Status(); ms.Behind > 0 {
+			fmt.Printf("  ! scheduling state above is from knowledge %d commit(s) behind origin/%s -- run openroutines sync\n", ms.Behind, knowledge.Branch)
 		}
 	}
 	for _, e := range parseErrs {
@@ -141,26 +141,26 @@ func cmdStatus(args []string) int {
 		fmt.Printf("  ! %v\n", e)
 	}
 
-	// Memory.
-	fmt.Printf("\nmemory:\n")
-	mem := memory.At(dir)
+	// Knowledge.
+	fmt.Printf("\nknowledge:\n")
+	mem := knowledge.At(dir)
 	ms := mem.Status()
 	if !ms.Materialized {
-		if ms.RemoteMemory {
-			fmt.Printf("  ! not materialized in this checkout -- origin has the agent's memory; run openroutines sync to adopt it\n")
+		if ms.RemoteKnowledge {
+			fmt.Printf("  ! not materialized in this checkout -- origin has the agent's knowledge; run openroutines sync to adopt it\n")
 		} else {
 			fmt.Printf("  not materialized yet -- appears on first run\n")
 		}
 	} else {
 		fmt.Printf("  last commit: %s\n", ms.LastCommit)
 		if ms.Uncommitted > 0 {
-			fmt.Printf("  ! %d file(s) with uncommitted changes -- commit inside memory/ when done curating\n", ms.Uncommitted)
+			fmt.Printf("  ! %d file(s) with uncommitted changes -- commit inside knowledge/ when done curating\n", ms.Uncommitted)
 		}
 		if ms.Unpushed > 0 {
 			fmt.Printf("  %d commit(s) not yet pushed to origin\n", ms.Unpushed)
 		}
 		if ms.Behind > 0 {
-			fmt.Printf("  ! %d commit(s) behind origin/%s -- this checkout is reading old memory; run openroutines sync to get the latest from origin\n", ms.Behind, memory.Branch)
+			fmt.Printf("  ! %d commit(s) behind origin/%s -- this checkout is reading old knowledge; run openroutines sync to get the latest from origin\n", ms.Behind, knowledge.Branch)
 		}
 		if cursors, err := mem.Cursors(); err == nil && len(cursors) > 0 {
 			head, _ := mem.Head()
@@ -172,8 +172,8 @@ func cmdStatus(args []string) int {
 					// Silence here would read as caught up, which is the one
 					// thing a stuck consumer is not: its runs are abandoned on
 					// sight until a person repairs the file.
-					case errors.Is(err, memory.ErrCursorUnreachable):
-						lag = fmt.Sprintf(" -- ! not on the memory branch, delivery is stuck: repair or delete %s", memory.CursorFile(name))
+					case errors.Is(err, knowledge.ErrCursorUnreachable):
+						lag = fmt.Sprintf(" -- ! not on the knowledge branch, delivery is stuck: repair or delete %s", knowledge.CursorFile(name))
 					case err == nil && len(changes) > 0:
 						lag = fmt.Sprintf(" -- %d change(s) pending", len(changes))
 					}
@@ -183,7 +183,7 @@ func cmdStatus(args []string) int {
 		}
 	}
 	if !mem.HasOrigin() {
-		fmt.Printf("  ! no git origin -- memory is not durable until one is set\n")
+		fmt.Printf("  ! no git origin -- knowledge is not durable until one is set\n")
 	}
 
 	printTokenUsage(dir)
@@ -253,7 +253,7 @@ func attemptKey(runID string, attempt int) string {
 // running. Nil when there is no log to read at all (never run, or a release
 // that predates it): absent evidence must not be read as "in flight".
 func settledAttempts(dir string) map[string]bool {
-	raw, err := os.ReadFile(filepath.Join(memory.At(dir).Worktree(), "runs.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(knowledge.At(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
 		return nil
 	}

@@ -188,10 +188,10 @@ func TestCheckSurfacesRetiredConsumesKeyWithMapping(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}\n"), 0o644)
 	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
 	os.WriteFile(filepath.Join(dir, "routines", "check-in.md"), []byte(
-		"---\nschedule: \"0 9 * * *\"\nconsumes: memory\n---\nReport.\n"), 0o644)
+		"---\nschedule: \"0 9 * * *\"\nconsumes: knowledge\n---\nReport.\n"), 0o644)
 
 	out := checkOutput(t, dir)
-	if !strings.Contains(out, `"consumes: memory" is now "reports: true"`) {
+	if !strings.Contains(out, `"consumes: knowledge" is now "reports: true"`) {
 		t.Fatalf("a fleet routine still declaring consumes: must fail check with the rename, not an unknown-field error:\n%s", out)
 	}
 }

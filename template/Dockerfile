@@ -19,7 +19,7 @@
 FROM debian:trixie-slim AS base
 
 # Tools every run can rely on: git, gh for GitHub work, jq for reading JSON APIs,
-# ssh for git-over-ssh memory pushes, curl for the installs below.
+# ssh for git-over-ssh knowledge pushes, curl for the installs below.
 # The attempt identity pool: 32 run-slot identities plus attempt-32, reserved
 # for manual `routines run` inside the container. The agent user joins every
 # attempt group because per-attempt filesystem access is granted on the group

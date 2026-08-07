@@ -32,7 +32,7 @@ const (
 	// hung endpoint must not eat the minute.
 	RequestTimeout = 10 * time.Second
 
-	// selectBodyCap bounds a body that must be held in memory for JSON
+	// selectBodyCap bounds a body that must be held in knowledge for JSON
 	// extraction. hashBodyCap bounds how much of a raw body is streamed into
 	// the comparison hash -- hashing needs no buffer, so it can be generous.
 	selectBodyCap = 256 << 10
@@ -45,8 +45,8 @@ const StateDirName = "triggers"
 
 // State is one routine's durable trigger record: the last comparison value
 // and the conditional-request validators that produced it. Poll timing is
-// deliberately absent -- the last-poll clock is supervisor memory, since
-// persisting it would dirty the memory worktree on every poll.
+// deliberately absent -- the last-poll clock is supervisor knowledge, since
+// persisting it would dirty the knowledge worktree on every poll.
 type State struct {
 	Routine      string `json:"routine"`
 	Value        string `json:"value"`
@@ -238,7 +238,7 @@ func observe(body io.Reader, selector string) (string, error) {
 }
 
 // redactURL strips the poll URL from transport errors: query strings can
-// carry tokens, and poll errors are logged and committed to memory.
+// carry tokens, and poll errors are logged and committed to knowledge.
 func redactURL(err error) error {
 	var u *url.Error
 	if errors.As(err, &u) {

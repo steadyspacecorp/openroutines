@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 )
 
 // FileName is the agent configuration file at the repository root --
@@ -71,9 +71,10 @@ const DefaultMaxTimeout = 6 * time.Hour
 // either -- an existing agent stays serial until its operator opts in.
 const ScaffoldConcurrency = 2
 
-// Memory holds memory-behavior settings; see design decision "Memory has three
-// shared primitives" for the retention window semantics.
-type Memory struct {
+// Knowledge holds knowledge-behavior settings; see design decision
+// "Knowledge records events, tasks, and context" for the retention
+// window semantics.
+type Knowledge struct {
 	Retention string `yaml:"retention,omitempty"`
 }
 
@@ -92,9 +93,14 @@ type Agent struct {
 	MaxTimeout  string                `yaml:"max_timeout,omitempty"`
 	Concurrency int                   `yaml:"concurrency,omitempty"`
 	LogLevel    string                `yaml:"log_level,omitempty"`
-	Memory      *Memory               `yaml:"memory,omitempty"`
+	Knowledge   *Knowledge            `yaml:"knowledge,omitempty"`
 	Variables   map[string]string     `yaml:"variables,omitempty"`
 	Credentials map[string]creds.Spec `yaml:"credentials,omitempty"`
+
+	// Memory is retired, replaced by Knowledge. It is parsed only so Load
+	// can reject it with the rename: strict decoding alone would call it
+	// an unknown field, which reads as a typo rather than the rename.
+	Memory *Knowledge `yaml:"memory,omitempty"`
 }
 
 // MaxRunTimeout is the agent-wide ceiling on a single attempt's effective
@@ -126,12 +132,12 @@ func (a *Agent) RunSlots() int {
 // boundary explicit in the image and configuration.
 const MaxConcurrency = 32
 
-// Retention returns the configured memory retention string ("" = default).
+// Retention returns the configured knowledge retention string ("" = default).
 func (a *Agent) Retention() string {
-	if a.Memory == nil {
+	if a.Knowledge == nil {
 		return ""
 	}
-	return a.Memory.Retention
+	return a.Knowledge.Retention
 }
 
 // Load reads the configuration file from dir (FileName, or a LegacyFileNames
@@ -148,6 +154,9 @@ func Load(dir string) (*Agent, error) {
 	var a Agent
 	if err := dec.Decode(&a); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	if a.Memory != nil {
+		return nil, fmt.Errorf(`%s: the memory key is retired -- memory is now knowledge ("memory.retention" is "knowledge.retention")`, filepath.Base(path))
 	}
 	return &a, nil
 }
@@ -213,8 +222,8 @@ func (a *Agent) Problems() []string {
 	} else if a.Concurrency > MaxConcurrency {
 		out = append(out, fmt.Sprintf("concurrency %d exceeds the maximum of %d", a.Concurrency, MaxConcurrency))
 	}
-	if _, err := memory.ParseRetention(a.Retention()); err != nil {
-		out = append(out, fmt.Sprintf("memory.retention: %v", err))
+	if _, err := knowledge.ParseRetention(a.Retention()); err != nil {
+		out = append(out, fmt.Sprintf("knowledge.retention: %v", err))
 	}
 	if a.LogLevel != "" {
 		if _, err := ParseLogLevel(a.LogLevel); err != nil {

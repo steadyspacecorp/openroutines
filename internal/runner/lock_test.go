@@ -32,16 +32,16 @@ func TestLockRoutineExcludesConcurrentAttempts(t *testing.T) {
 	release3()
 }
 
-// The memory lock's cross-process exclusion rides the same per-description
+// The knowledge lock's cross-process exclusion rides the same per-description
 // flock semantics: two separate opens of the lock -- a supervisor and a
 // manual run -- contend through the kernel, not through the in-process mutex.
-func TestMemoryLockExcludesAcrossOpens(t *testing.T) {
+func TestKnowledgeLockExcludesAcrossOpens(t *testing.T) {
 	dir := t.TempDir()
-	supervisor, err := OpenMemoryLock(dir)
+	supervisor, err := OpenKnowledgeLock(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manual, err := OpenMemoryLock(dir)
+	manual, err := OpenKnowledgeLock(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,14 +53,14 @@ func TestMemoryLockExcludesAcrossOpens(t *testing.T) {
 	}()
 	select {
 	case <-acquired:
-		t.Fatal("second open acquired the memory lock while the first held it")
+		t.Fatal("second open acquired the knowledge lock while the first held it")
 	case <-time.After(50 * time.Millisecond):
 	}
 	supervisor.Unlock()
 	select {
 	case <-acquired:
 	case <-time.After(5 * time.Second):
-		t.Fatal("memory lock was not handed over after release")
+		t.Fatal("knowledge lock was not handed over after release")
 	}
 	manual.Unlock()
 }

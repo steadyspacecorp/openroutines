@@ -15,7 +15,7 @@ import (
 )
 
 // frameworkOwned are the template files update may rewrite. Everything else
-// in an agent repo -- routines, skills, memory, openroutines.yml, credentials --
+// in an agent repo -- routines, skills, knowledge, openroutines.yml, credentials --
 // belongs to the agent and is never touched. opencode.json stays off this
 // list deliberately: it is the user's harness config (the permission policy
 // and provider endpoint definitions; design decision "One binary"), and an update
@@ -124,7 +124,7 @@ func cmdUpdate(args []string) int {
 	}
 	fmt.Printf("Pinned %s in .openroutines/version (%d file(s) updated, %d skipped)\n\n", target, applied, skipped)
 	fmt.Println("Review the diff, commit, and push -- your next deploy runs the new version.")
-	fmt.Println("Rolling back is git revert. Routines, skills, memory, and credentials were not touched.")
+	fmt.Println("Rolling back is git revert. Routines, skills, knowledge, and credentials were not touched.")
 	return 0
 }
 

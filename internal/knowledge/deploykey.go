@@ -1,4 +1,4 @@
-package memory
+package knowledge
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 )
 
 // EnvDeployKey delivers the SSH private key that lets a deployed agent push
-// its memory branch. Scope the key to the one repository. EnvDeployKeyFile
+// its knowledge branch. Scope the key to the one repository. EnvDeployKeyFile
 // is the preferred production delivery: a path to the key, so the key value
 // itself never appears in /proc/pid/environ.
 const (

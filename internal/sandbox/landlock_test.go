@@ -44,8 +44,8 @@ func TestLandlockConfinement(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(workspace) })
 	runTmp := filepath.Join(workspace, ".runtmp")
 	attemptHome := filepath.Join(workspace, ".home")
-	memoryDir := filepath.Join(workspace, "memory")
-	for _, d := range []string{runTmp, attemptHome, memoryDir} {
+	knowledgeDir := filepath.Join(workspace, "knowledge")
+	for _, d := range []string{runTmp, attemptHome, knowledgeDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestLandlockConfinement(t *testing.T) {
 		t.Cleanup(func() { os.Remove(planted) })
 	}
 
-	ro, rw := Paths(workspace, memoryDir, runTmp, home, attemptHome)
+	ro, rw := Paths(workspace, knowledgeDir, runTmp, home, attemptHome)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestLandlockConfinement(t *testing.T) {
 		"read-deploy-key":    "denied",  // supervisor's ~/.ssh
 		"read-auth-store":    "denied",  // shared opencode home (cross-routine channel)
 		"read-supervisor":    "denied",  // /proc/<supervisor>/environ, closed by non-dumpable
-		"write-memory":       "allowed", // the one place writes persist
+		"write-knowledge":       "allowed", // the one place writes persist
 		"write-runtmp":       "allowed",
 		"write-attempt-home": "allowed", // disposable per-attempt HOME
 		"read-workspace":     "allowed",
@@ -190,7 +190,7 @@ func landlockHelper() {
 	report("read-deploy-key", tryRead(os.Getenv("LT_DEPLOY_KEY")))
 	report("read-auth-store", tryRead(os.Getenv("LT_AUTH_STORE")))
 	report("read-supervisor", tryRead(fmt.Sprintf("/proc/%s/environ", os.Getenv("LT_PARENT_PID"))))
-	report("write-memory", tryWrite(filepath.Join(ws, "memory", "probe.md")))
+	report("write-knowledge", tryWrite(filepath.Join(ws, "knowledge", "probe.md")))
 	report("write-runtmp", tryWrite(filepath.Join(os.Getenv("LT_RUNTMP"), "probe")))
 	report("write-attempt-home", tryWrite(filepath.Join(os.Getenv("LT_HOME_ATTEMPT"), "probe")))
 	report("read-workspace", tryRead(os.Getenv("LT_SEEDED")))

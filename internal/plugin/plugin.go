@@ -1,5 +1,5 @@
 // Package plugin reads, installs, and updates grouped bundles of routines,
-// skills, and memory-ledger stubs described by a PLUGIN.md manifest (see
+// skills, and knowledge-ledger stubs described by a PLUGIN.md manifest (see
 // design decision "Plugins"). Validation is all-or-nothing over the whole payload
 // before anything is copied, and violation is refusal, not a skipped file.
 package plugin
@@ -80,7 +80,7 @@ type Plugin struct {
 	Dir      string
 	Routines []*routine.Routine
 	Skills   []*skill.Skill
-	Stubs    []string // memory/ledgers/<name>.md, relative to Dir
+	Stubs    []string // knowledge/ledgers/<name>.md, relative to Dir
 }
 
 // benignRoot are repository housekeeping files tolerated (never copied) at
@@ -209,7 +209,7 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		}
 		switch {
 		case rel == FileName || benignRoot[rel]:
-		case rel == "routines" || rel == "skills" || rel == "memory" || rel == filepath.Join("memory", "ledgers"):
+		case rel == "routines" || rel == "skills" || rel == "knowledge" || rel == filepath.Join("knowledge", "ledgers"):
 			// structural directories
 		case strings.HasPrefix(rel, "routines"+string(filepath.Separator)):
 			if d.IsDir() {
@@ -228,17 +228,17 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 					return filepath.SkipDir
 				}
 			}
-		case strings.HasPrefix(rel, filepath.Join("memory", "ledgers")+string(filepath.Separator)):
+		case strings.HasPrefix(rel, filepath.Join("knowledge", "ledgers")+string(filepath.Separator)):
 			base := strings.TrimSuffix(d.Name(), ".md")
 			if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") || !routine.NamePattern.MatchString(base) {
-				badf("%s: ledger stubs are flat memory/ledgers/<routine>.md files", rel)
+				badf("%s: ledger stubs are flat knowledge/ledgers/<routine>.md files", rel)
 			} else {
 				p.Stubs = append(p.Stubs, rel)
 			}
-		case strings.HasPrefix(rel, "memory"+string(filepath.Separator)):
-			badf("%s: plugins may seed only memory/ledgers/ stubs, never shared memory files", rel)
+		case strings.HasPrefix(rel, "knowledge"+string(filepath.Separator)):
+			badf("%s: plugins may seed only knowledge/ledgers/ stubs, never shared knowledge files", rel)
 		default:
-			badf("%s: not part of a plugin -- the payload is allow-listed (PLUGIN.md, routines/, skills/, memory/ledgers/)", rel)
+			badf("%s: not part of a plugin -- the payload is allow-listed (PLUGIN.md, routines/, skills/, knowledge/ledgers/)", rel)
 			if d.IsDir() {
 				return filepath.SkipDir
 			}

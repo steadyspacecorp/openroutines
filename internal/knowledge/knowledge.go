@@ -1,7 +1,7 @@
-// Package memory manages the agent's memory: a git worktree of the orphan
-// `memory` branch, plus the staging pipeline that keeps model-directed
-// processes away from git entirely (see design decision "Memory syncs per run").
-package memory
+// Package knowledge manages the agent's knowledge: a git worktree of the orphan
+// `knowledge` branch, plus the staging pipeline that keeps model-directed
+// processes away from git entirely (see design decision "Knowledge syncs per run").
+package knowledge
 
 import (
 	"bytes"
@@ -23,11 +23,11 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// Memory is a dedicated directory backed by its own branch.
+// Knowledge is a dedicated directory backed by its own branch.
 const (
-	Dir        = "memory"
-	Branch     = "memory"
-	maxFile    = 5 << 20 // per-file size cap in staged memory
+	Dir        = "knowledge"
+	Branch     = "knowledge"
+	maxFile    = 5 << 20 // per-file size cap in staged knowledge
 	maxEntries = 2000    // total staged file cap
 )
 
@@ -36,21 +36,21 @@ const (
 // and consumer cursors in subdirectories.
 const stateDirName = "state"
 
-// Memory is one agent repository's memory. The handle binds the repository
-// root; every operation that reads or maintains the memory branch, its
+// Knowledge is one agent repository's knowledge. The handle binds the repository
+// root; every operation that reads or maintains the knowledge branch, its
 // worktree, and the supervisor-owned state inside it goes through here.
-type Memory struct {
+type Knowledge struct {
 	repoDir string
 }
 
 // At binds the agent repository at repoDir. No I/O: the worktree may not be
 // materialized yet (Status reports that; Ensure fixes it).
-func At(repoDir string) *Memory { return &Memory{repoDir: repoDir} }
+func At(repoDir string) *Knowledge { return &Knowledge{repoDir: repoDir} }
 
-// primitives are the framework-blessed shared memory files, seeded on init.
+// primitives are the framework-blessed shared knowledge files, seeded on init.
 // Each opens with a fenced example of its format: the file teaches its own
 // shape at the point of use, and the retention trimmer preserves everything
-// that isn't a record. Agents may reshape the headers in their own memory
+// that isn't a record. Agents may reshape the headers in their own knowledge
 // branch -- seeding is create-if-missing and never overwrites.
 var primitives = map[string]string{
 	"events.md": "# Events\n\nWhat happened: append-only outcomes and observations, full facts, no polish.\n" +
@@ -251,18 +251,18 @@ func gitExitCode(err error) int {
 	return -1
 }
 
-// Worktree returns the memory worktree location inside the agent repo.
-func (m *Memory) Worktree() string { return filepath.Join(m.repoDir, Dir) }
+// Worktree returns the knowledge worktree location inside the agent repo.
+func (m *Knowledge) Worktree() string { return filepath.Join(m.repoDir, Dir) }
 
 // StateDir returns the supervisor-owned state directory inside the worktree.
 // Per-routine state lives at <StateDir>/<name>.json (scheduling) and
 // <StateDir>/<subdir>/<name>.json (trigger baselines, consumer cursors).
-func (m *Memory) StateDir() string { return filepath.Join(m.Worktree(), stateDirName) }
+func (m *Knowledge) StateDir() string { return filepath.Join(m.Worktree(), stateDirName) }
 
-// Ensure materializes memory/ as a worktree of the memory branch,
+// Ensure materializes knowledge/ as a worktree of the knowledge branch,
 // creating the orphan branch and seeding the primitives on first use.
 // Self-heals: safe to call every run.
-func (m *Memory) Ensure() error {
+func (m *Knowledge) Ensure() error {
 	wt := m.Worktree()
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
 		return nil // already materialized
@@ -273,13 +273,13 @@ func (m *Memory) Ensure() error {
 	_, _ = git(m.repoDir, "worktree", "prune")
 	if _, err := git(m.repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
 		// No local branch. A deployed container's .git never has one, but the
-		// agent's real memory usually exists on origin: adopt it rather than
+		// agent's real knowledge usually exists on origin: adopt it rather than
 		// minting a new root (found live: every container generation was
 		// splicing a stray root commit into the lineage).
 		if m.HasOrigin() {
 			if _, lerr := git(m.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); lerr == nil {
 				if _, ferr := git(m.repoDir, "fetch", "--quiet", "origin", "+refs/heads/"+Branch+":refs/heads/"+Branch); ferr != nil {
-					return fmt.Errorf("adopting memory branch from origin: %w", ferr)
+					return fmt.Errorf("adopting knowledge branch from origin: %w", ferr)
 				}
 				// Adoption is where a restart used to launder a rewritten
 				// history: a fresh container has no local baseline, so it
@@ -290,13 +290,13 @@ func (m *Memory) Ensure() error {
 				if accepted := m.AcceptedTip(); accepted != "" {
 					tip, terr := git(m.repoDir, "rev-parse", "refs/heads/"+Branch)
 					if terr == nil && tip != accepted && !isAncestor(m.repoDir, accepted, tip) {
-						return fmt.Errorf("origin/%s does not descend from the last accepted tip %s -- memory history was rewritten while this agent was down; refusing to adopt it. Inspect origin/%s, then either restore the branch or move %s to the new tip to accept the rewrite deliberately", Branch, short(accepted), Branch, acceptedRef)
+						return fmt.Errorf("origin/%s does not descend from the last accepted tip %s -- knowledge history was rewritten while this agent was down; refusing to adopt it. Inspect origin/%s, then either restore the branch or move %s to the new tip to accept the rewrite deliberately", Branch, short(accepted), Branch, acceptedRef)
 					}
 				}
 				tip, _ := git(m.repoDir, "rev-parse", "refs/heads/"+Branch)
-				slog.Info("memory: adopted the memory branch from origin", "tip", tip)
+				slog.Info("knowledge: adopted the knowledge branch from origin", "tip", tip)
 			} else if !strings.Contains(lerr.Error(), "exit status 2") {
-				slog.Warn("memory: could not reach origin to adopt the memory branch -- creating a local root; this will diverge if origin has one", "error", lerr)
+				slog.Warn("knowledge: could not reach origin to adopt the knowledge branch -- creating a local root; this will diverge if origin has one", "error", lerr)
 			}
 		}
 	}
@@ -306,16 +306,16 @@ func (m *Memory) Ensure() error {
 		// everywhere.)
 		tree, err := gitStdin(m.repoDir, "", "mktree")
 		if err != nil {
-			return fmt.Errorf("creating memory branch: %w", err)
+			return fmt.Errorf("creating knowledge branch: %w", err)
 		}
-		commit, err := git(m.repoDir, "commit-tree", tree, "-m", "Memory branch root")
+		commit, err := git(m.repoDir, "commit-tree", tree, "-m", "Knowledge branch root")
 		if err != nil {
-			return fmt.Errorf("creating memory branch: %w", err)
+			return fmt.Errorf("creating knowledge branch: %w", err)
 		}
 		if _, err := git(m.repoDir, "branch", Branch, commit); err != nil {
-			return fmt.Errorf("creating memory branch: %w", err)
+			return fmt.Errorf("creating knowledge branch: %w", err)
 		}
-		slog.Info("memory: created the memory branch", "commit", commit)
+		slog.Info("knowledge: created the knowledge branch", "commit", commit)
 	}
 	if _, err := git(m.repoDir, "worktree", "add", wt, Branch); err != nil {
 		return err
@@ -336,17 +336,17 @@ func (m *Memory) Ensure() error {
 		return err
 	}
 	if changed, _ := git(wt, "status", "--porcelain"); changed != "" {
-		if _, err := git(wt, "commit", "--quiet", "-m", "Seed memory primitives"); err != nil {
+		if _, err := git(wt, "commit", "--quiet", "-m", "Seed knowledge primitives"); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Snapshot copies the memory worktree's files into a plain staging directory:
+// Snapshot copies the knowledge worktree's files into a plain staging directory:
 // regular files only, no git metadata. This staged copy is what a routine
-// sees and writes as memory/.
-func (m *Memory) Snapshot(stagingDir string) error {
+// sees and writes as knowledge/.
+func (m *Knowledge) Snapshot(stagingDir string) error {
 	wt := m.Worktree()
 	return filepath.WalkDir(wt, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -408,18 +408,18 @@ func CloneTree(src, dst string) error {
 func stagedPathPolicy(rel string, isDir bool) error {
 	switch filepath.Base(rel) {
 	case ".git", ".gitattributes", ".gitmodules", ".gitignore":
-		return fmt.Errorf("staged memory contains git control file %q -- rejected", rel)
+		return fmt.Errorf("staged knowledge contains git control file %q -- rejected", rel)
 	}
 	if supervisorOwned[topSegment(rel)] {
-		return fmt.Errorf("staged memory touches supervisor-owned path %q -- rejected", rel)
+		return fmt.Errorf("staged knowledge touches supervisor-owned path %q -- rejected", rel)
 	}
 	if isDir && strings.Count(rel, string(filepath.Separator)) > 8 {
-		return fmt.Errorf("staged memory path %q too deep -- rejected", rel)
+		return fmt.Errorf("staged knowledge path %q too deep -- rejected", rel)
 	}
 	return nil
 }
 
-// Validate rejects a staged memory tree that contains anything but regular
+// Validate rejects a staged knowledge tree that contains anything but regular
 // files under sane limits. A rejected tree fails the whole run.
 func Validate(stagingDir string) error {
 	entries := 0
@@ -438,21 +438,21 @@ func Validate(stagingDir string) error {
 			return nil
 		}
 		if !d.Type().IsRegular() {
-			return fmt.Errorf("staged memory contains non-regular file %q -- rejected", rel)
+			return fmt.Errorf("staged knowledge contains non-regular file %q -- rejected", rel)
 		}
 		entries++
 		if entries > maxEntries {
-			return fmt.Errorf("staged memory exceeds %d files -- rejected", maxEntries)
+			return fmt.Errorf("staged knowledge exceeds %d files -- rejected", maxEntries)
 		}
 		if info, err := d.Info(); err == nil {
 			if info.Size() > maxFile {
-				return fmt.Errorf("staged memory file %q exceeds %d bytes -- rejected", rel, maxFile)
+				return fmt.Errorf("staged knowledge file %q exceeds %d bytes -- rejected", rel, maxFile)
 			}
 			// A hard link is a regular file that aliases another inode --
 			// e.g. a file outside the staging tree, whose content would then
 			// travel into the import.
 			if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
-				return fmt.Errorf("staged memory file %q is a hard link -- rejected", rel)
+				return fmt.Errorf("staged knowledge file %q is a hard link -- rejected", rel)
 			}
 		}
 		return nil
@@ -469,7 +469,7 @@ func Validate(stagingDir string) error {
 // competitor for human resolution. A deletion applies only where the
 // worktree still matches the base -- erasing lines another run just wrote is
 // worse than keeping a file its deleter no longer wants. Caller commits.
-func (m *Memory) Import(stagingDir, baseDir string) (conflicted []Conflict, err error) {
+func (m *Knowledge) Import(stagingDir, baseDir string) (conflicted []Conflict, err error) {
 	if err := Validate(stagingDir); err != nil {
 		return nil, err
 	}
@@ -490,7 +490,7 @@ func (m *Memory) Import(stagingDir, baseDir string) (conflicted []Conflict, err 
 			}
 			path := fields[len(fields)-1]
 			if !supervisorOwned[topSegment(path)] {
-				return nil, fmt.Errorf("memory worktree has uncommitted changes (%s) -- refusing to import over them; commit or discard (git -C %s ...) and re-run", path, Dir)
+				return nil, fmt.Errorf("knowledge worktree has uncommitted changes (%s) -- refusing to import over them; commit or discard (git -C %s ...) and re-run", path, Dir)
 			}
 		}
 	}
@@ -531,17 +531,17 @@ func (m *Memory) Import(stagingDir, baseDir string) (conflicted []Conflict, err 
 			return os.Remove(path)
 		}
 		if cerr == nil {
-			slog.Debug("memory: kept a file the run deleted -- the worktree moved since its snapshot", "path", rel)
+			slog.Debug("knowledge: kept a file the run deleted -- the worktree moved since its snapshot", "path", rel)
 		}
 		return nil
 	})
 }
 
-// RestoreFile puts the base-snapshot copy of one memory file back into the
+// RestoreFile puts the base-snapshot copy of one knowledge file back into the
 // staged tree, undoing whatever the run staged there -- restored to base,
 // not to the live worktree, so the import's unchanged-versus-base rule then
 // skips the file entirely. The enforcement half of `teamwork: off` (design
-// decision "Memory records events, tasks, and context"): the instruction
+// decision "Knowledge records events, tasks, and context"): the instruction
 // tells the routine not to write the file, this makes sure. Reports whether
 // a staged change was discarded.
 func RestoreFile(stagingDir, baseDir, name string) (bool, error) {
@@ -582,8 +582,8 @@ func RestoreFile(stagingDir, baseDir, name string) (bool, error) {
 	return true, root.WriteFile(name, want, 0o644)
 }
 
-// Commit records the current worktree state on the memory branch.
-func (m *Memory) Commit(message string) (string, error) {
+// Commit records the current worktree state on the knowledge branch.
+func (m *Knowledge) Commit(message string) (string, error) {
 	wt := m.Worktree()
 	if _, err := git(wt, "add", "-A"); err != nil {
 		return "", err
@@ -602,7 +602,7 @@ func (m *Memory) Commit(message string) (string, error) {
 // run's settlement -- whatever the worktree carries is the intent -- and wrong
 // for maintenance: a commit written for one purpose must not carry work that
 // merely happened to be dirty when it fired. Missing paths are skipped.
-func (m *Memory) commitPaths(message string, paths ...string) (string, error) {
+func (m *Knowledge) commitPaths(message string, paths ...string) (string, error) {
 	wt := m.Worktree()
 	var present []string
 	for _, p := range paths {
@@ -635,19 +635,19 @@ func flatten(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// scrubbed prepares supervisor-written text for a memory file: every secret
+// scrubbed prepares supervisor-written text for a knowledge file: every secret
 // in the process scrub registry redacted, then flattened to one line.
 // Redaction lives at this seam rather than at the call sites that remember
 // to ask for it, because what lands here is committed and pushed -- a git
 // error quoting key material would be a durable, published record, not a
 // log line.
-func (m *Memory) scrubbed(line string) string {
+func (m *Knowledge) scrubbed(line string) string {
 	return flatten(scrub.Redacted(line))
 }
 
 // AppendEvent records a supervisor-written event: the mechanism for outcomes
 // the model never got to narrate (timeouts, crashes, sync trouble).
-func (m *Memory) AppendEvent(line string) error {
+func (m *Knowledge) AppendEvent(line string) error {
 	p := filepath.Join(m.Worktree(), "events.md")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -663,7 +663,7 @@ func (m *Memory) AppendEvent(line string) error {
 // it to a person. The entry lands at the end of the real "## Human-owned"
 // section (fenced format examples don't count), created if missing. Idempotent
 // by task id, so restart-prone callers can use deterministic ids.
-func (m *Memory) AppendHumanTask(taskID, description string) error {
+func (m *Knowledge) AppendHumanTask(taskID, description string) error {
 	p := filepath.Join(m.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
 	if err != nil && !os.IsNotExist(err) {
@@ -722,7 +722,7 @@ func (m *Memory) AppendHumanTask(taskID, description string) error {
 // condition they reported has recovered. Prefix matching (not an exact id)
 // makes recovery restart-proof: the supervisor need not remember which day's
 // blocker it raised. Reports whether anything changed.
-func (m *Memory) ResolveHumanTasks(idPrefix, resolution string) (bool, error) {
+func (m *Knowledge) ResolveHumanTasks(idPrefix, resolution string) (bool, error) {
 	p := filepath.Join(m.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
@@ -756,7 +756,7 @@ func (m *Memory) ResolveHumanTasks(idPrefix, resolution string) (bool, error) {
 // AppendRunRecord appends one JSONL run record to the supervisor-owned log.
 // Redacted at this seam like every append, but never flattened: the record
 // is already one line, and whitespace inside its JSON strings is content.
-func (m *Memory) AppendRunRecord(record string) error {
+func (m *Knowledge) AppendRunRecord(record string) error {
 	p := filepath.Join(m.Worktree(), "runs.jsonl")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -773,7 +773,7 @@ func (m *Memory) AppendRunRecord(record string) error {
 // comes next, without this function having to learn about it). Filenames are
 // compared, never globbed, so name cannot alter the matching. Returns the
 // removed paths relative to the repository root; the caller commits.
-func (m *Memory) RemoveRoutineState(name string) ([]string, error) {
+func (m *Knowledge) RemoveRoutineState(name string) ([]string, error) {
 	stateDir := m.StateDir()
 	entries, err := os.ReadDir(stateDir)
 	if os.IsNotExist(err) {
@@ -807,24 +807,24 @@ func (m *Memory) RemoveRoutineState(name string) ([]string, error) {
 	return removed, nil
 }
 
-// WorktreeStatus reports the memory worktree's state for `openroutines
-// status` -- root `git status` never shows memory churn, so this must.
+// WorktreeStatus reports the knowledge worktree's state for `openroutines
+// status` -- root `git status` never shows knowledge churn, so this must.
 type WorktreeStatus struct {
-	Materialized bool
-	RemoteMemory bool   // origin/memory ref exists locally: the agent has history even if this checkout hasn't adopted it
-	Uncommitted  int    // files with uncommitted changes (human curation in progress)
-	LastCommit   string // subject of the latest memory commit
-	Unpushed     int    // commits origin hasn't seen yet
-	Behind       int    // commits on origin this worktree has not taken
+	Materialized    bool
+	RemoteKnowledge bool   // origin/knowledge ref exists locally: the agent has history even if this checkout hasn't adopted it
+	Uncommitted     int    // files with uncommitted changes (human curation in progress)
+	LastCommit      string // subject of the latest knowledge commit
+	Unpushed        int    // commits origin hasn't seen yet
+	Behind          int    // commits on origin this worktree has not taken
 }
 
-// Status inspects the memory worktree; only RemoteMemory is set when not
+// Status inspects the knowledge worktree; only RemoteKnowledge is set when not
 // yet materialized -- it distinguishes a fresh clone of a running agent
 // (adopt with sync) from an agent that has never run.
-func (m *Memory) Status() WorktreeStatus {
+func (m *Knowledge) Status() WorktreeStatus {
 	var st WorktreeStatus
 	if _, err := git(m.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch); err == nil {
-		st.RemoteMemory = true
+		st.RemoteKnowledge = true
 	}
 	wt := m.Worktree()
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err != nil {
@@ -841,7 +841,7 @@ func (m *Memory) Status() WorktreeStatus {
 		_, _ = fmt.Sscanf(out, "%d", &st.Unpushed)
 	}
 	// Behind is as of the last fetch: the remote-tracking ref is local, so
-	// this stays offline. A deployed agent writes memory that only reaches
+	// this stays offline. A deployed agent writes knowledge that only reaches
 	// this checkout when someone pulls, and every command reading the
 	// worktree -- status, usage, ledgers -- silently reports the old state
 	// until then.
@@ -870,7 +870,7 @@ type Conflict struct {
 // beside the worktree and is promoted only once the whole staged tree has
 // passed. A rejection still fails the run, and Settle commits the failure
 // record -- so a half-copied worktree would commit part of a rejected run's
-// memory, which is the atomicity staging exists to provide.
+// knowledge, which is the atomicity staging exists to provide.
 func copyStaged(stagingDir, baseDir, wt string) (conflicted []Conflict, err error) {
 	root, err := os.OpenRoot(stagingDir)
 	if err != nil {
@@ -893,7 +893,7 @@ func copyStaged(stagingDir, baseDir, wt string) (conflicted []Conflict, err erro
 		}
 		rel = filepath.FromSlash(rel)
 		if rel == ConsumeMarker {
-			return nil // consume receipt for the runtime, never memory content
+			return nil // consume receipt for the runtime, never knowledge content
 		}
 		if err := stagedPathPolicy(rel, d.IsDir()); err != nil {
 			return err
@@ -903,7 +903,7 @@ func copyStaged(stagingDir, baseDir, wt string) (conflicted []Conflict, err erro
 			return os.MkdirAll(filepath.Join(scratch, rel), 0o755)
 		}
 		if len(files) >= maxEntries {
-			return fmt.Errorf("staged memory exceeds %d files -- rejected", maxEntries)
+			return fmt.Errorf("staged knowledge exceeds %d files -- rejected", maxEntries)
 		}
 		files = append(files, rel)
 		return copyStagedFile(root, rel, filepath.Join(scratch, rel))
@@ -921,7 +921,7 @@ func copyStaged(stagingDir, baseDir, wt string) (conflicted []Conflict, err erro
 	// scratch tree first -- the merge can fail (git merge-file refuses
 	// NUL-bearing content), and a failure discovered mid-promotion would
 	// leave a half-imported worktree for the settlement to commit as the
-	// run's memory. The rename-only pass below is what keeps the promise
+	// run's knowledge. The rename-only pass below is what keeps the promise
 	// above: promoted only once the whole staged tree has passed.
 	var promote []string
 	var quarantines []string
@@ -1014,7 +1014,7 @@ func copyStagedFile(root *os.Root, rel, dest string) error {
 		return err
 	}
 	if n > maxFile {
-		return fmt.Errorf("staged memory file %q exceeds %d bytes -- rejected", rel, maxFile)
+		return fmt.Errorf("staged knowledge file %q exceeds %d bytes -- rejected", rel, maxFile)
 	}
 	return nil
 }
@@ -1027,16 +1027,16 @@ func copyStagedFile(root *os.Root, rel, dest string) error {
 func openStaged(root *os.Root, rel string) (*os.File, error) {
 	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, fmt.Errorf("staged memory file %q is not readable inside staging -- rejected: %w", rel, err)
+		return nil, fmt.Errorf("staged knowledge file %q is not readable inside staging -- rejected: %w", rel, err)
 	}
 	info, err := f.Stat()
 	switch {
 	case err != nil:
 	case !info.Mode().IsRegular():
-		err = fmt.Errorf("staged memory file %q is not a regular file -- rejected", rel)
+		err = fmt.Errorf("staged knowledge file %q is not a regular file -- rejected", rel)
 	default:
 		if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
-			err = fmt.Errorf("staged memory file %q is a hard link -- rejected", rel)
+			err = fmt.Errorf("staged knowledge file %q is a hard link -- rejected", rel)
 		}
 	}
 	if err != nil {

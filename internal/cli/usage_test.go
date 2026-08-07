@@ -10,7 +10,7 @@ import (
 // sums per routine, and keeps the most recent model/effort.
 func TestAggregateUsage(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "memory"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "knowledge"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	lines := `{"routine":"a","tokens":{"input":100,"output":10,"reasoning":2,"cache_read":5,"cache_write":1},"cost_reported":0.01,"model":"m1","effort":"high"}
@@ -19,7 +19,7 @@ func TestAggregateUsage(t *testing.T) {
 {"routine":"old","outcome":"completed"}
 not json
 `
-	if err := os.WriteFile(filepath.Join(dir, "memory", "runs.jsonl"), []byte(lines), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "knowledge", "runs.jsonl"), []byte(lines), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	rows, records := aggregateUsage(dir)
@@ -50,16 +50,16 @@ not json
 
 // The case that reads as a silent zero: runs happened, none carried usage.
 // Telling someone to wait for records that already exist sends them looking
-// in the wrong place -- as a stale memory worktree did in practice.
+// in the wrong place -- as a stale knowledge worktree did in practice.
 func TestAggregateUsageCountsRecordsWithoutTokens(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "memory"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "knowledge"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	lines := `{"routine":"a","outcome":"completed","manual":true}
 {"routine":"b","outcome":"completed"}
 `
-	if err := os.WriteFile(filepath.Join(dir, "memory", "runs.jsonl"), []byte(lines), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "knowledge", "runs.jsonl"), []byte(lines), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	rows, records := aggregateUsage(dir)

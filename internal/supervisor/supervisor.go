@@ -1,12 +1,12 @@
 // Package supervisor is the long-running scheduler: the container entrypoint.
 //
-// Every tick it re-reads routine frontmatter, reconciles memory with origin,
+// Every tick it re-reads routine frontmatter, reconciles knowledge with origin,
 // and dispatches due routines into a bounded pool of concurrent runs --
 // implementing the durable two-phase run model: a logical run
 // exists durably (committed, pushed) before it is allowed to act; failed
 // attempts retry under the same run id with backoff; abandonment after a
 // bounded number of attempts records a human-owned task and advances the
-// watermark. Runs execute in parallel; every memory-worktree operation --
+// watermark. Runs execute in parallel; every knowledge-worktree operation --
 // the tick's bookkeeping, each attempt's reservation and staging, each
 // settlement -- takes its turn behind one lock.
 package supervisor
@@ -30,7 +30,7 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
@@ -54,18 +54,18 @@ func Schedulable(r *routine.Routine) bool {
 }
 
 // Supervisor is the tick loop: it re-reads routines, mints and dispatches
-// runs, and syncs memory with origin.
+// runs, and syncs knowledge with origin.
 type Supervisor struct {
 	Dir        string
 	InstanceID string
 
-	mem       *memory.Memory
+	mem       *knowledge.Knowledge
 	noOrigin  bool
 	loc       *time.Location
 	retention time.Duration
 	lastTrim  time.Time
 
-	// memMu serializes every memory-worktree critical section: the tick's
+	// memMu serializes every knowledge-worktree critical section: the tick's
 	// bookkeeping (sync, trim, scheduling state, intent commit), each
 	// attempt's reserve-and-stage, and each attempt's settlement. Runs
 	// execute in parallel; the ledger they check out from and settle into
@@ -73,7 +73,7 @@ type Supervisor struct {
 	// `routines run` beside this process serializes through it too instead
 	// of becoming a second uncoordinated writer. Everything below through
 	// pollFailed is touched only under memMu or only by the tick goroutine.
-	memMu *runner.MemoryLock
+	memMu *runner.KnowledgeLock
 
 	// leaseMu guards the lease heartbeat state: in-flight runs heartbeat
 	// concurrently with each other and with the tick. Lease git operations
@@ -101,7 +101,7 @@ type Supervisor struct {
 	syncWarned    bool // blocker already raised for the current sync problem
 	unreachWarned bool
 	originWarned  bool // origin unreachable: blocker already raised for this outage
-	// blockedTip is the memory tip this instance stranded on the blocked ref
+	// blockedTip is the knowledge tip this instance stranded on the blocked ref
 	// while sync was refused: what tells a later successful push that the
 	// stranded copy is redundant, and what keeps a repeat push idle. Only what
 	// this instance stranded: a ref left by a previous container is the only
@@ -111,7 +111,7 @@ type Supervisor struct {
 	loadFailed   map[string]string // routine name -> the load failure already recorded
 
 	// Trigger bookkeeping that is deliberately not durable: last-poll times
-	// (persisting them would dirty the memory worktree every tick) and
+	// (persisting them would dirty the knowledge worktree every tick) and
 	// poll-error dedup (log on transition, not per tick).
 	lastPolled map[string]time.Time
 	pollFailed map[string]bool
@@ -130,12 +130,12 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	retention, err := memory.ParseRetention(agent.Retention())
+	retention, err := knowledge.ParseRetention(agent.Retention())
 	if err != nil {
 		return nil, err
 	}
-	mem := memory.At(dir)
-	memMu, err := runner.OpenMemoryLock(dir)
+	mem := knowledge.At(dir)
+	memMu, err := runner.OpenKnowledgeLock(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -145,10 +145,10 @@ func New(dir string) (*Supervisor, error) {
 	}
 	return &Supervisor{
 		Dir:            dir,
-		InstanceID:     memory.InstanceID(),
+		InstanceID:     knowledge.InstanceID(),
 		mem:            mem,
 		memMu:          memMu,
-		leaseTTL:       memory.LeaseTTL,
+		leaseTTL:       knowledge.LeaseTTL,
 		loc:            loc,
 		retention:      retention,
 		noOrigin:       !mem.HasOrigin(),
@@ -175,13 +175,13 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		slog.Warn("could not mark the supervisor non-dumpable", "error", err)
 	}
 	s.warnKeyDelivery()
-	if configured, err := memory.ConfigureDeployKey(); err != nil {
+	if configured, err := knowledge.ConfigureDeployKey(); err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	} else if configured {
-		if memory.ConfigureOriginRewrite(s.Dir) {
+		if knowledge.ConfigureOriginRewrite(s.Dir) {
 			slog.Info("routing the https origin through the deploy key")
 		}
-		slog.Info("deploy key configured for memory sync")
+		slog.Info("deploy key configured for knowledge sync")
 	}
 	// Under memMu like every other worktree operation: first-boot
 	// materialization racing a manual run's own locked Ensure would have
@@ -194,7 +194,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return err
 	}
 	if s.noOrigin {
-		slog.Warn("no git origin -- memory is not durable and the single-instance lease is disabled (local mode)")
+		slog.Warn("no git origin -- knowledge is not durable and the single-instance lease is disabled (local mode)")
 	} else {
 		if err := s.acquireLease(ctx); err != nil {
 			return err
@@ -233,7 +233,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 
 // Tick performs one scheduling pass at the given time. Exported so tests can
 // drive the supervisor with synthetic clocks. The pass has two halves: plan
-// holds the memory lock and reconciles state; dispatch launches the due
+// holds the knowledge lock and reconciles state; dispatch launches the due
 // attempts into the bounded pool and returns without waiting for them.
 func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	now = now.In(s.loc)
@@ -319,16 +319,16 @@ type dispatch struct {
 	st *schedule.State
 }
 
-// plan is the tick's bookkeeping critical section: reconcile memory with
+// plan is the tick's bookkeeping critical section: reconcile knowledge with
 // origin, trim, reconcile every routine's scheduling state, and commit the
-// intent -- all under the memory lock, serialized against in-flight
+// intent -- all under the knowledge lock, serialized against in-flight
 // reservations and settlements. Returns the runnable dispatches, or ok=false
 // when nothing may launch (lost lease, blocked sync, failed intent commit).
 func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 	s.memMu.Lock()
 	defer s.memMu.Unlock()
 
-	// Reconcile memory with origin, defensively; renew the single-instance
+	// Reconcile knowledge with origin, defensively; renew the single-instance
 	// lease and pause dispatch entirely if we no longer hold it.
 	if !s.noOrigin {
 		s.syncOnce()
@@ -358,7 +358,7 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 				slog.Warn("retention trim commit failed", "error", err)
 			}
 			s.pushBestEffort()
-			slog.Info("memory: trimmed record streams to the retention window", "retention", s.retention)
+			slog.Info("knowledge: trimmed record streams to the retention window", "retention", s.retention)
 		}
 	}
 
@@ -516,7 +516,7 @@ func (s *Supervisor) setRunning(name string, v bool) {
 	}
 }
 
-// commitIntent makes the memory worktree durable before anything acts on it,
+// commitIntent makes the knowledge worktree durable before anything acts on it,
 // and reports whether it got there. Persist-before-act rests on the data, not
 // on control flow: a tick that wrote state and then failed to commit it leaves
 // the record on disk and nowhere else, and no later tick would mint anything
@@ -568,14 +568,14 @@ func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, ses
 	taskID := "task-" + p.RunID
 	if err := s.mem.AppendHumanTask(taskID,
 		fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, detail, date)); err != nil {
-		r.Log().Warn("could not record the abandonment task in memory -- this log line is the only copy",
+		r.Log().Warn("could not record the abandonment task in knowledge -- this log line is the only copy",
 			"run_id", p.RunID, "task_id", taskID, "error", err)
 	}
 	st.Watermark = p.CoveredThrough
 	st.Pending = nil
 	if cooldown := st.RecordAbandonment(now); cooldown > 0 {
 		if err := s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown)); err != nil {
-			r.Log().Warn("could not record the circuit breaker event in memory -- this log line is the only copy",
+			r.Log().Warn("could not record the circuit breaker event in knowledge -- this log line is the only copy",
 				"run_id", p.RunID, "error", err)
 		}
 		r.Log().Error("circuit breaker tripped", "cooldown", cooldown, "run_id", p.RunID)
@@ -620,7 +620,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 	s.memMu.Unlock()
 
-	// Stage takes the memory lock itself, only around its worktree reads:
+	// Stage takes the knowledge lock itself, only around its worktree reads:
 	// credential resolution can spend seconds on the network, and holding
 	// memMu through it would park every other attempt's settlement behind
 	// this one's HTTPS round trips.
@@ -680,7 +680,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		defer func() { cleanupErr = errors.Join(cleanupErr, staging.Cleanup()) }()
 	}
 
-	// Settlement is the other memory critical section: import, run record,
+	// Settlement is the other knowledge critical section: import, run record,
 	// scheduling consequences, push -- serialized against other attempts'
 	// reservations and settlements and the tick's own bookkeeping.
 	s.memMu.Lock()
@@ -724,18 +724,18 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		log.Info("discarded staged events.md change (teamwork: off)")
 	}
 	for i, conflict := range settlement.Conflicted {
-		taskID := fmt.Sprintf("task-%s-memory-conflict-%d", p.RunID, i+1)
+		taskID := fmt.Sprintf("task-%s-knowledge-conflict-%d", p.RunID, i+1)
 		if err := s.mem.AppendHumanTask(taskID,
-			fmt.Sprintf("Resolve concurrent memory edit from routine %s run %s: canonical %s was left unchanged; competing version saved at %s", r.Name, p.RunID, conflict.Path, conflict.Quarantine)); err != nil {
-			log.Warn("could not record the memory conflict task in memory -- this log line is the only copy",
+			fmt.Sprintf("Resolve concurrent knowledge edit from routine %s run %s: canonical %s was left unchanged; competing version saved at %s", r.Name, p.RunID, conflict.Path, conflict.Quarantine)); err != nil {
+			log.Warn("could not record the knowledge conflict task in knowledge -- this log line is the only copy",
 				"path", conflict.Path, "task_id", taskID, "error", err)
 		}
-		log.Warn("concurrent memory edit quarantined -- canonical memory left unchanged",
+		log.Warn("concurrent knowledge edit quarantined -- canonical knowledge left unchanged",
 			"path", conflict.Path, "quarantine", conflict.Quarantine)
 	}
 	conflictCommitOK := true
 	if len(settlement.Conflicted) > 0 {
-		if _, err := s.mem.Commit(fmt.Sprintf("Record %s memory conflicts", p.RunID)); err != nil {
+		if _, err := s.mem.Commit(fmt.Sprintf("Record %s knowledge conflicts", p.RunID)); err != nil {
 			conflictCommitOK = false
 			log.Error("conflict task commit failed", "error", err)
 		}
@@ -776,11 +776,11 @@ func (s *Supervisor) syncOnce() {
 	switch {
 	case rep.Rewritten:
 		s.syncBlocked = true
-		s.blockOnce("sync", "memory branch history rewritten on origin -- sync stopped, running on local state", errors.New(rep.Detail), &s.syncWarned)
+		s.blockOnce("sync", "knowledge branch history rewritten on origin -- sync stopped, running on local state", errors.New(rep.Detail), &s.syncWarned)
 		s.strandBlocked()
 	case rep.Conflict:
 		s.syncBlocked = true
-		s.blockOnce("sync", "memory sync conflict -- sync stopped, running on local state", errors.New(rep.Detail), &s.syncWarned)
+		s.blockOnce("sync", "knowledge sync conflict -- sync stopped, running on local state", errors.New(rep.Detail), &s.syncWarned)
 		s.strandBlocked()
 	case rep.Unreachable:
 		// Recorded locally, published when origin returns. The tick gives up
@@ -788,26 +788,26 @@ func (s *Supervisor) syncOnce() {
 		// origin -- so nothing downstream will record it, and an outage whose
 		// only trace is a log line in a container that gets replaced is no
 		// trace at all.
-		s.blockOnce("origin", "origin unreachable -- memory is not durable and no new runs start until it returns", errors.New(rep.Detail), &s.originWarned)
+		s.blockOnce("origin", "origin unreachable -- knowledge is not durable and no new runs start until it returns", errors.New(rep.Detail), &s.originWarned)
 	case rep.Detail != "":
 		// A flagless report with a Detail means Sync could not even read the
-		// local worktree -- it never proved memory is healthy, so an open
+		// local worktree -- it never proved knowledge is healthy, so an open
 		// blocker must not be resolved on the strength of it.
-		slog.Warn("memory sync did not run", "detail", rep.Detail)
+		slog.Warn("knowledge sync did not run", "detail", rep.Detail)
 	default:
 		s.syncBlocked = false
-		s.recover("sync", "memory sync with origin recovered", &s.syncWarned)
-		s.recover("origin", "origin reachable again -- memory sync resumed", &s.originWarned)
+		s.recover("sync", "knowledge sync with origin recovered", &s.syncWarned)
+		s.recover("origin", "origin reachable again -- knowledge sync resumed", &s.originWarned)
 		if rep.Adopted {
-			slog.Info("memory: adopted remote commits")
+			slog.Info("knowledge: adopted remote commits")
 		}
 		if rep.RemoteMissing {
-			slog.Debug("memory: origin has no memory branch yet -- the next push creates it")
+			slog.Debug("knowledge: origin has no knowledge branch yet -- the next push creates it")
 		}
 	}
 }
 
-// reportLoadFailures records in memory that a routine has stopped loading --
+// reportLoadFailures records in knowledge that a routine has stopped loading --
 // and, later, that it loads again. The tick schedules around a broken file
 // (design decision "A broken routine is one broken routine"), so without this
 // the only trace of a routine that quietly stopped running is a log line
@@ -879,7 +879,7 @@ func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 	}
 	*warned = true
 	// err can wrap a raw git error carrying a tokened origin URL; the log
-	// writer and the memory-append seam both redact from the scrub registry.
+	// writer and the knowledge-append seam both redact from the scrub registry.
 	// BLOCKED and RECOVERED stay literal, greppable markers: the level says
 	// how bad it is, but only these say that dispatch itself is held.
 	slog.Error("BLOCKED", "kind", kind, "reason", reason, "error", err)
@@ -890,13 +890,13 @@ func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 	date := time.Now().UTC().Format("2006-01-02")
 	taskID := "task-" + kind + "-" + time.Now().UTC().Format("20060102")
 	if aerr := s.mem.AppendHumanTask(taskID, fmt.Sprintf("%s (source: supervisor; added %s)", msg, date)); aerr != nil {
-		slog.Warn("could not record the supervisor blocker in memory -- this log line is the only copy",
+		slog.Warn("could not record the supervisor blocker in knowledge -- this log line is the only copy",
 			"kind", kind, "task_id", taskID, "error", aerr)
 		*warned = false // retry on the next tick
 		return
 	}
 	if _, cerr := s.mem.Commit("Record supervisor blocker"); cerr != nil {
-		slog.Warn("could not record the supervisor blocker in memory -- this log line is the only copy",
+		slog.Warn("could not record the supervisor blocker in knowledge -- this log line is the only copy",
 			"kind", kind, "task_id", taskID, "error", cerr)
 		*warned = false // retry on the next tick
 		return
@@ -926,8 +926,8 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	s.pushBestEffort()
 }
 
-// pushBestEffort publishes what the memory worktree carries. While sync is
-// blocked the memory branch is the thing being refused, so the record goes to
+// pushBestEffort publishes what the knowledge worktree carries. While sync is
+// blocked the knowledge branch is the thing being refused, so the record goes to
 // the supervisor-owned blocked ref instead -- otherwise the blocker that
 // reports a broken datastore would live only on a container that is about to
 // be replaced. Once the branch carries the same state, the stranded copy is
@@ -941,7 +941,7 @@ func (s *Supervisor) pushBestEffort() {
 		return
 	}
 	if err := s.mem.Push(); err != nil {
-		slog.Warn("memory push failed (will retry)", "error", err)
+		slog.Warn("knowledge push failed (will retry)", "error", err)
 		return
 	}
 	if s.blockedTip != "" {
@@ -950,26 +950,26 @@ func (s *Supervisor) pushBestEffort() {
 	}
 }
 
-// strandBlocked publishes memory to the blocked ref, and is called on every
+// strandBlocked publishes knowledge to the blocked ref, and is called on every
 // blocked tick rather than only when the blocker is first raised: the record
 // is the whole point of stranding it, so an attempt that fails has to be
 // retried by the next tick instead of dying with the log line that announced
-// it. Keyed on the memory tip, so a tick that changed nothing pushes nothing.
+// it. Keyed on the knowledge tip, so a tick that changed nothing pushes nothing.
 func (s *Supervisor) strandBlocked() {
 	tip, err := s.mem.Head()
 	if err != nil {
-		slog.Error("could not read the memory tip -- blocked memory not stranded to origin", "error", err)
+		slog.Error("could not read the knowledge tip -- blocked knowledge not stranded to origin", "error", err)
 		return
 	}
 	if tip == s.blockedTip {
 		return
 	}
 	if err := s.mem.PublishBlocked(); err != nil {
-		slog.Error("publishing blocked memory to origin failed (will retry)", "error", err)
+		slog.Error("publishing blocked knowledge to origin failed (will retry)", "error", err)
 		return
 	}
 	s.blockedTip = tip
-	slog.Error("memory: stranded until sync is repaired", "ref", memory.BlockedRef)
+	slog.Error("knowledge: stranded until sync is repaired", "ref", knowledge.BlockedRef)
 }
 
 // warnKeyDelivery says out loud, once at boot, that the master key value is
@@ -1082,7 +1082,7 @@ func (s *Supervisor) verifySandbox() error {
 func (s *Supervisor) shutdown() {
 	s.memMu.Lock()
 	defer s.memMu.Unlock()
-	slog.Info("shutting down: final memory sync")
+	slog.Info("shutting down: final knowledge sync")
 	if _, err := s.mem.Commit("Shutdown"); err != nil {
 		slog.Error("shutdown commit failed", "error", err)
 	}
@@ -1091,7 +1091,7 @@ func (s *Supervisor) shutdown() {
 
 // acquireLease enforces "exactly one instance": a fresh foreign lease means
 // another supervisor is alive (rolling deploy overlap, accidental replica),
-// so this one waits rather than corrupting memory. The write is atomic
+// so this one waits rather than corrupting knowledge. The write is atomic
 // (compare-and-swap on the lease ref): two instances racing cannot both win.
 func (s *Supervisor) acquireLease(ctx context.Context) error {
 	for {
@@ -1185,7 +1185,7 @@ func (s *Supervisor) renewLeaseLocked() bool {
 // executes, from a goroutine that runs only for as long as the attempt does:
 // the returned stop joins it before the attempt settles. Lease reads and
 // writes touch only the lease ref and the object store, never the worktree,
-// so heartbeats run without the memory lock and concurrent attempts'
+// so heartbeats run without the knowledge lock and concurrent attempts'
 // heartbeats coexist -- the freshness gate in tryRenewLease means whoever
 // ticks first renews for everyone. A renewal that fails inside the TTL of
 // the last accepted heartbeat is tolerated -- origin blips pass, and until
@@ -1247,7 +1247,7 @@ func (s *Supervisor) holdLease(sha string, at time.Time) {
 
 // leaseLost pauses dispatch and says why the first time. A rolling deploy's
 // overlap persists for many ticks; one line each would bury the transition
-// that matters. Unlike blockOnce this records nothing in memory -- an
+// that matters. Unlike blockOnce this records nothing in knowledge -- an
 // instance that cannot prove it is the writer must not write.
 func (s *Supervisor) leaseLost(msg string) bool {
 	if !s.leaseWarned {

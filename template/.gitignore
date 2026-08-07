@@ -1,6 +1,6 @@
-# The agent's memory lives on its own git branch (a worktree at memory/),
+# The agent's knowledge lives on its own git branch (a worktree at knowledge/),
 # never in main's history.
-memory/
+knowledge/
 
 # The master key unlocks .openroutines/credentials.yml.enc. Local only; production reads
 # it from a mounted file (OPENROUTINES_MASTER_KEY_FILE) or env var.

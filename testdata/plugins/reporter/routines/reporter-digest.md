@@ -8,4 +8,4 @@ credentials: [reporter_token]
 mcp: [reporter_feed]
 ---
 
-Smoke fixture. Consume the memory change feed and report it to the fake destination. This routine is never meant to run.
+Smoke fixture. Consume the knowledge change feed and report it to the fake destination. This routine is never meant to run.

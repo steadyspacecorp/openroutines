@@ -69,7 +69,7 @@ func writeTriggerRoutine(t *testing.T, dir, url, extra string) {
 
 func runCount(t *testing.T, dir string) int {
 	t.Helper()
-	return strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_")
+	return strings.Count(readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md")), "ran run_")
 }
 
 func TestTriggerBaselineThenFiresOnChange(t *testing.T) {

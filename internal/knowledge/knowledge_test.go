@@ -1,4 +1,4 @@
-package memory
+package knowledge
 
 import (
 	"bytes"
@@ -133,7 +133,7 @@ func TestStagedCopyRefusesOversizedFile(t *testing.T) {
 
 // Rejecting halfway through must leave the worktree as it was found. Settle
 // commits the failure record, so a half-copied tree would be committed as the
-// failed run's memory -- exactly the atomicity staging exists to provide.
+// failed run's knowledge -- exactly the atomicity staging exists to provide.
 func TestStagedCopyRejectionLeavesTheWorktreeUntouched(t *testing.T) {
 	staging, wt := t.TempDir(), t.TempDir()
 	os.WriteFile(filepath.Join(wt, "events.md"), []byte("committed\n"), 0o644)
@@ -318,7 +318,7 @@ func TestRemoveRoutineStateCoversAllSubtrees(t *testing.T) {
 	}
 }
 
-// A second clone (a new container generation) must adopt the existing memory
+// A second clone (a new container generation) must adopt the existing knowledge
 // branch from origin instead of minting a fresh root.
 func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	base := t.TempDir()
@@ -335,7 +335,7 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	bare := filepath.Join(base, "origin.git")
 	run(base, "git", "init", "-q", "-b", "main", "--bare", bare)
 
-	// Generation 1: create memory, write a fact, push.
+	// Generation 1: create knowledge, write a fact, push.
 	a := filepath.Join(base, "a")
 	run(base, "git", "clone", "-q", bare, a)
 	os.WriteFile(filepath.Join(a, "x.txt"), []byte("x"), 0o644)
@@ -345,7 +345,7 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	if err := At(a).Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(a, "memory", "events.md"), []byte("generation one fact\n"), 0o644)
+	os.WriteFile(filepath.Join(a, "knowledge", "events.md"), []byte("generation one fact\n"), 0o644)
 	if _, err := At(a).Commit("Fact from generation one"); err != nil {
 		t.Fatal(err)
 	}
@@ -353,20 +353,20 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Generation 2: fresh clone (no local memory branch), must adopt.
+	// Generation 2: fresh clone (no local knowledge branch), must adopt.
 	b := filepath.Join(base, "b")
 	run(base, "git", "clone", "-q", bare, b)
 	if err := At(b).Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	log := run(filepath.Join(b, "memory"), "git", "log", "--oneline")
+	log := run(filepath.Join(b, "knowledge"), "git", "log", "--oneline")
 	if !strings.Contains(log, "Fact from generation one") {
 		t.Fatalf("generation two did not adopt origin history: %q", log)
 	}
-	if got := strings.Count(log, "Memory branch root"); got != 1 {
+	if got := strings.Count(log, "Knowledge branch root"); got != 1 {
 		t.Fatalf("expected exactly 1 root commit, got %d: %q", got, log)
 	}
-	events, _ := os.ReadFile(filepath.Join(b, "memory", "events.md"))
+	events, _ := os.ReadFile(filepath.Join(b, "knowledge", "events.md"))
 	if !strings.Contains(string(events), "generation one fact") {
 		t.Fatalf("adopted events missing: %q", events)
 	}
@@ -390,8 +390,8 @@ func TestEnsureWarnsWhenOriginUnreachable(t *testing.T) {
 	if !strings.Contains(out.String(), "could not reach origin") {
 		t.Fatalf("expected a could-not-reach-origin warning, got %q", out.String())
 	}
-	if _, err := os.Stat(filepath.Join(dir, "memory", ".git")); err != nil {
-		t.Fatalf("memory worktree not created despite the unreachable origin: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "knowledge", ".git")); err != nil {
+		t.Fatalf("knowledge worktree not created despite the unreachable origin: %v", err)
 	}
 }
 

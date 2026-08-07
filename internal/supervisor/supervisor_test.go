@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
-	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
@@ -82,8 +82,8 @@ func TestVerifyAttemptGroupsChecksEveryRunSlot(t *testing.T) {
 
 // fakeOpencode is a stand-in for the real binary: it reads fake-mode from
 // its own directory (the workspace is allow-list built and carries no test
-// scaffolding) to decide whether to succeed (writing memory) or fail. The
-// probe mode clones the memory branch from origin at the first spawn --
+// scaffolding) to decide whether to succeed (writing knowledge) or fail. The
+// probe mode clones the knowledge branch from origin at the first spawn --
 // exactly what a replacement container would materialize if that attempt
 // killed the supervisor. Only the first: the snapshot has to be the moment
 // one attempt started, not the moment the last one did.
@@ -107,40 +107,40 @@ printf '{"role":"assistant","modelID":"fake","finish":"stop","tokens":{"input":1
 case "$mode" in
   fail) echo "boom" >&2; exit 1 ;;
   stalled) # The agent loop died on a rejected tool call: the session never
-     # finished its turn, no memory was written, and opencode still exits 0.
+     # finished its turn, no knowledge was written, and opencode still exits 0.
      printf '{"role":"assistant","modelID":"fake","finish":"tool-calls","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"cost":0.01}' \
        > "$msg"
      echo "stalled" ;;
   slow) echo "$OPENROUTINES_RUN_ID" >> "$(dirname "$0")/started"
      sleep 3
-     mkdir -p memory/ledgers
-     echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
+     mkdir -p knowledge/ledgers
+     echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> knowledge/ledgers/fake.md
      echo "slept" ;;
-  blocked) # A run that only ends when something kills it. Staged memory is
-     # written up front, so a test asserting that a killed run's memory was
+  blocked) # A run that only ends when something kills it. Staged knowledge is
+     # written up front, so a test asserting that a killed run's knowledge was
      # not imported is testing an import that had something to import. The
      # sleep outlives the routine's timeout: a kill that never arrives ends
      # the attempt as a timeout, which settles differently from a cancel,
      # rather than as a run that completed on its own.
-     mkdir -p memory/ledgers
-     echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
+     mkdir -p knowledge/ledgers
+     echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> knowledge/ledgers/fake.md
      echo "$OPENROUTINES_RUN_ID" >> "$d/started"
      sleep 60 ;;
   detach) sleep 60 </dev/null >/dev/null 2>&1 &
      echo $! > "$d/detached.pid"
      echo "detached" ;;
-  consume) cp changes.md memory/changes-copy.md
+  consume) cp changes.md knowledge/changes-copy.md
      : > CONSUMED
      echo "consumed" ;;
-  probe) [ -d "$d/replacement" ] || git clone -q -b memory "$(cat "$d/origin")" "$d/replacement" || true
+  probe) [ -d "$d/replacement" ] || git clone -q -b knowledge "$(cat "$d/origin")" "$d/replacement" || true
      echo "probed" ;;
   orphan) # A detached grandchild in its own process group, holding the run's
      # stdout: the group kill cannot reach it and it outlives the attempt.
      if command -v setsid >/dev/null 2>&1; then setsid sleep 120 &
      else (set -m; sleep 120 &) fi
      sleep 120 ;;
-  *) mkdir -p memory/ledgers
-     echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> memory/ledgers/fake.md
+  *) mkdir -p knowledge/ledgers
+     echo "ran $OPENROUTINES_RUN_ID $OPENROUTINES_ATTEMPT_ID" >> knowledge/ledgers/fake.md
      echo "done" ;;
 esac
 `
@@ -192,7 +192,7 @@ func fixtureIn(t *testing.T, mode, tz, name, spec string) string {
 
 func newSupervisor(t *testing.T, dir string) *Supervisor {
 	t.Helper()
-	if err := memory.At(dir).Ensure(); err != nil {
+	if err := knowledge.At(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	s, err := New(dir)
@@ -330,7 +330,7 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 }
 
 // replacementState is the scheduling state a replacement container would read
-// for a routine after materializing memory from origin, as of the moment the
+// for a routine after materializing knowledge from origin, as of the moment the
 // first probe attempt's model process started.
 func replacementState(t *testing.T, name string) *schedule.State {
 	t.Helper()
@@ -355,7 +355,7 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	if st == nil || st.Pending != nil {
 		t.Fatalf("expected registered state with no pending, got %+v", st)
 	}
-	if ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")); ledger != "" {
+	if ledger := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md")); ledger != "" {
 		t.Fatalf("nothing should have run yet, ledger: %q", ledger)
 	}
 
@@ -368,11 +368,11 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	if !st.Watermark.After(t0) {
 		t.Fatalf("watermark should have advanced past %v, got %v", t0, st.Watermark)
 	}
-	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	ledger := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md"))
 	if !strings.Contains(ledger, "ran run_") || !strings.Contains(ledger, "attempt_01") {
 		t.Fatalf("ledger missing run evidence: %q", ledger)
 	}
-	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	records := readFile(t, filepath.Join(dir, "knowledge", "runs.jsonl"))
 	if !strings.Contains(records, `"outcome":"completed"`) {
 		t.Fatalf("run record missing: %q", records)
 	}
@@ -401,7 +401,7 @@ func TestSessionThatEndedMidTurnIsNotCompleted(t *testing.T) {
 	s.tickWait(ctx, t0) // register
 	s.tickWait(ctx, t0.Add(61*time.Second))
 
-	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	records := readFile(t, filepath.Join(dir, "knowledge", "runs.jsonl"))
 	if strings.Contains(records, `"outcome":"completed"`) {
 		t.Fatalf("an exit code alone must not report a run completed: %q", records)
 	}
@@ -418,7 +418,7 @@ func TestSessionThatEndedMidTurnIsNotCompleted(t *testing.T) {
 	if st.Watermark.After(t0) {
 		t.Errorf("the watermark must not advance past unfinished work, got %v", st.Watermark)
 	}
-	if events := readFile(t, filepath.Join(dir, "memory", "events.md")); !strings.Contains(events, "crashed") {
+	if events := readFile(t, filepath.Join(dir, "knowledge", "events.md")); !strings.Contains(events, "crashed") {
 		t.Errorf("the failure should be recorded as an event: %q", events)
 	}
 }
@@ -442,11 +442,11 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 	if st.Pending != nil {
 		t.Fatalf("the healthy routine should have completed, not retried: %+v", st.Pending)
 	}
-	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	ledger := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md"))
 	if !strings.Contains(ledger, "ran run_") {
 		t.Fatalf("the healthy routine should have run: %q", ledger)
 	}
-	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	records := readFile(t, filepath.Join(dir, "knowledge", "runs.jsonl"))
 	if !strings.Contains(records, `"outcome":"completed"`) {
 		t.Fatalf("run record missing: %q", records)
 	}
@@ -454,7 +454,7 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 	// Scheduling around the broken routine must not mean saying nothing about
 	// it: a routine that stopped running is news, and a log line is not where
 	// an unattended agent reports.
-	events := readFile(t, filepath.Join(dir, "memory", "events.md"))
+	events := readFile(t, filepath.Join(dir, "knowledge", "events.md"))
 	if !strings.Contains(events, "routine typo does not load") {
 		t.Errorf("the broken routine should be recorded as an event: %q", events)
 	}
@@ -468,7 +468,7 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "routines", "typo.md"), []byte(
 		"---\nschedule: \"0 9 * * *\"\nactive: false\n---\nFixed.\n"), 0o644)
 	s.tickWait(ctx, t0.Add(122*time.Second))
-	if events := readFile(t, filepath.Join(dir, "memory", "events.md")); !strings.Contains(events, "routine typo loads again") {
+	if events := readFile(t, filepath.Join(dir, "knowledge", "events.md")); !strings.Contains(events, "routine typo loads again") {
 		t.Errorf("the repair should be recorded too: %q", events)
 	}
 }
@@ -489,11 +489,11 @@ func TestAgentOwnedRoutineIsScheduledOverBrokenPluginRoutine(t *testing.T) {
 	if st := loadState(t, s); st == nil {
 		t.Error("the agent-owned routine should be registered")
 	}
-	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
+	tasks := readFile(t, filepath.Join(dir, "knowledge", "tasks.md"))
 	if strings.Contains(tasks, "abandoned") {
 		t.Errorf("no run should have been minted, let alone abandoned:\n%s", tasks)
 	}
-	events := readFile(t, filepath.Join(dir, "memory", "events.md"))
+	events := readFile(t, filepath.Join(dir, "knowledge", "events.md"))
 	if strings.Contains(events, "routine every-minute does not load") {
 		t.Errorf("the shadowed plugin error should not be recorded: %q", events)
 	}
@@ -577,7 +577,7 @@ func TestCatchupCollapsesMissedFirings(t *testing.T) {
 	s.tickWait(ctx, t0) // register
 	// Ten minutes of downtime: ten missed firings must collapse into ONE run.
 	s.tickWait(ctx, t0.Add(10*time.Minute))
-	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	ledger := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md"))
 	if got := strings.Count(ledger, "ran run_"); got != 1 {
 		t.Fatalf("expected exactly 1 collapsed catch-up run, got %d: %q", got, ledger)
 	}
@@ -676,15 +676,15 @@ func TestRetrySameRunIDThenAbandon(t *testing.T) {
 	if !st.Watermark.After(t0) {
 		t.Fatalf("abandonment should advance the watermark")
 	}
-	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
+	tasks := readFile(t, filepath.Join(dir, "knowledge", "tasks.md"))
 	if !strings.Contains(tasks, "task-"+runID) || !strings.Contains(tasks, "abandoned after 5 attempts") {
 		t.Fatalf("tasks missing human-owned abandonment task for %s: %q", runID, tasks)
 	}
-	events := readFile(t, filepath.Join(dir, "memory", "events.md"))
+	events := readFile(t, filepath.Join(dir, "knowledge", "events.md"))
 	if !strings.Contains(events, runID) {
 		t.Fatalf("events missing failure entries for %s: %q", runID, events)
 	}
-	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	records := readFile(t, filepath.Join(dir, "knowledge", "runs.jsonl"))
 	if got := strings.Count(records, runID); got != MaxAttempts {
 		t.Fatalf("expected %d attempt records for %s, got %d", MaxAttempts, runID, got)
 	}
@@ -768,7 +768,7 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	if st = loadState(t, s); st.Pending != nil {
 		t.Fatalf("no runs should start during cool-down: %+v", st.Pending)
 	}
-	events := readFile(t, filepath.Join(dir, "memory", "events.md"))
+	events := readFile(t, filepath.Join(dir, "knowledge", "events.md"))
 	if !strings.Contains(events, "circuit breaker tripped") {
 		t.Fatalf("breaker event missing: %q", events)
 	}
@@ -781,7 +781,7 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	if st = loadState(t, s); st.Pending != nil || st.ConsecutiveAbandons != 0 || st.CoolingDown(after) {
 		t.Fatalf("success should reset the breaker: %+v", st)
 	}
-	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	ledger := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md"))
 	if !strings.Contains(ledger, "ran run_") {
 		t.Fatalf("recovery run should have executed: %q", ledger)
 	}
@@ -800,27 +800,27 @@ func TestConsumerCursorAdvances(t *testing.T) {
 
 	s.tickWait(ctx, t0)                     // register
 	s.tickWait(ctx, t0.Add(61*time.Second)) // run 1: first-run changes, consume
-	changes := readFile(t, filepath.Join(dir, "memory", "changes-copy.md"))
+	changes := readFile(t, filepath.Join(dir, "knowledge", "changes-copy.md"))
 	if !strings.Contains(changes, "first run") || !strings.Contains(changes, "No pending changes") {
 		t.Fatalf("first change set should be empty-at-current-state: %q", changes)
 	}
-	c1, err := memory.At(dir).LoadCursor("every-minute")
+	c1, err := knowledge.At(dir).LoadCursor("every-minute")
 	if err != nil || c1 == nil {
 		t.Fatalf("cursor should exist after consume: %+v, %v", c1, err)
 	}
 
 	s.tickWait(ctx, t0.Add(121*time.Second)) // run 2: feed carries run 1's commit
-	changes = readFile(t, filepath.Join(dir, "memory", "changes-copy.md"))
+	changes = readFile(t, filepath.Join(dir, "knowledge", "changes-copy.md"))
 	if !strings.Contains(changes, "Run every-minute") {
 		t.Fatalf("second change set should carry run 1's completion commit: %q", changes)
 	}
-	c2, err := memory.At(dir).LoadCursor("every-minute")
+	c2, err := knowledge.At(dir).LoadCursor("every-minute")
 	if err != nil || c2 == nil || c2.ConsumedThrough == c1.ConsumedThrough {
 		t.Fatalf("cursor should have advanced: %+v -> %+v, %v", c1, c2, err)
 	}
 }
 
-// A reporting routine's cursor pointing off the memory branch fails at
+// A reporting routine's cursor pointing off the knowledge branch fails at
 // change-set assembly, before the model starts, and fails the same way every
 // time. Spending the whole retry budget on it buys nothing but delay and
 // noise: the run is abandoned on its first attempt, with a task naming the
@@ -834,7 +834,7 @@ func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 
 	s.tickWait(ctx, t0) // register
-	if err := memory.At(dir).SaveCursor("every-minute", memory.Cursor{
+	if err := knowledge.At(dir).SaveCursor("every-minute", knowledge.Cursor{
 		ConsumedThrough: "0123456789abcdef0123456789abcdef01234567",
 		ByRun:           "run_gone",
 	}); err != nil {
@@ -846,7 +846,7 @@ func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
 	if st.Pending != nil {
 		t.Fatalf("an unrepeatable failure should abandon at once, still pending: %+v", st.Pending)
 	}
-	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
+	tasks := readFile(t, filepath.Join(dir, "knowledge", "tasks.md"))
 	if !strings.Contains(tasks, "abandoned after 1 attempts") {
 		t.Fatalf("expected abandonment on the first attempt: %q", tasks)
 	}
@@ -877,23 +877,23 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 
 	s.tickWait(ctx, t0)                     // register
-	s.tickWait(ctx, t0.Add(61*time.Second)) // one run completes, memory pushed
-	ledger := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	s.tickWait(ctx, t0.Add(61*time.Second)) // one run completes, knowledge pushed
+	ledger := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md"))
 	if got := strings.Count(ledger, "ran run_"); got != 1 {
 		t.Fatalf("expected 1 run before the rewrite, got %d: %q", got, ledger)
 	}
 
-	// Rewrite the memory branch on origin out from under the supervisor.
+	// Rewrite the knowledge branch on origin out from under the supervisor.
 	c := filepath.Join(base, "c")
-	run(base, "git", "clone", "-q", "-b", "memory", bare, c)
+	run(base, "git", "clone", "-q", "-b", "knowledge", bare, c)
 	run(c, "git", "-c", "user.name=x", "-c", "user.email=x@x", "commit", "--amend", "-q", "--no-edit", "-m", "rewritten")
-	run(c, "git", "push", "-q", "--force", "origin", "memory")
+	run(c, "git", "push", "-q", "--force", "origin", "knowledge")
 
 	// Every subsequent tick refuses to dispatch.
 	for i := 0; i < 3; i++ {
 		s.tickWait(ctx, t0.Add(time.Duration(2+i)*time.Minute))
 	}
-	ledger = readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md"))
+	ledger = readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md"))
 	if got := strings.Count(ledger, "ran run_"); got != 1 {
 		t.Fatalf("dispatch continued after rewrite: %d runs, %q", got, ledger)
 	}
@@ -903,7 +903,7 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 }
 
 // The datastore is the alerting channel, so the failures that break it are
-// the ones where a blocker has to work hardest: the memory branch is exactly
+// the ones where a blocker has to work hardest: the knowledge branch is exactly
 // what a blocked sync refuses to write, and a task committed only locally dies
 // with the container. The blocker goes to a supervisor-owned ref instead, and
 // moves onto the branch once a human repairs the history.
@@ -915,15 +915,15 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 
 	s.tickWait(ctx, t0)                     // register
-	s.tickWait(ctx, t0.Add(61*time.Second)) // one run completes, memory pushed
+	s.tickWait(ctx, t0.Add(61*time.Second)) // one run completes, knowledge pushed
 
-	// Rewrite the memory branch on origin out from under the supervisor.
-	discarded := gitOut(t, bare, "rev-parse", "refs/heads/memory")
+	// Rewrite the knowledge branch on origin out from under the supervisor.
+	discarded := gitOut(t, bare, "rev-parse", "refs/heads/knowledge")
 	c := filepath.Join(t.TempDir(), "clone")
-	runCmd(t, "", "git", "clone", "-q", "-b", "memory", bare, c)
+	runCmd(t, "", "git", "clone", "-q", "-b", "knowledge", bare, c)
 	runCmd(t, c, "git", "-c", "user.name=x", "-c", "user.email=x@x", "commit", "--amend", "-q", "--no-edit", "-m", "rewritten")
-	runCmd(t, c, "git", "push", "-q", "--force", "origin", "memory")
-	rewritten := gitOut(t, bare, "rev-parse", "refs/heads/memory")
+	runCmd(t, c, "git", "push", "-q", "--force", "origin", "knowledge")
+	rewritten := gitOut(t, bare, "rev-parse", "refs/heads/knowledge")
 
 	s.tickWait(ctx, t0.Add(2*time.Minute))
 	if !s.syncBlocked {
@@ -933,10 +933,10 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	if !strings.Contains(stranded, "history rewritten") {
 		t.Fatalf("the blocker task should have left the container: %q", stranded)
 	}
-	if got := gitOut(t, bare, "rev-parse", "refs/heads/memory"); got != rewritten {
-		t.Fatalf("a blocked supervisor must not write the memory branch: %s -> %s", rewritten, got)
+	if got := gitOut(t, bare, "rev-parse", "refs/heads/knowledge"); got != rewritten {
+		t.Fatalf("a blocked supervisor must not write the knowledge branch: %s -> %s", rewritten, got)
 	}
-	// A rewrite is how a human repairs memory, up to and including removing
+	// A rewrite is how a human repairs knowledge, up to and including removing
 	// something that should never have been there. The supervisor still holds
 	// the pre-rewrite lineage locally, so what it strands has to be a snapshot:
 	// publishing its own tip would put the discarded history back on origin.
@@ -954,9 +954,9 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	if s.syncBlocked {
 		t.Fatal("sync should have recovered once the new history was accepted")
 	}
-	onBranch := gitOut(t, bare, "cat-file", "-p", "refs/heads/memory:tasks.md")
+	onBranch := gitOut(t, bare, "cat-file", "-p", "refs/heads/knowledge:tasks.md")
 	if !strings.Contains(onBranch, "history rewritten") {
-		t.Fatalf("the blocker should be on the memory branch after recovery: %q", onBranch)
+		t.Fatalf("the blocker should be on the knowledge branch after recovery: %q", onBranch)
 	}
 	if out, err := gitTry(bare, "rev-parse", "--verify", "--quiet", "refs/openroutines/blocked"); err == nil {
 		t.Fatalf("the stranded ref should be cleared once the branch carries it: %s", out)
@@ -973,11 +973,11 @@ func TestStrandedRefFromAnotherContainerSurvives(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register, memory branch on origin
-	earlier := gitOut(t, bare, "rev-parse", "refs/heads/memory")
+	s.tickWait(ctx, t0) // register, knowledge branch on origin
+	earlier := gitOut(t, bare, "rev-parse", "refs/heads/knowledge")
 	runCmd(t, bare, "git", "update-ref", "refs/openroutines/blocked", earlier)
 
-	s.tickWait(ctx, t0.Add(61*time.Second)) // a run completes and pushes memory
+	s.tickWait(ctx, t0.Add(61*time.Second)) // a run completes and pushes knowledge
 
 	if got := gitOut(t, bare, "rev-parse", "refs/openroutines/blocked"); got != earlier {
 		t.Fatalf("a successor's push must leave someone else's stranded ref alone: %.8s -> %s", earlier, got)
@@ -1010,7 +1010,7 @@ func TestUnreachableOriginRecordsADurableBlocker(t *testing.T) {
 
 	s.tickWait(ctx, t0.Add(183*time.Second))
 
-	tasks := gitOut(t, bare, "cat-file", "-p", "refs/heads/memory:tasks.md")
+	tasks := gitOut(t, bare, "cat-file", "-p", "refs/heads/knowledge:tasks.md")
 	if !strings.Contains(tasks, "origin unreachable") {
 		t.Fatalf("the outage should be recorded where a person looks: %q", tasks)
 	}
@@ -1094,7 +1094,7 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	if err := second.acquireLease(acquireCtx); err == nil {
 		t.Fatal("second instance took a live lease while the first had runs in flight")
 	}
-	// The second instance's memory is the holder's, adopted from origin, so
+	// The second instance's knowledge is the holder's, adopted from origin, so
 	// the ledger cannot say who ran what: count launches instead. Only the
 	// lease holder may dispatch.
 	second.tickWait(ctx, t0.Add(61*time.Second))
@@ -1109,13 +1109,13 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	// Same tick minute again: nothing new mints, only the waiting pending run
 	// dispatches into the now-free pool.
 	holder.tickWait(ctx, t0.Add(61*time.Second))
-	if got := strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_"); got != 3 {
+	if got := strings.Count(readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md")), "ran run_"); got != 3 {
 		t.Fatalf("lease holder should have run all 3 routines across two ticks, got %d", got)
 	}
 }
 
 // Two due routines with two slots run at the same time, not back to back --
-// and their settlements into the same shared memory file compose instead of
+// and their settlements into the same shared knowledge file compose instead of
 // the later import clobbering the earlier one's lines.
 func TestRunsExecuteInParallel(t *testing.T) {
 	dir := fixture(t, "slow")
@@ -1135,7 +1135,7 @@ func TestRunsExecuteInParallel(t *testing.T) {
 		// Each run sleeps 3s: serial is 6s+, parallel is one sleep plus overhead.
 		t.Fatalf("two 3s runs took %s -- they did not overlap", elapsed)
 	}
-	if got := strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_"); got != 2 {
+	if got := strings.Count(readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md")), "ran run_"); got != 2 {
 		t.Fatalf("concurrent settlements into one ledger file should compose, got %d entries", got)
 	}
 }
@@ -1189,7 +1189,7 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 		t.Fatal("second instance took the lease while a long run was executing")
 	}
 	<-done
-	if got := strings.Count(readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")), "ran run_"); got != 1 {
+	if got := strings.Count(readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md")), "ran run_"); got != 1 {
 		t.Fatalf("the long run should have completed under the heartbeat, got %d ledger entries", got)
 	}
 }
@@ -1290,8 +1290,8 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 	if st.Pending == nil || st.Pending.Attempts != 0 {
 		t.Fatalf("a canceled attempt should be handed back for the lease holder to retry: %+v", st.Pending)
 	}
-	if got := readFile(t, filepath.Join(dir, "memory", "ledgers", "fake.md")); strings.Contains(got, "ran run_") {
-		t.Fatalf("a canceled run's staged memory must not be imported: %q", got)
+	if got := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md")); strings.Contains(got, "ran run_") {
+		t.Fatalf("a canceled run's staged knowledge must not be imported: %q", got)
 	}
 	// Concurrent attempts lose the lease together and interleave on one
 	// stdout: the cancellation line must say whose attempt it ended.
@@ -1313,7 +1313,7 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 // The attempt that spawns a model process must be committed and pushed before
 // it starts. Production recovery is container replacement: an attempt that
 // takes the container down with it (OOM, host loss, eviction) never settles,
-// and a replacement that materializes memory from origin and reads attempts: 0
+// and a replacement that materializes knowledge from origin and reads attempts: 0
 // dispatches again -- forever, since the retry budget never drains.
 func TestAttemptIsDurableBeforeTheModelStarts(t *testing.T) {
 	dir := fixture(t, "probe")
@@ -1404,7 +1404,7 @@ func TestSpentAttemptsAbandonWithoutSettlement(t *testing.T) {
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("no attempt should have been dispatched, got %d runs", got)
 	}
-	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
+	tasks := readFile(t, filepath.Join(dir, "knowledge", "tasks.md"))
 	if !strings.Contains(tasks, "task-run_crashloop") {
 		t.Fatalf("abandonment should hand run_crashloop to a human: %q", tasks)
 	}
@@ -1430,7 +1430,7 @@ func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
 	if err := st.Save(s.stateDir()); err != nil {
 		t.Fatal(err)
 	}
-	if n := memory.At(dir).Status().Uncommitted; n == 0 {
+	if n := knowledge.At(dir).Status().Uncommitted; n == 0 {
 		t.Fatal("precondition: the pending record should be uncommitted")
 	}
 
@@ -1455,7 +1455,7 @@ func TestFailedIntentCommitHoldsRunsAndRecordsATask(t *testing.T) {
 	s.tickWait(ctx, t0) // register
 
 	cmd := exec.Command("git", "rev-parse", "--absolute-git-dir")
-	cmd.Dir = filepath.Join(dir, "memory")
+	cmd.Dir = filepath.Join(dir, "knowledge")
 	gitDir, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)
@@ -1469,7 +1469,7 @@ func TestFailedIntentCommitHoldsRunsAndRecordsATask(t *testing.T) {
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("an intent that cannot be committed must not dispatch, got %d runs", got)
 	}
-	tasks := readFile(t, filepath.Join(dir, "memory", "tasks.md"))
+	tasks := readFile(t, filepath.Join(dir, "knowledge", "tasks.md"))
 	if !strings.Contains(tasks, "intent commit failed") {
 		t.Fatalf("a halted supervisor should hand the blocker to a human: %q", tasks)
 	}
@@ -1529,7 +1529,7 @@ func TestOrphanHoldingTheOutputPipeDoesNotParkTheTick(t *testing.T) {
 		t.Fatal("the tick never returned: the kill path is still waiting on the abandoned pipe")
 	}
 
-	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	records := readFile(t, filepath.Join(dir, "knowledge", "runs.jsonl"))
 	if !strings.Contains(records, `"outcome":"timeout"`) {
 		t.Fatalf("expected the killed attempt to be recorded as a timeout: %q", records)
 	}
@@ -1542,7 +1542,7 @@ func TestRunRecordCarriesUsage(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 	s.tickWait(ctx, t0)
 	s.tickWait(ctx, t0.Add(time.Minute))
-	records := readFile(t, filepath.Join(dir, "memory", "runs.jsonl"))
+	records := readFile(t, filepath.Join(dir, "knowledge", "runs.jsonl"))
 	last := ""
 	for _, l := range strings.Split(strings.TrimSpace(records), "\n") {
 		if l != "" {

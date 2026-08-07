@@ -19,7 +19,7 @@ Before 1.0 there are no backported fixes: a fix ships in the next release, and `
 
 ## Security model
 
-OpenRoutines treats model-directed execution as untrusted. This includes model output, commands and tools selected by the model, memory produced by routines, and content fetched from external systems.
+OpenRoutines treats model-directed execution as untrusted. This includes model output, commands and tools selected by the model, knowledge produced by routines, and content fetched from external systems.
 
 OpenRoutines trusts:
 
@@ -38,11 +38,11 @@ When deployed as documented:
 - **Web-access scoping:** the built-in web tools are denied by default; a run's generated agent definition allows webfetch or websearch only when the routine's frontmatter declares the grant. This scopes the model's general-purpose retrieval surface -- it is not egress control or content isolation: a routine's shell commands can still reach the network, and their responses still enter model context.
 - **MCP scoping:** configured MCP servers' tools are denied by default and allowed only for routines whose frontmatter grants the server (`mcp: [name]`). This scopes which routines' context receives a server's third-party tool descriptions -- the standard MCP injection surface -- and which can invoke its tools. Connections still require the matching credential grant for the server's auth header.
 - **Supervisor-key isolation:** with `OPENROUTINES_MASTER_KEY_FILE` and `OPENROUTINES_DEPLOY_KEY_FILE`, master and deploy key values do not enter the model process environment. Their files are outside the model filesystem sandbox. Under either delivery mode, the supervisor's children -- the per-minute git invocations included -- receive constructed environments, so an environment-delivered key is not republished in a child's `/proc/<pid>/environ`.
-- **Filesystem confinement:** local model execution occurs in a disposable container. Production model execution is confined with Landlock to the run workspace and required runtime paths. Writable paths are staged memory, the run temporary directory, a disposable per-attempt home, and `/dev`. Post-run bookkeeping re-executes the runtime as an ordinary supervisor child to read what the attempt consumed; it runs with an empty home and configuration directory, so it does not load plugins or configuration the run itself could write.
+- **Filesystem confinement:** local model execution occurs in a disposable container. Production model execution is confined with Landlock to the run workspace and required runtime paths. Writable paths are staged knowledge, the run temporary directory, a disposable per-attempt home, and `/dev`. Post-run bookkeeping re-executes the runtime as an ordinary supervisor child to read what the attempt consumed; it runs with an empty home and configuration directory, so it does not load plugins or configuration the run itself could write.
 - **Git isolation:** model-directed processes do not receive the supervisor's Git worktree or Git metadata. They write to a disposable staging tree that the supervisor validates, then re-checks file by file against what it actually opens as it imports -- a tree a model process could still be writing is not trusted to be what an earlier walk found. A rejected tree is imported in no part.
 - **Workspace minimization:** a run workspace is assembled from an allow-list of required repository content. Files such as the encrypted credential store and deploy keys are not copied merely because they exist in the repository.
 - **No application ingress:** the shipped agent runtime does not listen on a network port. This does not prevent outbound connections or host-level access configured by an operator. Routine triggers stay outbound: the supervisor polls a frontmatter-declared URL (no redirects, bounded reads), sends either a granted raw bearer or short-lived bearer material derived from a granted typed credential, cleans up derived material immediately after the poll, and treats the response as an opaque comparison value that is never logged raw and never enters model context.
-- **Rewrite detection:** memory synchronization rejects a remote history that no longer descends from the last accepted tip, while the accepted reference remains available and trustworthy.
+- **Rewrite detection:** knowledge synchronization rejects a remote history that no longer descends from the last accepted tip, while the accepted reference remains available and trustworthy.
 
 These controls are layered. Production model processes currently share the supervisor's UID; isolation between them relies on Landlock, a constructed environment, file-based key delivery, and a non-dumpable supervisor.
 
@@ -61,10 +61,10 @@ Environment-variable key delivery is supported for compatibility, but has a weak
 
 ## Known limitations
 
-- **Network egress is unrestricted.** A prompt-injected routine can send anything it legitimately holds, including declared credentials and readable memory, to any reachable host. Credential and workspace scoping limit what it holds, not where it can send it.
+- **Network egress is unrestricted.** A prompt-injected routine can send anything it legitimately holds, including declared credentials and readable knowledge, to any reachable host. Credential and workspace scoping limit what it holds, not where it can send it.
 - **Prompt injection is not solved.** External content may influence model behavior. Treat every skill, credential, and tool grant as authority.
-- **`--no-memory` is not a dry run.** `routines run --no-memory` receives declared credentials and tools and may perform external actions. It discards only staged memory changes and the run record.
-- **Log redaction is best-effort.** Exact secret values are scrubbed from ordinary output, but transformed, encoded, fragmented, or indirectly disclosed values may evade redaction. The same redaction applies to the memory entries the supervisor writes, which are committed and pushed; its scope there is the supervisor's own master and deploy keys. Memory written by a model process is imported as authored and is not redacted.
+- **`--no-knowledge` is not a dry run.** `routines run --no-knowledge` receives declared credentials and tools and may perform external actions. It discards only staged knowledge changes and the run record.
+- **Log redaction is best-effort.** Exact secret values are scrubbed from ordinary output, but transformed, encoded, fragmented, or indirectly disclosed values may evade redaction. The same redaction applies to the knowledge entries the supervisor writes, which are committed and pushed; its scope there is the supervisor's own master and deploy keys. Knowledge written by a model process is imported as authored and is not redacted.
 - **`/dev/shm` is shared across runs.** `/dev` is writable in the production sandbox and the tmpfs mounted at `/dev/shm` is reachable through that grant, so runs and retry attempts can pass data through it even though each attempt otherwise gets a disposable workspace and home. Nothing auto-loads from it, so it is a data channel rather than a code-execution one.
 - **The supervisor and model process share a Linux user.** In the production container, opencode runs as a child of the supervisor under the same user ID. Unix user permissions therefore do not separate them; isolation relies on the layered controls described above.
 - **Trusted code remains powerful.** A malicious routine, skill, `opencode.json`, container image, or host configuration is outside the model sandbox's threat boundary.
@@ -74,5 +74,5 @@ Environment-variable key delivery is supported for compatibility, but has a weak
 
 - Attacks requiring control of the trusted agent repository, Git origin administration, container host, or deployment configuration.
 - Vulnerabilities in opencode, model providers, Git, or the container runtime, though OpenRoutines may pin or mitigate affected versions.
-- Denial of service, scheduling errors, concurrent routine conflicts, or lost agent memory that do not grant access across a security boundary.
+- Denial of service, scheduling errors, concurrent routine conflicts, or lost agent knowledge that do not grant access across a security boundary.
 - Protection from credentials, files, or capabilities deliberately granted to a routine.

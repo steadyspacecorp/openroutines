@@ -2,19 +2,19 @@
 
 An ORA deploys as a plain Docker container. Anything that runs a container runs your agent -- a VPS, Fly, Render, Kamal, your homelab. There is nothing else to provision: no database, no queue, no secrets platform.
 
-The one prerequisite is a git origin the agent can push to -- GitHub, GitLab, Gitea, even a bare repo on a VPS -- since that's where memory durably lives. (Local development needs no origin, and `openroutines check` verifies one before you deploy.)
+The one prerequisite is a git origin the agent can push to -- GitHub, GitLab, Gitea, even a bare repo on a VPS -- since that's where knowledge durably lives. (Local development needs no origin, and `openroutines check` verifies one before you deploy.)
 
 ```mermaid
 flowchart LR
     you["You"] -->|"routines · git push"| repo["Git repository"]
     repo -->|"deploy"| ora["Agent container"]
-    ora -->|"memory · git push"| repo
+    ora -->|"knowledge · git push"| repo
     ora -->|"logs"| you
 ```
 
 ## Deploying
 
-First, give the agent its own identity for pushing memory -- a deploy key scoped to this one repository. Generate it *outside* the agent repo (a private key must never sit in the repo or its image):
+First, give the agent its own identity for pushing knowledge -- a deploy key scoped to this one repository. Generate it *outside* the agent repo (a private key must never sit in the repo or its image):
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.keys/my-agent_deploy_key -N "" -C "my-agent deploy key"
@@ -36,7 +36,7 @@ docker run -d --name my-agent --restart unless-stopped --stop-timeout 30 \
 The image contains the pinned `openroutines` binary, opencode, git, `gh` (can authenticate via `GH_TOKEN`/`GITHUB_TOKEN`; the typed `github_app` credential injects `GH_TOKEN`), `jq`, and your repo's `main` branch. The entrypoint is the supervisor: every minute it re-reads your routines' frontmatter -- from the copy of the repo baked into the image -- and runs whatever is due. Two secrets arrive at boot, and neither is ever in the image:
 
 - **The master key** (a copy of `master.key`) decrypts the credentials file. Routines receive only the credentials their frontmatter declares.
-- **The deploy key** lets the agent push its memory. On boot the supervisor fetches the `memory` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
+- **The deploy key** lets the agent push its knowledge. On boot the supervisor fetches the `knowledge` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
 
 Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEPLOY_KEY_FILE` at the paths, as above -- file delivery keeps key material out of the process environment. On platforms where mounting a file is awkward, the values can arrive directly in `OPENROUTINES_MASTER_KEY` / `OPENROUTINES_DEPLOY_KEY` instead, but environment delivery has a weaker process-exposure posture and is not the recommended production configuration. When the master key value is in its environment the supervisor logs a warning once at boot, so a deployment that chose env delivery years ago is told rather than left to remember -- if you see it after moving to file delivery, the old `OPENROUTINES_MASTER_KEY` is still set and should be unset.
 
@@ -44,11 +44,11 @@ Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEP
 
 A few properties fall out of the design (see [docs/design.md](design.md) for the reasoning):
 
-- **Run exactly one instance.** One agent, one runtime -- the agent is the sole writer to its memory branch, so there is nothing to scale horizontally. If a platform asks how many replicas, the answer is 1, and the supervisor enforces it with a lease: an accidental second instance waits instead of corrupting memory. The lease is released on a clean shutdown, so an ordinary redeploy hands over immediately; an instance killed without SIGTERM leaves its lease to expire, and the replacement waits out the 30-minute TTL before it dispatches anything.
+- **Run exactly one instance.** One agent, one runtime -- the agent is the sole writer to its knowledge branch, so there is nothing to scale horizontally. If a platform asks how many replicas, the answer is 1, and the supervisor enforces it with a lease: an accidental second instance waits instead of corrupting knowledge. The lease is released on a clean shutdown, so an ordinary redeploy hands over immediately; an instance killed without SIGTERM leaves its lease to expire, and the replacement waits out the 30-minute TTL before it dispatches anything.
 - **Redeploys are safe.** A routine killed mid-run fires again on the next boot, and a scheduled moment that passes while the container is down runs late instead of never. Missed is recoverable; silently skipped is not.
-- **Changes arrive by redeploy.** The only branch a running agent exchanges with origin is `memory`. Everything else -- routines, skills, credentials, config -- is read from the copy of the repo baked into the image, so a push to `main` changes nothing in production until the image is rebuilt and redeployed. (Locally the boundary doesn't exist: the supervisor reads your working tree, and an edit lands on the next tick.)
-- **One broken routine is one broken routine.** A frontmatter typo takes out the routine whose file it is in, not the agent: the others keep their schedules. The supervisor records an event naming the file, so the gap is visible in memory and not only in the log.
-- **Memory survives.** Code rolls back with the image; memory lives on its own branch and persists, like a database, but versioned.
+- **Changes arrive by redeploy.** The only branch a running agent exchanges with origin is `knowledge`. Everything else -- routines, skills, credentials, config -- is read from the copy of the repo baked into the image, so a push to `main` changes nothing in production until the image is rebuilt and redeployed. (Locally the boundary doesn't exist: the supervisor reads your working tree, and an edit lands on the next tick.)
+- **One broken routine is one broken routine.** A frontmatter typo takes out the routine whose file it is in, not the agent: the others keep their schedules. The supervisor records an event naming the file, so the gap is visible in knowledge and not only in the log.
+- **Knowledge survives.** Code rolls back with the image; knowledge lives on its own branch and persists, like a database, but versioned.
 - **No application ingress.** The shipped container listens on no ports. The supervisor's log goes to stdout -- read it with `docker logs` or your platform's log tooling -- and session history persists as files when `OPENROUTINES_SESSION_DIR` designates storage (see below). This does not replace normal host and deployment access controls.
 
 ## Logs and session history
@@ -79,7 +79,7 @@ Set `log_level` in `openroutines.yml` to change how much of the supervisor's log
 
 ## Continuous deployment
 
-For continuous deployment, wire the usual hooks: run `openroutines check` on every push, rebuild and redeploy on merge to `main`. The redeploy is not just delivery hygiene -- it is the only way routine changes reach a running agent. Pushes to the `memory` branch never trigger a deploy; that separation is by design.
+For continuous deployment, wire the usual hooks: run `openroutines check` on every push, rebuild and redeploy on merge to `main`. The redeploy is not just delivery hygiene -- it is the only way routine changes reach a running agent. Pushes to the `knowledge` branch never trigger a deploy; that separation is by design.
 
 ## Updating the framework
 
@@ -93,4 +93,4 @@ openroutines update
 
 This brings the agent up to the version of the `openroutines` binary you're running (install the newer binary first). It bumps the pin, rewrites the Dockerfile's base-image tag, and offers any other framework-owned file changes interactively with a diff. Review, commit, push -- your next deploy runs the new version. Rolling back an update is `git revert`.
 
-Updates never touch what's yours: routines, skills, memory, and credentials belong to the agent, not the framework.
+Updates never touch what's yours: routines, skills, knowledge, and credentials belong to the agent, not the framework.

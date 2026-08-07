@@ -1,4 +1,4 @@
-package memory
+package knowledge
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 // SyncReport describes what happened when reconciling with origin.
 type SyncReport struct {
 	NoOrigin      bool   // repo has no origin remote (local mode)
-	RemoteMissing bool   // origin exists but has no memory branch yet
+	RemoteMissing bool   // origin exists but has no knowledge branch yet
 	Unreachable   bool   // origin exists but could not be contacted
 	Rewritten     bool   // remote history was rewritten -- sync refused
 	Conflict      bool   // rebase conflict -- sync refused
@@ -19,23 +19,23 @@ type SyncReport struct {
 }
 
 // HasOrigin reports whether the repo has an origin remote configured.
-func (m *Memory) HasOrigin() bool {
+func (m *Knowledge) HasOrigin() bool {
 	_, err := git(m.repoDir, "remote", "get-url", "origin")
 	return err == nil
 }
 
-// acceptedRef records, on origin, the last memory tip this agent accepted.
+// acceptedRef records, on origin, the last knowledge tip this agent accepted.
 // It is what makes rewrite refusal durable: the remote-tracking ref is
 // overwritten by every fetch (so the rewritten tip would become the next
 // comparison's baseline) and dies with the container (so a redeploy would
-// adopt anything). An attacker force-pushing the memory branch must now also
+// adopt anything). An attacker force-pushing the knowledge branch must now also
 // know to move this ref -- and the refusal survives both the next sync call
 // and a container replacement.
 const acceptedRef = "refs/openroutines/accepted"
 
-// AcceptedTip returns the last accepted memory tip recorded on origin, ""
+// AcceptedTip returns the last accepted knowledge tip recorded on origin, ""
 // when none has been recorded yet (pre-upgrade repos, first boot).
-func (m *Memory) AcceptedTip() string {
+func (m *Knowledge) AcceptedTip() string {
 	if _, err := git(m.repoDir, "fetch", "--quiet", "origin", "+"+acceptedRef+":"+acceptedRef); err != nil {
 		return ""
 	}
@@ -45,7 +45,7 @@ func (m *Memory) AcceptedTip() string {
 
 // recordAccepted publishes tip as the new accepted baseline (best effort --
 // the next sync simply re-verifies from the previous baseline).
-func (m *Memory) recordAccepted(tip string) {
+func (m *Knowledge) recordAccepted(tip string) {
 	current, _ := git(m.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
 	if current == tip {
 		return
@@ -55,13 +55,13 @@ func (m *Memory) recordAccepted(tip string) {
 	}
 }
 
-// Sync reconciles the local memory branch with origin, defensively
-// (design decision "Memory"): fast-forward when behind; rebase local commits when
+// Sync reconciles the local knowledge branch with origin, defensively
+// (design decision "Knowledge"): fast-forward when behind; rebase local commits when
 // diverged (append-only files rebase cleanly); refuse rewritten remote
 // history and conflicts -- never resolve silently. The rewrite baseline is
 // the durable accepted ref, so refusal holds across repeated syncs and
 // process restarts alike.
-func (m *Memory) Sync() SyncReport {
+func (m *Knowledge) Sync() SyncReport {
 	wt := m.Worktree()
 	if !m.HasOrigin() {
 		return SyncReport{NoOrigin: true}
@@ -118,10 +118,10 @@ func (m *Memory) Sync() SyncReport {
 	}
 }
 
-// Push publishes the memory branch. Fast-forward only: rejections are
+// Push publishes the knowledge branch. Fast-forward only: rejections are
 // reported, never forced. A successful push advances the accepted baseline:
 // origin's tip is now our own history.
-func (m *Memory) Push() error {
+func (m *Knowledge) Push() error {
 	if !m.HasOrigin() {
 		return nil
 	}
@@ -135,9 +135,9 @@ func (m *Memory) Push() error {
 	return nil
 }
 
-// BlockedRef is where the supervisor strands memory it cannot put on the
+// BlockedRef is where the supervisor strands knowledge it cannot put on the
 // branch. A blocked sync (rewritten history, conflict) refuses to write the
-// memory branch -- which is also where the supervisor records the blocker
+// knowledge branch -- which is also where the supervisor records the blocker
 // that says so, and a commit that never leaves the container dies with it.
 // The ref is supervisor-owned and uncontended, so publishing there resolves
 // nothing and hides nothing: origin's branch stays exactly as the human left
@@ -151,7 +151,7 @@ type BlockedSnapshot struct {
 	When string // when the supervisor stranded it, RFC3339
 }
 
-// PublishBlocked strands the committed memory state on the blocked ref as a
+// PublishBlocked strands the committed knowledge state on the blocked ref as a
 // parentless snapshot: the tree, and no history. Pushing the local tip would
 // drag its whole lineage to origin instead -- and when a rewrite is what
 // blocked sync, that lineage is the history a human just rewrote away, so a
@@ -161,7 +161,7 @@ type BlockedSnapshot struct {
 //
 // Force is safe and necessary: the ref is the supervisor's own, and each
 // snapshot supersedes the last.
-func (m *Memory) PublishBlocked() error {
+func (m *Knowledge) PublishBlocked() error {
 	if !m.HasOrigin() {
 		return nil
 	}
@@ -170,7 +170,7 @@ func (m *Memory) PublishBlocked() error {
 		return err
 	}
 	snap, err := git(m.repoDir, "commit-tree", tree, "-m",
-		"Memory the agent could not publish: sync to origin/"+Branch+" is blocked")
+		"Knowledge the agent could not publish: sync to origin/"+Branch+" is blocked")
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func (m *Memory) PublishBlocked() error {
 // ClearBlocked drops the stranded ref, for the caller that has just published
 // the same state on the branch itself. Best effort: a ref left behind costs
 // nothing but a second copy of what the branch already carries.
-func (m *Memory) ClearBlocked() {
+func (m *Knowledge) ClearBlocked() {
 	_, _ = git(m.repoDir, "push", "--quiet", "origin", ":"+BlockedRef)
 }
 
@@ -189,7 +189,7 @@ func (m *Memory) ClearBlocked() {
 // person repairing a blocked branch needs to know it is there. Fetching it is
 // part of the answer: the ref is outside the namespaces git replicates on its
 // own, so nothing else in a checkout would ever show it.
-func (m *Memory) Blocked() BlockedSnapshot {
+func (m *Knowledge) Blocked() BlockedSnapshot {
 	if _, err := git(m.repoDir, "fetch", "--quiet", "origin", "+"+BlockedRef+":"+BlockedRef); err != nil {
 		return BlockedSnapshot{}
 	}
@@ -241,7 +241,7 @@ type Lease struct {
 }
 
 // ReadLease fetches the current lease from origin; nil when none exists.
-func (m *Memory) ReadLease() (*Lease, error) {
+func (m *Knowledge) ReadLease() (*Lease, error) {
 	if _, lerr := git(m.repoDir, "fetch", "--quiet", "origin", "+"+leaseRef+":"+leaseRef); lerr != nil {
 		if strings.Contains(lerr.Error(), "couldn't find remote ref") {
 			return nil, nil
@@ -271,7 +271,7 @@ func (m *Memory) ReadLease() (*Lease, error) {
 // succeeds only if origin's lease is still exactly expectedSHA (empty means
 // "must not exist"). Two instances racing for the same lease cannot both
 // win. Returns the new lease SHA for the next renewal's expectation.
-func (m *Memory) WriteLease(instanceID string, now time.Time, expectedSHA string) (string, error) {
+func (m *Knowledge) WriteLease(instanceID string, now time.Time, expectedSHA string) (string, error) {
 	blob, err := gitStdin(m.repoDir, leaseContent(instanceID, now), "hash-object", "-w", "--stdin")
 	if err != nil {
 		return "", err
@@ -288,7 +288,7 @@ func (m *Memory) WriteLease(instanceID string, now time.Time, expectedSHA string
 // Unconditional deletion let a stale instance, shutting down after losing
 // the lease, delete the new holder's live lease. ownedSHA "" means this
 // instance never held the lease; there is nothing to release.
-func (m *Memory) ReleaseLease(ownedSHA string) {
+func (m *Knowledge) ReleaseLease(ownedSHA string) {
 	if ownedSHA == "" {
 		return
 	}

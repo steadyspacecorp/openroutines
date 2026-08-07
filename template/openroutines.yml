@@ -9,5 +9,5 @@ defaults:
   timeout: 5m
 max_timeout: 6h
 concurrency: 2
-memory:
+knowledge:
   retention: 30d

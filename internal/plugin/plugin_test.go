@@ -102,7 +102,7 @@ func TestLoadRefusals(t *testing.T) {
 		"legacy openroutines.yaml": {map[string]string{"openroutines.yaml": "name: x"}, "belongs to the agent"},
 		"legacy agent.yaml":        {map[string]string{"agent.yaml": "name: x"}, "belongs to the agent"},
 		"install hook":             {map[string]string{"install.sh": "#!/bin/sh\n"}, "allow-listed"},
-		"shared memory":            {map[string]string{"memory/events.md": "- sneaky\n"}, "never shared memory"},
+		"shared knowledge":         {map[string]string{"knowledge/events.md": "- sneaky\n"}, "never shared knowledge"},
 		"master key":               {map[string]string{"master.key": "k"}, "key material"},
 		"nested git":               {map[string]string{"skills/demo-skill/.git/config": "bad"}, "nested .git"},
 		"dangling skill":           {map[string]string{"routines/other.md": "---\nschedule: \"0 9 * * *\"\nskills: [ghost]\n---\nx\n"}, "neither the plugin nor the agent"},
@@ -229,7 +229,7 @@ var testSource = Source{
 func TestPrepareInstallAndApply(t *testing.T) {
 	src := write(t, map[string]string{
 		"skills/demo-skill/SKILL.md": "---\nname: demo-skill\ndescription: d\n---\nHow.\n",
-		"memory/ledgers/demo.md":     "# demo ledger\n",
+		"knowledge/ledgers/demo.md":  "# demo ledger\n",
 	})
 	agent := t.TempDir()
 	inst, err := PrepareInstall(agent, src, testSource)
@@ -237,7 +237,7 @@ func TestPrepareInstallAndApply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No memory worktree yet: stubs go pending, the rest installs.
+	// No knowledge worktree yet: stubs go pending, the rest installs.
 	installed, pending, err := inst.Apply()
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func TestPrepareInstallAndApply(t *testing.T) {
 	}
 
 	// With a worktree, the stub lands -- unless the ledger already exists,
-	// which is live memory and never clobbered.
+	// which is live knowledge and never clobbered.
 	install := func(agent string) (installed, pending []string, err error) {
 		t.Helper()
 		inst, err := PrepareInstall(agent, src, testSource)
@@ -281,7 +281,7 @@ func TestPrepareInstallAndApply(t *testing.T) {
 		return inst.Apply()
 	}
 	agent2 := t.TempDir()
-	os.MkdirAll(filepath.Join(agent2, "memory", "ledgers"), 0o755)
+	os.MkdirAll(filepath.Join(agent2, "knowledge", "ledgers"), 0o755)
 	installed, pending, err = install(agent2)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("stub should install into an existing worktree: pending=%v err=%v", pending, err)
@@ -290,13 +290,13 @@ func TestPrepareInstallAndApply(t *testing.T) {
 		t.Fatalf("installed %v, want plugin directory and stub", installed)
 	}
 	agent3 := t.TempDir()
-	os.MkdirAll(filepath.Join(agent3, "memory", "ledgers"), 0o755)
-	os.WriteFile(filepath.Join(agent3, "memory", "ledgers", "demo.md"), []byte("live state\n"), 0o644)
+	os.MkdirAll(filepath.Join(agent3, "knowledge", "ledgers"), 0o755)
+	os.WriteFile(filepath.Join(agent3, "knowledge", "ledgers", "demo.md"), []byte("live state\n"), 0o644)
 	_, pending, err = install(agent3)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("existing ledger must go pending, not be clobbered: pending=%v err=%v", pending, err)
 	}
-	if raw, _ := os.ReadFile(filepath.Join(agent3, "memory", "ledgers", "demo.md")); string(raw) != "live state\n" {
+	if raw, _ := os.ReadFile(filepath.Join(agent3, "knowledge", "ledgers", "demo.md")); string(raw) != "live state\n" {
 		t.Fatal("live ledger was overwritten")
 	}
 }

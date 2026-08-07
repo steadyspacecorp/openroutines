@@ -20,7 +20,7 @@ import (
 // One interval governs everything: polls happen at most once per interval,
 // and since a poll is the only fire opportunity, the same knob bounds fire
 // rate and reply latency alike. The last-poll clock is in-memory only --
-// persisting it would dirty the memory worktree on every poll; a restart
+// persisting it would dirty the knowledge worktree on every poll; a restart
 // costs one early poll.
 func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 	spec := *r.FM.Trigger
