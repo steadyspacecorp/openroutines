@@ -22,7 +22,8 @@ const knowledgeUsage = `Inspect the latest knowledge on origin without changing 
 
 Usage:
   openroutines knowledge                         interactive explorer
-  openroutines knowledge summarize [--yes]       ephemeral default-model briefing
+  openroutines knowledge summarize [--since 24h] [--yes]
+                                                 ephemeral default-model briefing
   openroutines knowledge list [path] [--json]    list snapshot files
   openroutines knowledge show <path>             print one snapshot file
   openroutines knowledge stats [--json]          snapshot size and history
@@ -116,7 +117,7 @@ func knowledgeInteractive(mem *knowledge.Store, snap *knowledge.OriginSnapshot) 
 		}
 		switch strings.ToLower(strings.TrimSpace(choice)) {
 		case "1", "summarize", "s":
-			if code := knowledgeSummarizeWithReader(snap, false, in); code != 0 {
+			if code := knowledgeSummarizeWithReader(snap, 24*time.Hour, false, in); code != 0 {
 				return code
 			}
 		case "2", "list", "browse", "b":
@@ -256,22 +257,29 @@ func knowledgeBrowse(snap *knowledge.OriginSnapshot, in *bufio.Reader) int {
 }
 
 func knowledgeSummarize(snap *knowledge.OriginSnapshot, args []string) int {
-	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--yes": {}})
+	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--yes": {}, "--since": {value: true}})
 	if err != nil {
 		return fail(err)
 	}
 	if help {
-		fmt.Println("usage: openroutines knowledge summarize [--yes]")
+		fmt.Println("usage: openroutines knowledge summarize [--since 24h] [--yes]")
 		return 0
 	}
 	if len(positional) != 0 {
-		return fail(fmt.Errorf("usage: openroutines knowledge summarize [--yes]"))
+		return fail(fmt.Errorf("usage: openroutines knowledge summarize [--since 24h] [--yes]"))
 	}
 	_, yes := flags["--yes"]
-	return knowledgeSummarizeWithReader(snap, yes, bufio.NewReader(os.Stdin))
+	window := 24 * time.Hour
+	if raw, ok := flags["--since"]; ok {
+		window, err = time.ParseDuration(raw)
+		if err != nil || window <= 0 {
+			return fail(fmt.Errorf("--since must be a positive duration (for example 24h)"))
+		}
+	}
+	return knowledgeSummarizeWithReader(snap, window, yes, bufio.NewReader(os.Stdin))
 }
 
-func knowledgeSummarizeWithReader(snap *knowledge.OriginSnapshot, yes bool, in *bufio.Reader) int {
+func knowledgeSummarizeWithReader(snap *knowledge.OriginSnapshot, window time.Duration, yes bool, in *bufio.Reader) int {
 	agent, err := config.Load(".")
 	if err != nil {
 		return fail(err)
@@ -280,14 +288,20 @@ func knowledgeSummarizeWithReader(snap *knowledge.OriginSnapshot, yes bool, in *
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return fail(fmt.Errorf("summarize calls %s and spends tokens; pass --yes in non-interactive use", agent.Defaults.Model))
 		}
-		fmt.Printf("Summarize will call %s and spend tokens. Continue? [Y/n] ", agent.Defaults.Model)
+		fmt.Printf("Summarize the last %s with %s and spend tokens. Continue? [Y/n] ", window, agent.Defaults.Model)
 		answer, _ := in.ReadString('\n')
 		answer = strings.ToLower(strings.TrimSpace(answer))
 		if answer == "n" || answer == "no" {
 			return 0
 		}
 	}
-	res, err := runner.SummarizeKnowledge(".", snap.Dir, snap.Commit, os.Stdout)
+	through := snap.FetchedAt
+	since := through.Add(-window)
+	recent, err := snap.ChangesSince(since)
+	if err != nil {
+		return fail(err)
+	}
+	res, err := runner.SummarizeKnowledge(".", snap.Dir, snap.Commit, since, through, recent, os.Stdout)
 	if err != nil {
 		return fail(err)
 	}
