@@ -80,7 +80,7 @@ openroutines sync [--push]
 
 Reconciles `knowledge/` with origin. A deployed agent writes its knowledge on the `knowledge` branch, and `git pull` in the agent repository moves the remote-tracking ref without touching the knowledge worktree -- so a checkout keeps reading old knowledge until you sync it. `status` and `usage` say when that has happened and name this command.
 
-Syncing is also how you read the agent: the knowledge primitives are ordinary Markdown files under `knowledge/`, and `knowledge/ledgers/check-in.md` holds the latest check-in the agent delivered -- the teammate-style update as of the last scheduled run. For one composed right now, `openroutines routines run check-in --no-knowledge` echoes a fresh report without consuming the change feed.
+Syncing is also how you read the agent: the knowledge primitives are ordinary Markdown files under `knowledge/`, and `knowledge/ledgers/check-in.md` holds the latest check-in the agent delivered -- the teammate-style update as of the last scheduled run. For one composed right now, `openroutines routines run check-in --skip-knowledge` echoes a fresh report without consuming the change feed.
 
 Fast-forwards when behind, rebases local commits when both sides moved, and refuses rather than resolving anything itself: a conflict is left for you to resolve inside `knowledge/`, and rewritten upstream history is refused outright. `--push` also publishes local knowledge commits.
 
@@ -93,8 +93,8 @@ When a refusal happens, sync also says whether the deployed agent stranded knowl
 ```
 openroutines routines new <name>         create a routine (inactive until you activate it)
 openroutines routines list               names, schedules, grants
-openroutines routines run <name> [--no-knowledge]
-                                         run once now; --no-knowledge discards knowledge writes
+openroutines routines run <name> [--skip-knowledge]
+                                         run once now; --skip-knowledge discards knowledge writes
 openroutines routines edit <name>        open in $EDITOR, validate on close
 openroutines routines activate <name>    set active: true
 openroutines routines deactivate <name>  set active: false
@@ -103,7 +103,7 @@ openroutines routines remove <name>      delete the routine and its scheduling s
 
 A routine that does not load still holds its name: `new` refuses rather than overwrite it, `run` reports the parse error instead of "no routine", and `edit` and `remove` operate on the file so you can fix or drop it.
 
-`run` always has the routine's declared credentials and tools and may perform external actions. `--no-knowledge` discards staged knowledge writes and the run record; it is not a dry run. Use `check` for non-acting validation, and point acting routines at a scratch target when exercising their external path.
+`run` always has the routine's declared credentials and tools and may perform external actions. `--skip-knowledge` discards staged knowledge writes and the run record; it is not a dry run. Use `check` for non-acting validation, and point acting routines at a scratch target when exercising their external path.
 
 Deactivating a routine that is misbehaving in production stops it at the next redeploy, not the next tick -- the deployed supervisor keeps reading the copy in its image until then.
 

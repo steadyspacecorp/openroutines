@@ -72,8 +72,8 @@ const routinesUsage = `Manage this agent's routines (markdown files in routines/
 Usage:
   openroutines routines new <name>         create a routine (inactive until you activate it)
   openroutines routines list               names, schedules, grants
-  openroutines routines run <name> [--no-knowledge]
-                                           run once now; --no-knowledge discards knowledge writes
+  openroutines routines run <name> [--skip-knowledge]
+                                           run once now; --skip-knowledge discards knowledge writes
   openroutines routines edit <name>        open in $EDITOR, validate on close
   openroutines routines activate <name>    set active: true
   openroutines routines deactivate <name>  set active: false
@@ -81,7 +81,7 @@ Usage:
 `
 
 func routinesRun(args []string) int {
-	nameArg, noKnowledge, help, err := parseRoutineRunArgs(args)
+	nameArg, skipKnowledge, help, err := parseRoutineRunArgs(args)
 	if err != nil {
 		return fail(err)
 	}
@@ -93,7 +93,7 @@ func routinesRun(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	res, err := runner.Run(".", name, noKnowledge)
+	res, err := runner.Run(".", name, skipKnowledge)
 	if err != nil {
 		return fail(err)
 	}
@@ -107,7 +107,7 @@ func routinesRun(args []string) int {
 	for _, f := range res.Conflicted {
 		fmt.Printf("note: a concurrent run edited the same lines in %s -- both versions kept; curate the file if they disagree\n", f)
 	}
-	if noKnowledge {
+	if skipKnowledge {
 		fmt.Println("knowledge discarded: external actions were still performed and credentials were available (first runs may still have initialized the knowledge worktree)")
 	} else if res.Commit != "" {
 		fmt.Printf("knowledge updated: commit %s on the %s branch\n", res.Commit, "knowledge")
@@ -118,10 +118,10 @@ func routinesRun(args []string) int {
 	return 0
 }
 
-const routinesRunUsage = "usage: openroutines routines run <name> [--no-knowledge]"
+const routinesRunUsage = "usage: openroutines routines run <name> [--skip-knowledge]"
 
 func parseRoutineRunArgs(args []string) (string, bool, bool, error) {
-	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--no-knowledge": {}})
+	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--skip-knowledge": {}})
 	if err != nil {
 		return "", false, false, err
 	}
@@ -131,8 +131,8 @@ func parseRoutineRunArgs(args []string) (string, bool, bool, error) {
 	if len(positional) != 1 {
 		return "", false, false, fmt.Errorf("%s", routinesRunUsage)
 	}
-	_, noKnowledge := flags["--no-knowledge"]
-	return positional[0], noKnowledge, false, nil
+	_, skipKnowledge := flags["--skip-knowledge"]
+	return positional[0], skipKnowledge, false, nil
 }
 
 func routinesNew(args []string) int {

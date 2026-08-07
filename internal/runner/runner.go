@@ -675,11 +675,11 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	return res, staging, nil
 }
 
-// Run executes routine `name` manually. noKnowledge discards staged knowledge
+// Run executes routine `name` manually. skipKnowledge discards staged knowledge
 // writes and the run record after the otherwise ordinary run completes.
 // Inside the production container a manual run reserves the manual attempt
 // identity first, so it can never share a uid with a supervisor slot.
-func Run(dir, name string, noKnowledge bool) (result *Result, err error) {
+func Run(dir, name string, skipKnowledge bool) (result *Result, err error) {
 	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
@@ -728,7 +728,7 @@ func Run(dir, name string, noKnowledge bool) (result *Result, err error) {
 	defer func() { err = errors.Join(err, staging.Cleanup()) }()
 
 	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint, SessionsDir: exec.SessionsDir}
-	if noKnowledge {
+	if skipKnowledge {
 		return res, nil
 	}
 

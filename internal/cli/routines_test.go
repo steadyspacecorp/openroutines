@@ -17,10 +17,10 @@ func TestParseRoutineRunArgs(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "ordinary run", args: []string{"digest"}, wantName: "digest"},
-		{name: "flag after name", args: []string{"digest", "--no-knowledge"}, wantName: "digest", wantNo: true},
-		{name: "flag before name", args: []string{"--no-knowledge", "digest"}, wantName: "digest", wantNo: true},
-		{name: "missing name", args: []string{"--no-knowledge"}, wantErr: true},
-		{name: "duplicate flag", args: []string{"digest", "--no-knowledge", "--no-knowledge"}, wantErr: true},
+		{name: "flag after name", args: []string{"digest", "--skip-knowledge"}, wantName: "digest", wantNo: true},
+		{name: "flag before name", args: []string{"--skip-knowledge", "digest"}, wantName: "digest", wantNo: true},
+		{name: "missing name", args: []string{"--skip-knowledge"}, wantErr: true},
+		{name: "duplicate flag", args: []string{"digest", "--skip-knowledge", "--skip-knowledge"}, wantErr: true},
 		{name: "unknown flag", args: []string{"digest", "--dry-run"}, wantErr: true},
 		{name: "extra argument", args: []string{"digest", "other"}, wantErr: true},
 	} {
