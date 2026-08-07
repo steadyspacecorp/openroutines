@@ -127,7 +127,7 @@ func TestLandlockConfinement(t *testing.T) {
 		"read-deploy-key":    "denied",  // supervisor's ~/.ssh
 		"read-auth-store":    "denied",  // shared opencode home (cross-routine channel)
 		"read-supervisor":    "denied",  // /proc/<supervisor>/environ, closed by non-dumpable
-		"write-knowledge":       "allowed", // the one place writes persist
+		"write-knowledge":    "allowed", // the one place writes persist
 		"write-runtmp":       "allowed",
 		"write-attempt-home": "allowed", // disposable per-attempt HOME
 		"read-workspace":     "allowed",
