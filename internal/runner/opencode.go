@@ -9,7 +9,6 @@
 package runner
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -367,7 +366,24 @@ func (c containerOpencode) exec(args ...string) ([]byte, error) {
 	if err := os.Remove(outPath); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
+	// Mint the landing file here and hold the descriptor: the accepted
+	// local residual lets planted plugin code run inside the capture
+	// container, and a path re-resolved after the exec would let that code
+	// swap in an absolute symlink and walk the host filesystem with the
+	// supervisor's eyes. The container's shell opens the path once, before
+	// opencode (and any plugin) starts, so both ends write and read this
+	// one inode whatever the name points at later. World-writable for the
+	// same reason the attempt home is: the image's agent uid is not the
+	// host user's.
+	out, err := os.OpenFile(outPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		return nil, err
+	}
 	defer func() { _ = os.Remove(outPath) }()
+	defer out.Close()
+	if err := out.Chmod(0o666); err != nil {
+		return nil, err
+	}
 	dargs := []string{
 		"run", "--rm",
 		"-v", c.workspace + ":/work",
@@ -384,12 +400,12 @@ func (c containerOpencode) exec(args ...string) ([]byte, error) {
 		c.image, "sh", "-c", `exec opencode "$@" > /work/` + captureOutName, "opencode",
 	}
 	cmd := exec.CommandContext(ctx, "docker", append(dargs, args...)...)
-	var stderr bytes.Buffer
+	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, execError(err, &stderr)
 	}
-	return os.ReadFile(outPath)
+	return io.ReadAll(out)
 }
 
 // processGroup is how the direct-spawn modes end a run: the model process
@@ -428,7 +444,7 @@ func runToFile(cmd *exec.Cmd) ([]byte, error) {
 	defer func() { _ = os.Remove(out.Name()) }()
 	defer out.Close()
 	cmd.Stdout = out
-	var stderr bytes.Buffer
+	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	// With stdout on a file, stderr is the one pipe left that a descendant
 	// opencode leaked could hold open past the exec's own death.
@@ -444,9 +460,31 @@ func runToFile(cmd *exec.Cmd) ([]byte, error) {
 	return io.ReadAll(out)
 }
 
+// tailBuffer keeps the last stderrTailCap bytes written through it. A
+// capture exec's stderr exists only to explain a failure, and the
+// explanation lands at the end of the stream -- while the stream itself is
+// untrusted output that code in the exec can feed for the whole capture
+// timeout, so keeping all of it would hand bookkeeping a memory
+// exhaustion lever.
+type tailBuffer struct {
+	buf []byte
+}
+
+const stderrTailCap = 8 << 10
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if n := len(t.buf) - stderrTailCap; n > 0 {
+		t.buf = append(t.buf[:0], t.buf[n:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string { return string(t.buf) }
+
 // execError keeps what a failed capture exec said on stderr: the log line
 // built from it is the only trace of why bookkeeping degraded.
-func execError(err error, stderr *bytes.Buffer) error {
+func execError(err error, stderr *tailBuffer) error {
 	if s := strings.TrimSpace(stderr.String()); s != "" {
 		return fmt.Errorf("%w: %s", err, s)
 	}
