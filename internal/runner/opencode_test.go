@@ -40,7 +40,7 @@ func TestHostCaptureRunsWithAnEmptyHome(t *testing.T) {
 	writeMsg(t, filepath.Join(ws, ".home", ".config", "opencode", "plugin"), "evil.js", "export const Evil = async () => ({})")
 	fakeBin(t, "opencode", reportEnv)
 
-	out, err := hostOpencodeExec(ws)("session", "list")
+	out, err := hostOpencode{workspace: ws}.sessions("session", "list")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestHostCaptureRefusesAHomeInsideTheWorkspace(t *testing.T) {
 	fakeBin(t, "opencode", "#!/bin/sh\ntouch "+marker+"\n")
 	t.Setenv("TMPDIR", ws)
 
-	if _, err := hostOpencodeExec(ws)("session", "list"); err == nil {
+	if _, err := (hostOpencode{workspace: ws}).sessions("session", "list"); err == nil {
 		t.Fatal("capture must refuse a home inside the workspace")
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -102,7 +102,7 @@ if [ -p /dev/stdout ]; then printf '{"messages":[{"in'; else printf '{"messages"
 
 func TestHostCaptureSurvivesOpencodesLossyPipeWrites(t *testing.T) {
 	fakeBin(t, "opencode", truncateOnPipe)
-	out, err := hostOpencodeExec(t.TempDir())("export", "ses_x")
+	out, err := hostOpencode{workspace: t.TempDir()}.sessions("export", "ses_x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestHostCaptureSurvivesOpencodesLossyPipeWrites(t *testing.T) {
 
 func TestNativeCaptureSurvivesOpencodesLossyPipeWrites(t *testing.T) {
 	fakeBin(t, "opencode", truncateOnPipe)
-	out, err := nativeOpencodeExec(t.TempDir())("export", "ses_x")
+	out, err := nativeOpencode{workspace: t.TempDir()}.sessions("export", "ses_x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestContainerCaptureRunsWithAnEmptyHome(t *testing.T) {
 	ws := t.TempDir()
 	fakeDocker(t, ws)
 
-	out, err := containerOpencodeExec(ws, "img")("export", "ses_x")
+	out, err := containerOpencode{workspace: ws, image: "img"}.sessions("export", "ses_x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestContainerCaptureClearsAPlantedLandingFile(t *testing.T) {
 	}
 	fakeDocker(t, ws)
 
-	if _, err := containerOpencodeExec(ws, "img")("export", "ses_x"); err != nil {
+	if _, err := (containerOpencode{workspace: ws, image: "img"}).sessions("export", "ses_x"); err != nil {
 		t.Fatal(err)
 	}
 	if raw, err := os.ReadFile(victim); err != nil || string(raw) != "untouched" {

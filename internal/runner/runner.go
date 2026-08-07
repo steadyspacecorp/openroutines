@@ -500,11 +500,11 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		ocArgs = append(slices.Clip(ocArgs), "--format", "json")
 	}
 
-	plan, err := sr.spawn(ocArgs)
+	oc, err := sr.opencode()
 	if err != nil {
 		return nil, nil, err
 	}
-	cmd := plan.cmd
+	cmd := oc.run(ocArgs)
 	// stderr carries opencode's diagnostic log (--print-logs): each line
 	// passes through to the log stream with the attempt's identity
 	// appended, scrubbed first -- and with it every failure's diagnostics,
@@ -527,14 +527,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 
 	attemptLog := r.Log().With("run_id", meta.RunID)
 	done := make(chan error, 1)
-	kill := func() {
-		if plan.container != "" {
-			stopContainer(plan.container)
-			killClient(cmd, containerExitGrace, done, attemptLog)
-		} else {
-			killGroup(cmd, 10*time.Second, done, attemptLog)
-		}
-	}
+	kill := func() { oc.kill(cmd, done, attemptLog) }
 	started := time.Now()
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
@@ -560,12 +553,9 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		// The model process is gone, but a descendant it detached from its
 		// stdio is not: it outlives the attempt in the supervisor's own
 		// container and keeps writing to staged knowledge while the pipeline
-		// validates and imports it. The attempt ends with its whole process
-		// group whichever way it ended. (In container mode the run's pid
-		// namespace dies with `docker run --rm`, which does this already.)
-		if plan.container == "" {
-			reapGroup(cmd)
-		}
+		// validates and imports it. The attempt ends with everything it
+		// spawned whichever way it ended.
+		oc.reap(cmd)
 	case <-time.After(timeout):
 		res.Outcome = Timeout
 		kill()
@@ -585,7 +575,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// opencode exits 0 on a session whose agent loop died mid-turn. The
 	// session record is what says whether the run actually finished (design
 	// decision "A run is completed only when its session ended cleanly").
-	sessions, fetchErr := fetchSessions(plan.sessions, attemptLog)
+	sessions, fetchErr := fetchSessions(oc.sessions, attemptLog)
 	capture := captureSessions(sessions, fetchErr, attemptLog)
 	res.Usage = capture.Usage
 	res.SessionsDir = exportSessions(meta, sessions, fetchErr, attemptLog)
