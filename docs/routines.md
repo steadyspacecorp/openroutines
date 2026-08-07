@@ -113,16 +113,18 @@ Both forms are real runs. They receive the routine's credentials and tools and m
 
 ## Rehearsals
 
-A rehearsal runs the real routine against fixture data with the outside world unplugged -- for auditioning models, testing prompt changes, and exercising judgment calls without waiting for a live fire or touching anything real.
+A rehearsal runs the real routine without consequence -- for seeing what a routine would do, auditioning models, and testing prompt changes without waiting for a live fire or touching anything that counts.
 
 ```bash
-openroutines routines run steady-check-in --rehearse             # rehearsals/steady-check-in.md
-openroutines routines run announcements --rehearse cold-start    # rehearsals/announcements/cold-start.md
+openroutines routines run steady-check-in --rehearse             # live world, read-only by instruction
+openroutines routines run announcements --rehearse cold-start    # fixture world: rehearsals/announcements/cold-start.md
 ```
 
-Fixtures bind to routines by name. One fixture is a flat file, `rehearsals/<name>.md`. A routine that earns multiple scenarios graduates to a directory: `rehearsals/<name>/default.md` plus named scenarios. A fixture is ordinary markdown describing the simulated world -- the knowledge state, the pending changes, the schedule, a frozen "work as if it is ..." moment -- in whatever shape the routine's inputs take.
+Out of the box, `--rehearse` needs no files: the routine keeps its credentials and tools so its reads work, and an injected preamble instructs the model to keep every external action read-only and idempotent, and to print what it would have delivered instead of delivering it. That restraint is instruction, not enforcement. The enforced part is that nothing settles -- no knowledge writes, no feed consumption, no run record -- so rehearsing is always safe to repeat.
 
-In rehearse mode the run has no credentials, no MCP servers, no skills, and no web access; the fixture arrives as read-only `./rehearsal.md` and a standing preamble tells the model it replaces every outside read. Nothing settles -- no knowledge writes, no feed consumption, no run record -- so rehearsing is always safe to repeat. `check` warns when a fixture's name matches no routine, which is how you learn a rename stranded one.
+Fixtures deepen a rehearsal into a simulated world: deterministic inputs, a frozen "work as if it is ..." moment, no grants at all -- the runner strips credentials, MCP, skills, and web access, and injects the fixture as read-only `./rehearsal.md`. Use fixtures when you want repeatable scenarios (model comparisons, edge cases like a quiet day or a cold start) rather than whatever the real world contains right now.
+
+Fixtures bind to routines by name. One fixture is a flat file, `rehearsals/<name>.md`. A routine that earns multiple scenarios graduates to a directory: `rehearsals/<name>/default.md` plus named scenarios. A fixture is ordinary markdown describing the simulated world in whatever shape the routine's inputs take. `check` warns when a fixture's name matches no routine, which is how you learn a rename stranded one.
 
 ## Recording work
 

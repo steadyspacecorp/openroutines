@@ -100,9 +100,14 @@ func routinesRun(args []string) int {
 		if fixture, err = resolveRehearsal(name, scenario); err != nil {
 			return fail(err)
 		}
-		fmt.Printf("rehearsal: %s (grants stripped, knowledge discarded)\n\n", fixture)
+		if fixture != "" {
+			fmt.Printf("rehearsal: fixture world from %s -- grants stripped, knowledge discarded\n\n", fixture)
+		} else {
+			fmt.Println("rehearsal: live world -- external actions instructed read-only, knowledge discarded")
+			fmt.Println()
+		}
 	}
-	res, err := runner.Run(".", name, !writeKnowledge, fixture)
+	res, err := runner.Run(".", name, !writeKnowledge, rehearse, fixture)
 	if err != nil {
 		return fail(err)
 	}
@@ -154,8 +159,9 @@ func parseRoutineRunArgs(args []string) (name, scenario string, writeKnowledge, 
 // resolveRehearsal maps a routine and optional scenario to its fixture file:
 // rehearsals/<name>.md for the common single-fixture case, or
 // rehearsals/<name>/<scenario>.md (default.md when no scenario is named)
-// once a routine has more than one. A miss names what to create, or lists
-// the scenarios that exist.
+// once a routine has more than one. No fixtures at all is not an error --
+// it selects the live rehearsal, which needs no files. A named scenario
+// that does not exist is an error listing what does.
 func resolveRehearsal(name, scenario string) (string, error) {
 	flat := filepath.Join("rehearsals", name+".md")
 	dir := filepath.Join("rehearsals", name)
@@ -181,10 +187,13 @@ func resolveRehearsal(name, scenario string) (string, error) {
 			have = append(have, s)
 		}
 	}
-	if len(have) > 0 {
-		return "", fmt.Errorf("no rehearsal fixture %q for %s -- have: %s", scenario, name, strings.Join(have, ", "))
+	if scenario != "" {
+		if len(have) > 0 {
+			return "", fmt.Errorf("no rehearsal fixture %q for %s -- have: %s", scenario, name, strings.Join(have, ", "))
+		}
+		return "", fmt.Errorf("no rehearsal fixtures for %s -- a named scenario needs %s", name, filepath.Join("rehearsals", name, scenario+".md"))
 	}
-	return "", fmt.Errorf("no rehearsal fixture for %s -- create %s", name, flat)
+	return "", nil
 }
 
 func fileExists(p string) bool {

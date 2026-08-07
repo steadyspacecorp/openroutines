@@ -61,7 +61,8 @@ func TestResolveRehearsal(t *testing.T) {
 		{routine: "announcements", want: "rehearsals/announcements/default.md"},
 		{routine: "announcements", scenario: "cold-start", want: "rehearsals/announcements/cold-start.md"},
 		{routine: "announcements", scenario: "quiet", wantErr: "have: cold-start, default"},
-		{routine: "digest", wantErr: "create rehearsals/digest.md"},
+		{routine: "digest", want: ""},
+		{routine: "digest", scenario: "quiet", wantErr: "rehearsals/digest/quiet.md"},
 	} {
 		got, err := resolveRehearsal(tc.routine, tc.scenario)
 		if tc.wantErr != "" {

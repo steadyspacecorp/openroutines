@@ -607,24 +607,40 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 // own prompt so the rules stay the routine's and only the world is swapped.
 const RehearsalFileName = "rehearsal.md"
 
-const rehearsalPreamble = `REHEARSAL RUN. The fixtures in ./rehearsal.md replace every outside read
-for this run -- including ./changes.md and ./schedule.md wherever the
-fixtures provide stand-ins. You have no credentials, no MCP servers, no
-skills, and no web access; do not attempt external calls, the fixtures
-are the world. Nothing you produce leaves the run: knowledge writes are
-discarded. Follow the routine below exactly, against the fixtures.
+const fixturePreamble = `REHEARSAL RUN, fixture world. The fixtures in ./rehearsal.md replace
+every outside read for this run -- including ./changes.md and
+./schedule.md wherever the fixtures provide stand-ins. You have no
+credentials, no MCP servers, no skills, and no web access; do not
+attempt external calls, the fixtures are the world. Nothing you produce
+leaves the run: knowledge writes are discarded. Follow the routine
+below exactly, against the fixtures.
+
+`
+
+// livePreamble governs a rehearsal with no fixtures: the real world,
+// read-only by instruction. The routine keeps its grants so its reads
+// work; the restraint is asked of the model, not enforced -- the enforced
+// part is that nothing settles.
+const livePreamble = `REHEARSAL RUN, live world. Read anything this routine normally reads --
+your credentials and tools are present -- but treat every external
+action as read-only and idempotent: write nothing, post nothing, change
+no state in any outside system. Anything the routine would deliver to a
+destination, print here instead; printed output is this rehearsal's
+delivery. Knowledge writes are discarded and nothing is consumed.
+Follow the routine below exactly, under these restraints.
 
 `
 
 // Run executes routine `name` manually. skipKnowledge discards staged knowledge
 // writes and the run record after the otherwise ordinary run completes.
-// rehearsal, when non-empty, is a fixture path: the routine runs with every
-// grant stripped, the fixture injected, and knowledge always discarded --
-// the same rules against a simulated world.
+// rehearse runs the routine as a rehearsal: with fixture (a path), every
+// grant is stripped and the fixture is the world; without one, grants stay
+// and the world is real, read-only by instruction. Either way knowledge is
+// always discarded.
 // Inside the production container a manual run reserves the manual attempt
 // identity first, so it can never share a uid with a supervisor slot.
-func Run(dir, name string, skipKnowledge bool, rehearsal string) (result *Result, err error) {
-	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01", Rehearsal: rehearsal}
+func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result *Result, err error) {
+	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01", Rehearsal: fixture}
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
 		if err != nil {
@@ -641,18 +657,23 @@ func Run(dir, name string, skipKnowledge bool, rehearsal string) (result *Result
 	if err != nil {
 		return nil, err
 	}
-	if rehearsal != "" {
-		// The routine keeps its rules; the rehearsal swaps its world. Grants
-		// are stripped at the source so the existing pipeline enforces them:
-		// no credentials resolve, no MCP servers mount, the generated
-		// definition denies skills and web access, and nothing settles.
+	if rehearse {
 		rr := *r
-		rr.FM.Credentials = nil
-		rr.FM.MCP = nil
-		rr.FM.Skills = nil
-		rr.FM.Webfetch = false
-		rr.FM.Websearch = false
-		rr.Body = rehearsalPreamble + r.Body
+		if fixture != "" {
+			// The routine keeps its rules; the fixture swaps its world.
+			// Grants are stripped at the source so the existing pipeline
+			// enforces the absence: no credentials resolve, no MCP servers
+			// mount, the generated definition denies skills and web access.
+			rr.FM.Credentials = nil
+			rr.FM.MCP = nil
+			rr.FM.Skills = nil
+			rr.FM.Webfetch = false
+			rr.FM.Websearch = false
+			rr.Body = fixturePreamble + r.Body
+		} else {
+			// Live rehearsal: the real world, read-only by instruction.
+			rr.Body = livePreamble + r.Body
+		}
 		r = &rr
 		skipKnowledge = true
 	}
