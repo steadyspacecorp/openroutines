@@ -1,8 +1,10 @@
-// The attempt's sessions are opencode's own record of the run, read twice
-// after the model process exits. captureSessions distills them into what
-// the run record keeps -- a Capture: token usage, and whether the run
-// really finished. exportSessions preserves them verbatim into operator
-// storage when one is designated. Capture reshapes; export copies.
+// The attempt's sessions are opencode's own record of the run, fetched
+// once after the model process exits and read two ways. captureSessions
+// distills them into what the run record keeps -- a Capture: token usage,
+// and whether the run really finished. exportSessions preserves them
+// verbatim into operator storage when one is designated. Capture reshapes;
+// export copies; both work from the same fetch, so they can never disagree
+// about the same attempt.
 
 package runner
 
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
@@ -40,37 +43,29 @@ type Capture struct {
 	Failure string
 }
 
-// captureSessions distills the attempt's sessions. The store is
-// attempt-scoped (the home is fresh per attempt), and an unreadable one
-// says nothing -- bookkeeping must never fail a run. A capture that fails
-// open is silent by design, but the two things it costs -- usage
-// reporting, and the "did the session end cleanly" check -- are worth a
-// line: log carries what the return value can't.
-func captureSessions(oc opencodeExec, log *slog.Logger) Capture {
-	sessions, err := sessionMessages(oc)
-	if err != nil {
-		log.Warn("session capture unavailable -- no usage recorded and the session-outcome check did not run", "error", err)
-	} else if len(sessions) == 0 {
-		log.Debug("attempt left no sessions")
-	}
-	return summarize(sessions)
+// sessionExport is one session's export payload, complete JSON as opencode
+// rendered it. Fetched once and shared: capture reads its messages, export
+// writes it verbatim.
+type sessionExport struct {
+	id  string
+	raw []byte
 }
 
-// sessionMessages asks opencode for the attempt's sessions: `session
-// list --format json` names them, and `export` prints {info, messages}
-// for each, returned one message group per session in list order. The
-// list is ordered most-recently-updated first (verified against the
-// pinned 1.18.3), so the first group belongs to the session that acted
-// last. The fresh home normally holds exactly one session -- the run's
-// own -- but reading every listed one keeps the sum honest if it ever
-// holds more. The list surfaces top-level sessions only (`svc.list({roots:
-// true})`), so a subagent's child session is invisible here -- its
-// consumption is not capturable through the CLI, and no child can dilute
-// the session-outcome check either. A non-nil error means the surface
-// itself couldn't be read -- exec failure or unparseable JSON. No sessions
-// yet is not an error: (nil, nil).
-func sessionMessages(oc opencodeExec) ([][]assistantInfo, error) {
-	raw, err := oc("session", "list", "--format", "json")
+// fetchSessions asks opencode for the attempt's sessions: `session list
+// --format json` names them, and `export` prints {info, messages} for
+// each, returned in list order. The list is ordered most-recently-updated
+// first (verified against the pinned 1.18.3), so the first export belongs
+// to the session that acted last. The fresh home normally holds exactly
+// one session -- the run's own -- but fetching every listed one keeps the
+// usage sum honest if it ever holds more. The list surfaces top-level
+// sessions only (`svc.list({roots: true})`), so a subagent's child session
+// is invisible here -- its consumption is not capturable through the CLI,
+// and no child can dilute the session-outcome check either. A non-nil
+// error means part of the surface couldn't be read; the exports that did
+// arrive are still returned, and each caller decides what a partial read
+// is worth. No sessions yet is not an error: (nil, nil).
+func fetchSessions(oc opencodeExec, log *slog.Logger) ([]sessionExport, error) {
+	raw, err := completeJSON(oc, log, "session", "list", "--format", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -80,21 +75,82 @@ func sessionMessages(oc opencodeExec) ([][]assistantInfo, error) {
 	if err := json.Unmarshal(raw, &sessions); err != nil {
 		return nil, err
 	}
-	var groups [][]assistantInfo
+	var exports []sessionExport
+	var firstErr error
 	for _, s := range sessions {
 		if s.ID == "" {
 			continue
 		}
-		raw, err := oc("export", s.ID)
+		raw, err := completeJSON(oc, log, "export", s.ID)
 		if err != nil {
-			return nil, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
+		exports = append(exports, sessionExport{id: s.ID, raw: raw})
+	}
+	return exports, firstErr
+}
+
+// completeJSON runs one opencode subcommand whose contract is a JSON
+// document on stdout, and refuses a truncated one. opencode's CLI can drop
+// the tail of that document -- it exits without draining its final stdout
+// write -- and the exec variants defeat this by handing it a file instead
+// of a pipe (see runToFile); the check here is the backstop for any
+// surface the file cannot cover. The loss is a race against the drain, so
+// one fresh invocation usually returns the whole document.
+func completeJSON(oc opencodeExec, log *slog.Logger, args ...string) ([]byte, error) {
+	raw, err := oc(args...)
+	if err != nil {
+		return nil, err
+	}
+	if json.Valid(raw) {
+		return raw, nil
+	}
+	log.Warn("opencode returned truncated JSON -- retrying", "args", strings.Join(args, " "), "bytes", len(raw))
+	raw, err = oc(args...)
+	if err != nil {
+		return nil, err
+	}
+	if json.Valid(raw) {
+		return raw, nil
+	}
+	return nil, fmt.Errorf("opencode %s returned truncated JSON twice (%d bytes)", strings.Join(args, " "), len(raw))
+}
+
+// captureSessions distills the attempt's fetched sessions. The store is
+// attempt-scoped (the home is fresh per attempt), and an unreadable one
+// says nothing -- bookkeeping must never fail a run. Any fetch failure
+// empties the whole capture even when some exports arrived, because a
+// partial sum is a silently wrong usage record. A capture that fails open
+// is silent by design, but the two things it costs -- usage reporting, and
+// the "did the session end cleanly" check -- are worth a line: log carries
+// what the return value can't.
+func captureSessions(exports []sessionExport, fetchErr error, log *slog.Logger) Capture {
+	sessions, err := sessionMessages(exports, fetchErr)
+	if err != nil {
+		log.Warn("session capture unavailable -- no usage recorded and the session-outcome check did not run", "error", err)
+	} else if len(sessions) == 0 {
+		log.Debug("attempt left no sessions")
+	}
+	return summarize(sessions)
+}
+
+// sessionMessages reads each export's message records, one group per
+// session in fetch order.
+func sessionMessages(exports []sessionExport, fetchErr error) ([][]assistantInfo, error) {
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+	var groups [][]assistantInfo
+	for _, s := range exports {
 		var export struct {
 			Messages []struct {
 				Info assistantInfo `json:"info"`
 			} `json:"messages"`
 		}
-		if err := json.Unmarshal(raw, &export); err != nil {
+		if err := json.Unmarshal(s.raw, &export); err != nil {
 			return nil, err
 		}
 		msgs := make([]assistantInfo, len(export.Messages))
@@ -239,35 +295,27 @@ const EnvSessionDir = "OPENROUTINES_SESSION_DIR"
 // that could climb out of the attempt's directory names no file.
 var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// exportSessions saves the attempt's session history into operator storage
-// and returns the directory it landed in -- "" when no session dir is
-// designated, the attempt left no sessions, or storage is broken. The
-// exports run in the supervisor's process after the attempt ends: the model
+// exportSessions saves the attempt's fetched session history into operator
+// storage and returns the directory it landed in -- "" when no session dir
+// is designated, the attempt left no sessions, or storage is broken. The
+// writes run in the supervisor's process after the attempt ends: the model
 // process never touches the volume, so no sandbox grant or container mount
 // ever exposes it. Best-effort throughout -- broken operator storage must
 // never fail the run. An export that fails partway still names its
 // directory (the record points at what survived; the log carries the
 // warning), but one that lands no file at all names nothing, because an
 // empty directory is not a record.
-func exportSessions(meta Meta, oc opencodeExec, log *slog.Logger) string {
+func exportSessions(meta Meta, exports []sessionExport, fetchErr error, log *slog.Logger) string {
 	root := os.Getenv(EnvSessionDir)
 	if root == "" {
 		return ""
 	}
-	raw, err := oc("session", "list", "--format", "json")
-	if err != nil {
-		log.Warn("listing the attempt's sessions failed -- sessions not preserved", "error", err)
-		return ""
-	}
-	var sessions []struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(raw, &sessions); err != nil {
-		log.Warn("unreadable session list -- sessions not preserved", "error", err)
-		return ""
-	}
-	if len(sessions) == 0 {
-		log.Debug("attempt left no sessions to export")
+	if len(exports) == 0 {
+		if fetchErr != nil {
+			log.Warn("reading the attempt's sessions failed -- sessions not preserved", "error", fetchErr)
+		} else {
+			log.Debug("attempt left no sessions to export")
+		}
 		return ""
 	}
 	dir := filepath.Join(root, meta.RunID+"."+meta.AttemptID)
@@ -284,9 +332,10 @@ func exportSessions(meta Meta, oc opencodeExec, log *slog.Logger) string {
 		return ""
 	}
 	wrote := false
-	var firstErr error
-	for _, s := range sessions {
-		if err := exportSession(oc, s.ID, dir); err != nil {
+	// A session the fetch could not read is already an incomplete export.
+	firstErr := fetchErr
+	for _, s := range exports {
+		if err := writeExport(dir, s); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -304,16 +353,12 @@ func exportSessions(meta Meta, oc opencodeExec, log *slog.Logger) string {
 	return dir
 }
 
-// exportSession writes one session's export into the attempt's directory.
+// writeExport writes one session's export into the attempt's directory.
 // Owner-only: verbatim, unscrubbed sessions are as sensitive as the
 // credentials the routine could see.
-func exportSession(oc opencodeExec, id, dir string) error {
-	if !sessionIDPattern.MatchString(id) {
-		return fmt.Errorf("session id %q is not a safe filename", id)
+func writeExport(dir string, s sessionExport) error {
+	if !sessionIDPattern.MatchString(s.id) {
+		return fmt.Errorf("session id %q is not a safe filename", s.id)
 	}
-	raw, err := oc("export", id)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, id+".json"), raw, 0o600)
+	return os.WriteFile(filepath.Join(dir, s.id+".json"), s.raw, 0o600)
 }

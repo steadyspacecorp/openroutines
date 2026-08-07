@@ -660,9 +660,10 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// opencode exits 0 on a session whose agent loop died mid-turn. The
 	// session record is what says whether the run actually finished (design
 	// decision "A run is completed only when its session ended cleanly").
-	capture := captureSessions(ocExec, attemptLog)
+	sessions, fetchErr := fetchSessions(ocExec, attemptLog)
+	capture := captureSessions(sessions, fetchErr, attemptLog)
 	res.Usage = capture.Usage
-	res.SessionsDir = exportSessions(meta, ocExec, attemptLog)
+	res.SessionsDir = exportSessions(meta, sessions, fetchErr, attemptLog)
 	if res.Outcome == Completed && capture.Failure != "" {
 		res.Outcome = Crashed
 		res.Hint = capture.Failure
