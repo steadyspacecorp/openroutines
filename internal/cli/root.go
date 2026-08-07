@@ -21,6 +21,7 @@ Usage:
   openroutines configure            fill in openroutines.yml, generate the master key
   openroutines check                validate the agent; made for CI
   openroutines status               show what the agent has and still needs
+  openroutines knowledge            inspect and summarize knowledge from origin
   openroutines usage                token use and reported cost per routine (--json)
   openroutines sync                 pull the agent's latest knowledge from origin (--push)
   openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
@@ -47,6 +48,7 @@ var commands = map[string]func([]string) int{
 	"routine":             cmdRoutines,
 	"supervise":           cmdSupervise,
 	"status":              cmdStatus,
+	"knowledge":           cmdKnowledge,
 	"usage":               cmdUsage,
 	"sync":                cmdSync,
 	"skills":              cmdSkills,
