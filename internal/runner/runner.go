@@ -61,6 +61,7 @@ type Meta struct {
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
 	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
+	Rehearsal      string // fixture path; set only for manual rehearsal runs
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -388,6 +389,15 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		if err := prepareSchedule(dir, workspace, r, agent.Timezone, time.Now()); err != nil {
 			return fmt.Errorf("forward schedule: %w", err)
 		}
+		if meta.Rehearsal != "" {
+			fixture, err := os.ReadFile(meta.Rehearsal)
+			if err != nil {
+				return fmt.Errorf("rehearsal fixture: %w", err)
+			}
+			if err := os.WriteFile(filepath.Join(workspace, RehearsalFileName), fixture, 0o444); err != nil {
+				return fmt.Errorf("rehearsal fixture: %w", err)
+			}
+		}
 		return nil
 	}(); err != nil {
 		return nil, err
@@ -592,12 +602,29 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	return res, staging, nil
 }
 
+// RehearsalFileName is the fixture document injected into a rehearsal
+// run's workspace; rehearsalPreamble frames it, prepended to the routine's
+// own prompt so the rules stay the routine's and only the world is swapped.
+const RehearsalFileName = "rehearsal.md"
+
+const rehearsalPreamble = `REHEARSAL RUN. The fixtures in ./rehearsal.md replace every outside read
+for this run -- including ./changes.md and ./schedule.md wherever the
+fixtures provide stand-ins. You have no credentials, no MCP servers, no
+skills, and no web access; do not attempt external calls, the fixtures
+are the world. Nothing you produce leaves the run: knowledge writes are
+discarded. Follow the routine below exactly, against the fixtures.
+
+`
+
 // Run executes routine `name` manually. skipKnowledge discards staged knowledge
 // writes and the run record after the otherwise ordinary run completes.
+// rehearsal, when non-empty, is a fixture path: the routine runs with every
+// grant stripped, the fixture injected, and knowledge always discarded --
+// the same rules against a simulated world.
 // Inside the production container a manual run reserves the manual attempt
 // identity first, so it can never share a uid with a supervisor slot.
-func Run(dir, name string, skipKnowledge bool) (result *Result, err error) {
-	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
+func Run(dir, name string, skipKnowledge bool, rehearsal string) (result *Result, err error) {
+	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01", Rehearsal: rehearsal}
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
 		if err != nil {
@@ -613,6 +640,21 @@ func Run(dir, name string, skipKnowledge bool) (result *Result, err error) {
 	r, err := routine.Find(dir, name)
 	if err != nil {
 		return nil, err
+	}
+	if rehearsal != "" {
+		// The routine keeps its rules; the rehearsal swaps its world. Grants
+		// are stripped at the source so the existing pipeline enforces them:
+		// no credentials resolve, no MCP servers mount, the generated
+		// definition denies skills and web access, and nothing settles.
+		rr := *r
+		rr.FM.Credentials = nil
+		rr.FM.MCP = nil
+		rr.FM.Skills = nil
+		rr.FM.Webfetch = false
+		rr.FM.Websearch = false
+		rr.Body = rehearsalPreamble + r.Body
+		r = &rr
+		skipKnowledge = true
 	}
 	// One attempt per routine at a time (design decision "Overlap"), held for
 	// the whole lifecycle -- snapshot through import and settlement. The

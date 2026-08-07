@@ -111,6 +111,19 @@ openroutines routines run doc-drift --write-knowledge   # knowledge writes are s
 
 Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; the flag changes only what happens afterward. By default a manual run discards its staged knowledge writes and run record -- the terminal is the iteration path, and iterating must not teach the agent or consume its change feed by accident. Pass `--write-knowledge` when the run should count. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target.
 
+## Rehearsals
+
+A rehearsal runs the real routine against fixture data with the outside world unplugged -- for auditioning models, testing prompt changes, and exercising judgment calls without waiting for a live fire or touching anything real.
+
+```bash
+openroutines routines run steady-check-in --rehearse             # rehearsals/steady-check-in.md
+openroutines routines run announcements --rehearse cold-start    # rehearsals/announcements/cold-start.md
+```
+
+Fixtures bind to routines by name. One fixture is a flat file, `rehearsals/<name>.md`. A routine that earns multiple scenarios graduates to a directory: `rehearsals/<name>/default.md` plus named scenarios. A fixture is ordinary markdown describing the simulated world -- the knowledge state, the pending changes, the schedule, a frozen "work as if it is ..." moment -- in whatever shape the routine's inputs take.
+
+In rehearse mode the run has no credentials, no MCP servers, no skills, and no web access; the fixture arrives as read-only `./rehearsal.md` and a standing preamble tells the model it replaces every outside read. Nothing settles -- no knowledge writes, no feed consumption, no run record -- so rehearsing is always safe to repeat. `check` warns when a fixture's name matches no routine, which is how you learn a rename stranded one.
+
 ## Recording work
 
 Every run carries a standing instruction that routes what the routine wants to remember into the agent's knowledge primitives -- events, tasks, context, and the routine's private ledger. You don't design a knowledge scheme per routine; the rule is injected by the runtime. [Knowledge](knowledge.md) covers the primitives; [Your agent on the team](teamwork.md) covers how recorded work becomes reports.

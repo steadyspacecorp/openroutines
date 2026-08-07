@@ -91,6 +91,28 @@ func TestCheckMarksInactiveRoutinesWithACircle(t *testing.T) {
 	}
 }
 
+// A rehearsal fixture bound to no routine is drift -- the routine was
+// renamed or removed out from under it.
+func TestCheckWarnsOnOrphanedRehearsalFixtures(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
+	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
+	os.WriteFile(filepath.Join(dir, "routines", "digest.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\n---\nDigest.\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "rehearsals", "gone"), 0o755)
+	os.WriteFile(filepath.Join(dir, "rehearsals", "digest.md"), []byte("fixtures"), 0o644)
+	os.WriteFile(filepath.Join(dir, "rehearsals", "missing.md"), []byte("fixtures"), 0o644)
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, "rehearsals/missing.md matches no routine") ||
+		!strings.Contains(out, "rehearsals/gone/ matches no routine") {
+		t.Fatalf("orphaned fixtures should warn:\n%s", out)
+	}
+	if strings.Contains(out, "rehearsals/digest.md matches") {
+		t.Fatalf("a bound fixture must not warn:\n%s", out)
+	}
+}
+
 func TestCheckWarnsOnTimeoutsAboveTheCeiling(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML+"max_timeout: 1h\n"), 0o644)
