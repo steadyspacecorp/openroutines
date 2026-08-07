@@ -25,7 +25,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -484,8 +483,7 @@ func frameworkEnv(timezone string, r *routine.Routine, meta Meta) []string {
 func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStaging *Staging, err error) {
 	r, meta, staging := sr.r, sr.meta, sr.staging
 	dir := sr.dir
-	workspace, runTmp, env, ocArgs := sr.workspace, sr.runTmp, sr.env, sr.ocArgs
-	attemptHome := filepath.Join(workspace, attemptHomeName)
+	ocArgs := sr.ocArgs
 	model, timeout, secrets := sr.model, sr.timeout, sr.secrets
 	defer secrets.release()
 	ok := false
@@ -502,90 +500,11 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		ocArgs = append(slices.Clip(ocArgs), "--format", "json")
 	}
 
-	// Spawn the model process: in the runtime container by default (the
-	// container boundary is the trust boundary), natively inside the
-	// production image or when a contributor opts out.
-	var cmd *exec.Cmd
-	containerName := ""
-	var ocExec opencodeExec // how capture and session export reach opencode after the run
-	if nativeMode() {
-		if _, err := exec.LookPath("opencode"); err != nil {
-			return nil, nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
-		}
-		home := os.Getenv("HOME")
-		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-			// Production: the model process runs behind the Landlock shim --
-			// our own binary applies the rules to itself, then execs opencode.
-			// See design decision "Runs are sandboxed" for the fail-closed policy.
-			//
-			// HOME is a disposable per-attempt directory inside the workspace:
-			// a shared writable opencode home let one routine persist state --
-			// plugins included -- into a later routine's session. Provider
-			// auth arrives by env var, so opencode needs no durable home.
-			ocExec = hostOpencodeExec(workspace)
-			ro, rw := sandbox.Paths(workspace, staging.KnowledgeDir, runTmp, home, attemptHome)
-			cmd = exec.Command(sandbox.HelperPath, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
-			cmd.Env = slices.Concat(env, []string{
-				"PATH=" + os.Getenv("PATH"),
-				"HOME=" + attemptHome,
-				"XDG_DATA_HOME=" + filepath.Join(attemptHome, ".local", "share"),
-				"XDG_CONFIG_HOME=" + filepath.Join(attemptHome, ".config"),
-				"XDG_CACHE_HOME=" + filepath.Join(attemptHome, ".cache"),
-				"TMPDIR=" + runTmp,
-				sandbox.EnvRO + "=" + sandbox.JoinPaths(ro),
-				sandbox.EnvRW + "=" + sandbox.JoinPaths(rw),
-				sandbox.EnvAttemptUID + "=" + strconv.FormatUint(uint64(meta.AttemptUID), 10),
-				sandbox.EnvUnsafeOverride + "=" + os.Getenv(sandbox.EnvUnsafeOverride),
-			})
-		} else {
-			// OPENROUTINES_NATIVE=1: an explicit, unconfined dev opt-in
-			// (local user runs are confined by the run container instead).
-			// The developer's real HOME stays: their opencode auth lives
-			// there -- which also means the session lands in their own
-			// store, reached after the run by working directory (opencode
-			// scopes `session list` to the directory a session ran in, and
-			// the workspace is this attempt's alone).
-			ocExec = nativeOpencodeExec(workspace)
-			cmd = exec.Command("opencode", ocArgs...)
-			cmd.Env = slices.Concat(env, []string{
-				"PATH=" + os.Getenv("PATH"),
-				"HOME=" + home,
-				"TMPDIR=" + runTmp,
-			})
-		}
-		cmd.Dir = workspace
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-			cmd.SysProcAttr.Credential = &syscall.Credential{
-				Uid: meta.AttemptUID,
-				Gid: meta.AttemptUID,
-			}
-		}
-	} else {
-		if _, err := exec.LookPath("docker"); err != nil {
-			return nil, nil, fmt.Errorf("docker is required to run routines -- the model process executes in a container (see README prerequisites); contributors with opencode installed locally can set OPENROUTINES_NATIVE=1")
-		}
-		image := runtimeImageTag(sr.dir)
-		if err := ensureRuntimeImage(sr.dir, image); err != nil {
-			return nil, nil, err
-		}
-		// Pre-create the attempt home world-writable: the container's agent
-		// uid (10001) is not the host user's, and the workspace is a bind
-		// mount discarded after the run.
-		for _, p := range []string{
-			filepath.Join(workspace, attemptHomeName),
-			filepath.Join(workspace, attemptHomeName, ".local"),
-			filepath.Join(workspace, attemptHomeName, ".local", "share"),
-		} {
-			if err := os.MkdirAll(p, 0o777); err != nil {
-				return nil, nil, err
-			}
-			_ = os.Chmod(p, 0o777)
-		}
-		containerName = "openroutines-" + meta.RunID
-		ocExec = containerOpencodeExec(workspace, image)
-		cmd = containerCmd(containerName, workspace, image, env, ocArgs)
+	plan, err := sr.spawn(ocArgs)
+	if err != nil {
+		return nil, nil, err
 	}
+	cmd := plan.cmd
 	// stderr carries opencode's diagnostic log (--print-logs): each line
 	// passes through to the log stream with the attempt's identity
 	// appended, scrubbed first -- and with it every failure's diagnostics,
@@ -609,8 +528,8 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	attemptLog := r.Log().With("run_id", meta.RunID)
 	done := make(chan error, 1)
 	kill := func() {
-		if containerName != "" {
-			stopContainer(containerName)
+		if plan.container != "" {
+			stopContainer(plan.container)
 			killClient(cmd, containerExitGrace, done, attemptLog)
 		} else {
 			killGroup(cmd, 10*time.Second, done, attemptLog)
@@ -644,7 +563,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		// validates and imports it. The attempt ends with its whole process
 		// group whichever way it ended. (In container mode the run's pid
 		// namespace dies with `docker run --rm`, which does this already.)
-		if containerName == "" {
+		if plan.container == "" {
 			reapGroup(cmd)
 		}
 	case <-time.After(timeout):
@@ -666,7 +585,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	// opencode exits 0 on a session whose agent loop died mid-turn. The
 	// session record is what says whether the run actually finished (design
 	// decision "A run is completed only when its session ended cleanly").
-	sessions, fetchErr := fetchSessions(ocExec, attemptLog)
+	sessions, fetchErr := fetchSessions(plan.sessions, attemptLog)
 	capture := captureSessions(sessions, fetchErr, attemptLog)
 	res.Usage = capture.Usage
 	res.SessionsDir = exportSessions(meta, sessions, fetchErr, attemptLog)
