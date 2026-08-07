@@ -98,6 +98,7 @@ Day to day:
 
 ```bash
 openroutines status                   # master key, models, routines and what they owe, skills, knowledge sync state, token usage
+openroutines knowledge                # summarize or browse the latest knowledge directly from origin
 openroutines sync                     # pull the latest knowledge; knowledge/ledgers/check-in.md holds the last check-in
 openroutines routines list            # also: edit, activate, deactivate, remove
 openroutines routines run <name>      # real external actions; knowledge discarded (--write-knowledge settles)

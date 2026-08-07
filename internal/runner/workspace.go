@@ -183,6 +183,16 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	fmt.Fprintf(&b, "description: Generated for routine %s -- derived from frontmatter, do not edit\n", r.Name)
 	b.WriteString("mode: primary\n")
 	b.WriteString("permission:\n")
+	if attempt.ReadOnly {
+		// A knowledge briefing reads its prepared snapshot and nothing else.
+		// Provider traffic is the harness, not a model tool. Start closed so a
+		// new built-in tool cannot accidentally add authority to this surface;
+		// the last matching rule wins, so the three readers reopen afterwards.
+		b.WriteString("  \"*\": deny\n")
+		for _, tool := range []string{"read", "glob", "grep"} {
+			fmt.Fprintf(&b, "  %s: allow\n", tool)
+		}
+	}
 	// Web access is a grant, not a default: opencode allows webfetch out of
 	// the box, and fetched content is a prompt-injection vector.
 	for _, w := range []struct {
