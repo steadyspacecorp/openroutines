@@ -106,10 +106,10 @@ The runtime handles the knowledge rules automatically, so write the prompt as th
 
 ```bash
 openroutines routines run doc-drift                 # knowledge writes are kept
-openroutines routines run doc-drift --no-knowledge     # knowledge writes are discarded
+openroutines routines run doc-drift --skip-knowledge     # knowledge writes are discarded
 ```
 
-Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; `--no-knowledge` changes only what happens afterward, discarding staged knowledge writes and the run record. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target and use `--no-knowledge` when you do not want the result retained in agent knowledge.
+Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; `--skip-knowledge` changes only what happens afterward, discarding staged knowledge writes and the run record. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target and use `--skip-knowledge` when you do not want the result retained in agent knowledge.
 
 ## Recording work
 
