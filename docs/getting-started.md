@@ -88,7 +88,7 @@ openroutines routines new doc-drift
 
 Edit the generated file -- schedule and scope in the frontmatter, prompt in the body -- then run it once locally. The local run uses the same runtime image, opencode version, constructed environment, and assembled workspace as production.
 
-`routines run` starts opencode in a disposable Docker container. It is always a real run with the routine's credentials and tools; `--skip-knowledge` discards only its staged knowledge writes and run record.
+`routines run` starts opencode in a disposable Docker container. It is always a real run with the routine's credentials and tools. A manual run discards its staged knowledge writes and run record; pass `--write-knowledge` when the run should count.
 
 ```bash
 openroutines routines run doc-drift
@@ -100,8 +100,7 @@ Day to day:
 openroutines status                   # master key, models, routines and what they owe, skills, knowledge sync state, token usage
 openroutines sync                     # pull the latest knowledge; knowledge/ledgers/check-in.md holds the last check-in
 openroutines routines list            # also: edit, activate, deactivate, remove
-openroutines routines run <name> --skip-knowledge
-                                      # real external actions; knowledge discarded
+openroutines routines run <name>      # real external actions; knowledge discarded (--write-knowledge settles)
 openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove
 openroutines credentials set <name>   # add/replace one encrypted secret; also: list, remove
 openroutines usage                    # token use and reported cost per routine; --json for scripts
