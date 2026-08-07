@@ -51,6 +51,13 @@ type sessionExport struct {
 	raw []byte
 }
 
+// opencodeExec runs one opencode subcommand in the attempt's context after
+// the model process exits -- the contract everything below fetches through.
+// The spawn path picks the implementation for where opencode exists
+// (sessions_exec.go: on PATH in the production container and in native dev
+// mode, via the runtime image for local runs) and returns its stdout.
+type opencodeExec func(args ...string) ([]byte, error)
+
 // fetchSessions asks opencode for the attempt's sessions: `session list
 // --format json` names them, and `export` prints {info, messages} for
 // each, returned in list order. The list is ordered most-recently-updated

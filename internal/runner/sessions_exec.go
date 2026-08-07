@@ -1,3 +1,8 @@
+// The three ways a session fetch reaches opencode -- one opencodeExec
+// implementation per deployment mode, plus the hygiene they share. This
+// file serves sessions.go and nobody else; the routine run's own opencode
+// invocation is the spawn path's business (runner.go, container.go).
+
 package runner
 
 import (
@@ -13,19 +18,6 @@ import (
 	"syscall"
 	"time"
 )
-
-// attemptHomeName is the disposable per-attempt home inside the run
-// workspace. Production created it for sandbox hygiene (alpha.22); local
-// container runs point HOME here too, which is what keeps the attempt's
-// session data readable after the container exits.
-const attemptHomeName = ".home"
-
-// opencodeExec runs one opencode subcommand in the attempt's context after
-// the model process exits -- session capture and export reach opencode
-// through it. The spawn path decides where opencode exists (on PATH in the
-// production container and in native dev mode, via the runtime image for
-// local runs) and returns its stdout.
-type opencodeExec func(args ...string) ([]byte, error)
 
 // captureTimeout bounds each capture exec: a hung docker or opencode must
 // not stall the supervisor's tick.

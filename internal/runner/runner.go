@@ -289,6 +289,12 @@ func (sr *StagedRun) Discard() error {
 	return sr.staging.Cleanup()
 }
 
+// attemptHomeName is the disposable per-attempt home inside the run
+// workspace. Production created it for sandbox hygiene (alpha.22); local
+// container runs point HOME here too, which is what keeps the attempt's
+// session data readable after the container exits.
+const attemptHomeName = ".home"
+
 // Stage prepares one attempt without spawning anything. mu is the caller's
 // knowledge lock, held only around the section that reads the knowledge worktree
 // and supervisor-owned state -- credential resolution can spend seconds on
