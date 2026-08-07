@@ -71,6 +71,26 @@ func TestCheckNamesBinaryPinMismatchFirst(t *testing.T) {
 	}
 }
 
+// An inactive routine is valid but will never run: it gets a circle, not
+// a check mark, so a parked reporter can't read as one that will fire.
+func TestCheckMarksInactiveRoutinesWithACircle(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
+	os.MkdirAll(filepath.Join(dir, "routines"), 0o755)
+	os.WriteFile(filepath.Join(dir, "routines", "parked.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\nactive: false\n---\nWait.\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "routines", "live.md"), []byte(
+		"---\nschedule: \"0 9 * * *\"\n---\nGo.\n"), 0o644)
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, "○ parked") || strings.Contains(out, "✓ parked") {
+		t.Fatalf("inactive routine should get a circle:\n%s", out)
+	}
+	if !strings.Contains(out, "✓ live") {
+		t.Fatalf("active routine should keep the check mark:\n%s", out)
+	}
+}
+
 func TestCheckWarnsOnTimeoutsAboveTheCeiling(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML+"max_timeout: 1h\n"), 0o644)
