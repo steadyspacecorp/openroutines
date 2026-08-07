@@ -1,10 +1,10 @@
 // How the runner executes opencode -- one implementation per deployment
 // mode, minted once per attempt. Each mode answers for the whole
-// lifecycle: run spawns the model process, kill and reap end it, sessions
-// reads back what it left. run and sessions share the mode's facts but
-// point in opposite trust directions: run builds the attempt's confined
-// world, sessions is the supervisor's way back in that the attempt must
-// not influence.
+// lifecycle: run spawns the model process, kill and reap end it, exec runs
+// the supervisor's follow-up subcommands. run and exec share the mode's
+// facts but point in opposite trust directions: run builds the attempt's
+// confined world, exec is the supervisor's way back in that the attempt
+// must not influence.
 
 package runner
 
@@ -28,14 +28,15 @@ import (
 
 // opencode is one attempt's grip on its opencode runtime. run hands back
 // the model process ready to start; kill ends it the way the mode demands
-// and reap sweeps what it left behind; sessions runs one bookkeeping
-// subcommand against the attempt's session store afterward (the
-// opencodeExec contract fetchSessions consumes).
+// and reap sweeps what it left behind; exec runs any one subcommand to
+// completion as the supervisor afterward and returns its stdout. The
+// runtime doesn't know what its consumers ask -- sessions.go is one,
+// fetching through the opencodeExec contract exec happens to satisfy.
 type opencode interface {
 	run(ocArgs []string) *exec.Cmd
 	kill(cmd *exec.Cmd, done chan error, log *slog.Logger)
 	reap(cmd *exec.Cmd)
-	sessions(args ...string) ([]byte, error)
+	exec(args ...string) ([]byte, error)
 }
 
 // opencode picks the attempt's deployment mode and checks its
@@ -109,7 +110,7 @@ type hostOpencode struct {
 }
 
 // home is the disposable per-attempt HOME inside the workspace -- the fact
-// both paths share: run lives in it, sessions reads the store under it.
+// both paths share: run lives in it, exec reads the store under it.
 func (h hostOpencode) home() string { return filepath.Join(h.workspace, attemptHomeName) }
 
 func (h hostOpencode) dataHome() string { return filepath.Join(h.home(), ".local", "share") }
@@ -145,12 +146,12 @@ func (h hostOpencode) run(ocArgs []string) *exec.Cmd {
 	return cmd
 }
 
-// sessions runs one bookkeeping subcommand with a minted hygiene HOME:
-// this exec is not sandboxed -- it is an ordinary child of the supervisor
-// -- so it must not take its home from the attempt (see captureHome). The
-// session store is reached by XDG_DATA_HOME instead: that path carries the
-// attempt's data, never its code.
-func (h hostOpencode) sessions(args ...string) ([]byte, error) {
+// exec runs one subcommand with a minted hygiene HOME: this process is not
+// sandboxed -- it is an ordinary child of the supervisor -- so it must not
+// take its home from the attempt (see captureHome). The attempt's store is
+// reached by XDG_DATA_HOME instead: that path carries the attempt's data,
+// never its code.
+func (h hostOpencode) exec(args ...string) ([]byte, error) {
 	gid := attemptGroup(h.home())
 	home, cleanup, err := captureHome(h.workspace, gid)
 	if err != nil {
@@ -185,7 +186,7 @@ func (h hostOpencode) sessions(args ...string) ([]byte, error) {
 	return runToFile(cmd)
 }
 
-// captureHome mints the HOME one sessions exec runs with: an empty,
+// captureHome mints the HOME one capture exec runs with: an empty,
 // supervisor-owned directory the attempt never had write access to.
 //
 // opencode auto-loads plugins from its config dir at startup, `session
@@ -285,7 +286,7 @@ func (n nativeOpencode) run(ocArgs []string) *exec.Cmd {
 	return cmd
 }
 
-func (n nativeOpencode) sessions(args ...string) ([]byte, error) {
+func (n nativeOpencode) exec(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "opencode", args...)
@@ -344,19 +345,19 @@ func (c containerOpencode) kill(cmd *exec.Cmd, done chan error, log *slog.Logger
 // which reaps every descendant already.
 func (c containerOpencode) reap(*exec.Cmd) {}
 
-// captureHomeMount is where the sessions exec's empty home lives inside
+// captureHomeMount is where the capture exec's empty home lives inside
 // the runtime image -- deliberately outside /work, the attempt's
 // workspace.
 const captureHomeMount = "/capture-home"
 
-// captureOutName is where an in-container sessions exec's stdout lands,
+// captureOutName is where an in-container capture exec's stdout lands,
 // inside the mounted workspace. docker's own stdout is a pipe from the
 // container runtime to the client, so the file that defeats opencode's
 // lossy exit (see runToFile) has to sit on opencode's side of that
 // boundary.
 const captureOutName = ".capture-out"
 
-func (c containerOpencode) sessions(args ...string) ([]byte, error) {
+func (c containerOpencode) exec(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
 	defer cancel()
 	// The workspace is model-written, so clear the landing path first:
@@ -402,11 +403,11 @@ func (processGroup) kill(cmd *exec.Cmd, done chan error, log *slog.Logger) {
 
 func (processGroup) reap(cmd *exec.Cmd) { reapGroup(cmd) }
 
-// captureTimeout bounds each sessions exec: a hung docker or opencode must
+// captureTimeout bounds each capture exec: a hung docker or opencode must
 // not stall the supervisor's tick.
 const captureTimeout = 30 * time.Second
 
-// runToFile runs one sessions exec with its stdout connected to a plain
+// runToFile runs one capture exec with its stdout connected to a plain
 // file and returns what landed there. opencode's CLI calls process.exit()
 // as soon as its command handler returns, without draining the final
 // stdout write -- and stream writes to a pipe are asynchronous, so a large
@@ -443,7 +444,7 @@ func runToFile(cmd *exec.Cmd) ([]byte, error) {
 	return io.ReadAll(out)
 }
 
-// execError keeps what a failed sessions exec said on stderr: the log line
+// execError keeps what a failed capture exec said on stderr: the log line
 // built from it is the only trace of why bookkeeping degraded.
 func execError(err error, stderr *bytes.Buffer) error {
 	if s := strings.TrimSpace(stderr.String()); s != "" {
