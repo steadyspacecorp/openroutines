@@ -1215,11 +1215,12 @@ func killClient(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.L
 }
 
 // signalTarget is the run's own process group, or the process alone when the
-// spawn path did not make it a group leader. Every spawn path that gets
-// signaled sets Setpgid today; the guard is there because signaling -pid
-// without it reaches the supervisor's own group and kills the supervisor.
+// spawn path did not make it a group leader. Setsid counts: a session leader
+// leads a fresh process group too, and the sandboxed spawn path uses it
+// (hostOpencode.run's TIOCSTI note). The guard is there because signaling -pid
+// without either reaches the supervisor's own group and kills the supervisor.
 func signalTarget(cmd *exec.Cmd) int {
-	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
+	if attr := cmd.SysProcAttr; attr != nil && (attr.Setpgid || attr.Setsid) {
 		return -cmd.Process.Pid
 	}
 	return cmd.Process.Pid
