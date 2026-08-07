@@ -69,7 +69,7 @@ These lines come out of the `knowledge` branch as your checkout last fetched it,
 
 ```
 openroutines knowledge
-openroutines knowledge summarize [--yes]
+openroutines knowledge summarize [--since 24h] [--yes]
 openroutines knowledge list [path] [--json]
 openroutines knowledge show <path>
 openroutines knowledge stats [--json]
@@ -77,7 +77,7 @@ openroutines knowledge stats [--json]
 
 Fetches and pins one read-only snapshot of `origin/knowledge` without adopting it into local `knowledge/`. In a terminal, the bare command opens a small interactive explorer with Summarize, Browse files, and View stats; when piped, it prints the overview and direct-command help. Every view names a local worktree that is behind, ahead, divergent, or uncommitted while still showing origin.
 
-`summarize` is an ephemeral briefing from the retained knowledge and current routine schedule, rendered by the agent's default model as Recently, Next, and Waiting on a human. It asks before spending tokens (`--yes` confirms non-interactively), prints the captured usage, and has no routine credentials, skills, MCP servers, web grants, knowledge writes, run record, or reporting cursor. `list` and `stats` offer JSON for scripts; `show` prints one file verbatim.
+`summarize` is an ephemeral briefing from the last 24 hours of knowledge changes and the current knowledge and routine schedule, rendered by the agent's default model as Recently, Next, and Waiting on a human. `--since` accepts another Go duration when a different window is useful. It asks before spending tokens (`--yes` confirms non-interactively), prints the captured usage, and has no routine credentials, skills, MCP servers, web grants, knowledge writes, run record, or reporting cursor. `list` and `stats` offer JSON for scripts; `show` prints one file verbatim.
 
 ## usage
 

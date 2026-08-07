@@ -81,6 +81,25 @@ func (m *Knowledge) FetchOriginSnapshot() (*OriginSnapshot, error) {
 // Close removes the exported temporary tree.
 func (s *OriginSnapshot) Close() error { return os.RemoveAll(s.Dir) }
 
+// ChangesSince renders the shared knowledge changes committed after cutoff.
+// It is context for an ephemeral summary, not a reporting cursor: repeated
+// calls intentionally cover the same window.
+func (s *OriginSnapshot) ChangesSince(cutoff time.Time) (string, error) {
+	args := append([]string{
+		"log", "--reverse", "--date=iso-strict",
+		"--format=commit %H%nwhen %cI%nsubject %s", "-p", "-U1", "--no-color",
+		"--since=" + cutoff.Format(time.RFC3339), s.Commit, "--", ".",
+	}, deliveryExcludes...)
+	out, err := git(s.repoDir, args...)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(out) == "" {
+		return "No shared knowledge changes were committed in this window.\n", nil
+	}
+	return out + "\n", nil
+}
+
 // Relation compares the local knowledge worktree with this snapshot without
 // changing either one.
 func (s *OriginSnapshot) Relation(m *Knowledge) SnapshotRelation {

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFetchOriginSnapshotDoesNotAdoptLocalKnowledge(t *testing.T) {
@@ -41,6 +42,10 @@ func TestFetchOriginSnapshotDoesNotAdoptLocalKnowledge(t *testing.T) {
 	}
 	if stats.Files == 0 || stats.SizeBytes < 128 || stats.LargestPath == "" {
 		t.Fatalf("stats = %+v", stats)
+	}
+	changes, err := snap.ChangesSince(time.Now().Add(-time.Hour))
+	if err != nil || !strings.Contains(changes, "remote fact") {
+		t.Fatalf("recent changes = %q, %v", changes, err)
 	}
 }
 
