@@ -30,13 +30,6 @@ func runtimeImageTag(agentDir string) string {
 	return "openroutines-runtime:" + pin
 }
 
-// nativeMode reports whether to spawn opencode directly instead of in a
-// container: inside the production image (which ships opencode), or when a
-// contributor explicitly opts out with OPENROUTINES_NATIVE=1.
-func nativeMode() bool {
-	return os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" || os.Getenv("OPENROUTINES_NATIVE") == "1"
-}
-
 // ensureRuntimeImage builds the Dockerfile's runtime stage (debian + git +
 // pinned opencode). Layer caching makes every build after the first fast --
 // but the first build downloads a Debian base and opencode, so say so: a
