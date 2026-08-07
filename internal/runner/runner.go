@@ -2,11 +2,11 @@
 // `openroutines routines run` and the supervisor.
 //
 // The pipeline (design decision "Appendix: one run, end to end"): assemble a
-// disposable run workspace (repo files plus a staged copy of memory, no git
+// disposable run workspace (repo files plus a staged copy of knowledge, no git
 // metadata anywhere), generate the opencode agent definition granting only
 // declared skills, construct a clean environment holding only declared
 // credentials, spawn headless opencode in its own process group with a
-// timeout, then let the caller validate-and-import memory or discard it.
+// timeout, then let the caller validate-and-import knowledge or discard it.
 package runner
 
 import (
@@ -34,8 +34,8 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
-	"github.com/steadyspacecorp/openroutines/internal/memory"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
@@ -118,12 +118,12 @@ var ErrFatal = errors.New("not retryable")
 // pool, or its next assignee could read the leftover tree.
 var ErrAttemptCleanup = errors.New("attempt workspace cleanup failed")
 
-// Staging is the attempt's staged memory, awaiting import or discard.
+// Staging is the attempt's staged knowledge, awaiting import or discard.
 type Staging struct {
-	MemoryDir string
+	KnowledgeDir string
 	// BaseDir is the pristine copy of the snapshot the run started from --
 	// supervisor-owned, outside the workspace the run can reach. The import
-	// diffs staged memory against it, so concurrent runs' settlements
+	// diffs staged knowledge against it, so concurrent runs' settlements
 	// compose instead of clobbering each other.
 	BaseDir   string
 	workspace string
@@ -132,7 +132,7 @@ type Staging struct {
 	// paths the model process chmodded away from the group.
 	attemptUID uint32
 
-	// ConsumerThrough is the memory commit the delivery change set was
+	// ConsumerThrough is the knowledge commit the delivery change set was
 	// prepared against -- set only for reporting routines, fixed before the
 	// run starts.
 	ConsumerThrough string
@@ -169,7 +169,7 @@ func (s *Staging) Cleanup() error {
 	}
 	if s.BaseDir != "" {
 		if err := os.RemoveAll(s.BaseDir); err != nil {
-			slog.Warn("could not remove the attempt's memory base snapshot", "path", s.BaseDir, "error", err)
+			slog.Warn("could not remove the attempt's knowledge base snapshot", "path", s.BaseDir, "error", err)
 		}
 	}
 	return nil
@@ -187,14 +187,14 @@ func reclaimAttemptTrees(uid uint32, root string) error {
 
 // Consumed reports whether the routine created the consume marker: its
 // explicit claim to have covered the whole injected change set. The canonical
-// location is the staged memory directory -- the one workspace path the
+// location is the staged knowledge directory -- the one workspace path the
 // filesystem sandbox leaves writable; the workspace root is still accepted
 // for unsandboxed runs.
 func (s *Staging) Consumed() bool {
-	if _, err := os.Stat(filepath.Join(s.MemoryDir, memory.ConsumeMarker)); err == nil {
+	if _, err := os.Stat(filepath.Join(s.KnowledgeDir, knowledge.ConsumeMarker)); err == nil {
 		return true
 	}
-	_, err := os.Stat(filepath.Join(s.workspace, memory.ConsumeMarker))
+	_, err := os.Stat(filepath.Join(s.workspace, knowledge.ConsumeMarker))
 	return err == nil
 }
 
@@ -204,10 +204,10 @@ type Result struct {
 	Outcome     Outcome
 	ExitCode    int
 	Duration    time.Duration
-	Commit      string            // memory commit hash, when one was made
-	Hint        string            // classified failure cause, when one was recognized
-	SessionsDir string            // the run's exported sessions, "" when no session dir is designated
-	Conflicted  []memory.Conflict // semantic edits preserved outside the canonical file
+	Commit      string               // knowledge commit hash, when one was made
+	Hint        string               // classified failure cause, when one was recognized
+	SessionsDir string               // the run's exported sessions, "" when no session dir is designated
+	Conflicted  []knowledge.Conflict // semantic edits preserved outside the canonical file
 }
 
 const runIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -271,11 +271,11 @@ func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Dura
 }
 
 // StagedRun is a fully prepared attempt: credentials resolved, workspace
-// built, memory snapshotted, changes and schedule written -- everything that
-// reads the memory worktree or supervisor-owned state is done by the time
+// built, knowledge snapshotted, changes and schedule written -- everything that
+// reads the knowledge worktree or supervisor-owned state is done by the time
 // Stage returns. Run spawns the model process and waits, touching neither
 // again, which is what lets attempts execute in parallel while staging and
-// settlement stay serialized behind the supervisor's memory lock (design
+// settlement stay serialized behind the supervisor's knowledge lock (design
 // decision "Overlap").
 type StagedRun struct {
 	dir       string
@@ -305,7 +305,7 @@ func (sr *StagedRun) Discard() error {
 }
 
 // Stage prepares one attempt without spawning anything. mu is the caller's
-// memory lock, held only around the section that reads the memory worktree
+// knowledge lock, held only around the section that reads the knowledge worktree
 // and supervisor-owned state -- credential resolution can spend seconds on
 // the network (a github_app derivation is two HTTPS round trips) and must
 // not hold up every other attempt's settlement. On error, everything Stage
@@ -345,13 +345,13 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 			secrets.release()
 		}
 	}()
-	mem := memory.At(dir)
+	mem := knowledge.At(dir)
 
 	workspace, err := os.MkdirTemp("", "openroutines-run-*")
 	if err != nil {
 		return nil, err
 	}
-	staging := &Staging{MemoryDir: filepath.Join(workspace, memory.Dir), workspace: workspace}
+	staging := &Staging{KnowledgeDir: filepath.Join(workspace, knowledge.Dir), workspace: workspace}
 	defer func() {
 		if !ok {
 			err = errors.Join(err, staging.Cleanup())
@@ -370,7 +370,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	if err := applyDeclaredMCP(workspace, r.FM.MCP); err != nil {
 		return nil, err
 	}
-	// The worktree-reading section, under the caller's memory lock: the
+	// The worktree-reading section, under the caller's knowledge lock: the
 	// snapshot and cursor an attempt starts from must never be a
 	// settlement-in-progress halfway through writing. One read of the
 	// worktree becomes both the run's working copy and the import's
@@ -384,7 +384,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		if err := mem.Snapshot(staging.BaseDir); err != nil {
 			return err
 		}
-		if err := memory.CloneTree(staging.BaseDir, staging.MemoryDir); err != nil {
+		if err := knowledge.CloneTree(staging.BaseDir, staging.KnowledgeDir); err != nil {
 			return err
 		}
 		if r.FM.Reports {
@@ -415,7 +415,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		if err := prepareWorkspaceAccess(meta.AttemptUID, workspace); err != nil {
 			return nil, fmt.Errorf("preparing read-only attempt workspace: %w", err)
 		}
-		if err := prepareAttemptTrees(meta.AttemptUID, staging.MemoryDir, runTmp, attemptHome); err != nil {
+		if err := prepareAttemptTrees(meta.AttemptUID, staging.KnowledgeDir, runTmp, attemptHome); err != nil {
 			return nil, fmt.Errorf("preparing attempt uid %d trees: %w", meta.AttemptUID, err)
 		}
 		staging.attemptUID = meta.AttemptUID
@@ -525,7 +525,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 			// plugins included -- into a later routine's session. Provider
 			// auth arrives by env var, so opencode needs no durable home.
 			ocExec = hostOpencodeExec(workspace)
-			ro, rw := sandbox.Paths(workspace, staging.MemoryDir, runTmp, home, attemptHome)
+			ro, rw := sandbox.Paths(workspace, staging.KnowledgeDir, runTmp, home, attemptHome)
 			cmd = exec.Command(sandbox.HelperPath, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
 			cmd.Env = slices.Concat(env, []string{
 				"PATH=" + os.Getenv("PATH"),
@@ -640,7 +640,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		}
 		// The model process is gone, but a descendant it detached from its
 		// stdio is not: it outlives the attempt in the supervisor's own
-		// container and keeps writing to staged memory while the pipeline
+		// container and keeps writing to staged knowledge while the pipeline
 		// validates and imports it. The attempt ends with its whole process
 		// group whichever way it ended. (In container mode the run's pid
 		// namespace dies with `docker run --rm`, which does this already.)
@@ -682,11 +682,11 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	return res, staging, nil
 }
 
-// Run executes routine `name` manually. noMemory discards staged memory
+// Run executes routine `name` manually. noKnowledge discards staged knowledge
 // writes and the run record after the otherwise ordinary run completes.
 // Inside the production container a manual run reserves the manual attempt
 // identity first, so it can never share a uid with a supervisor slot.
-func Run(dir, name string, noMemory bool) (result *Result, err error) {
+func Run(dir, name string, noKnowledge bool) (result *Result, err error) {
 	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
@@ -712,12 +712,12 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 		return nil, err
 	}
 	defer release()
-	// The cross-process memory lock: a supervisor may be settling runs into
+	// The cross-process knowledge lock: a supervisor may be settling runs into
 	// the same worktree beside this process -- in the production container
 	// always, on a host whenever `supervise` runs locally. Staging snapshots
 	// and settlement each take their turn behind the same kernel lock the
 	// supervisor's own critical sections hold.
-	memLock, err := OpenMemoryLock(dir)
+	memLock, err := OpenKnowledgeLock(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -735,7 +735,7 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 	defer func() { err = errors.Join(err, staging.Cleanup()) }()
 
 	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint, SessionsDir: exec.SessionsDir}
-	if noMemory {
+	if noKnowledge {
 		return res, nil
 	}
 
@@ -750,22 +750,22 @@ func Run(dir, name string, noMemory bool) (result *Result, err error) {
 
 // Settlement is one attempt's settled, durable outcome.
 type Settlement struct {
-	Outcome   Outcome // downgraded to Crashed when staged memory was rejected
+	Outcome   Outcome // downgraded to Crashed when staged knowledge was rejected
 	Detail    string  // the failure description recorded; "" for clean completions
 	Discarded bool    // staged events.md change discarded (teamwork: off)
 	Commit    string  // settlement commit hash, "" when nothing changed
 	// Conflicted names files where this run and a concurrently settled run
 	// edited the same lines: the import kept both sides (union merge), and
 	// somebody should be able to see that it happened.
-	Conflicted []memory.Conflict
+	Conflicted []knowledge.Conflict
 }
 
-// Settle makes one attempt's end durable in memory -- the single settlement
-// path for manual and scheduled runs. A completed attempt's staged memory is
+// Settle makes one attempt's end durable in knowledge -- the single settlement
+// path for manual and scheduled runs. A completed attempt's staged knowledge is
 // imported under routine policy and its consumer cursor advanced; a rejected
 // import downgrades the outcome to Crashed. Any failure is recorded as an
 // event, every attempt as a run record, and the whole settlement commits as
-// one memory commit. stage, when set, runs before that commit so caller
+// one knowledge commit. stage, when set, runs before that commit so caller
 // bookkeeping (scheduling state, abandonment tasks) rides the same commit.
 // detail overrides the derived failure description -- for attempts that
 // failed before producing a result; raw error text is fine, the append seam
@@ -773,13 +773,13 @@ type Settlement struct {
 // gets only its run record: nothing settled -- the same logical run retries
 // -- and no commit of its own (the shutdown commit carries the record).
 func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, meta Meta, detail string, stage func(*Settlement)) (*Settlement, error) {
-	mem := memory.At(dir)
+	mem := knowledge.At(dir)
 	s := &Settlement{Outcome: res.Outcome, Detail: detail}
 	if res.Outcome == Completed {
-		discarded, conflicted, err := importMemory(dir, r, staging)
+		discarded, conflicted, err := importKnowledge(dir, r, staging)
 		if err != nil {
 			s.Outcome = Crashed
-			s.Detail = "memory rejected: " + err.Error()
+			s.Detail = "knowledge rejected: " + err.Error()
 		} else {
 			s.Discarded = discarded
 			s.Conflicted = conflicted
@@ -821,28 +821,28 @@ func parseAttempt(attemptID string) int {
 	return n
 }
 
-// importMemory applies routine-level memory policy, then imports the staged
+// importKnowledge applies routine-level knowledge policy, then imports the staged
 // tree. A routine with teamwork: off cannot record events: a staged change
 // to events.md is discarded -- the worktree copy wins, the rest of the tree
 // imports normally. Reports whether such a change was discarded.
-func importMemory(dir string, r *routine.Routine, staging *Staging) (discarded bool, conflicted []memory.Conflict, err error) {
-	mem := memory.At(dir)
+func importKnowledge(dir string, r *routine.Routine, staging *Staging) (discarded bool, conflicted []knowledge.Conflict, err error) {
+	mem := knowledge.At(dir)
 	if !r.FM.RecordsEvents() {
-		if discarded, err = memory.RestoreFile(staging.MemoryDir, staging.BaseDir, "events.md"); err != nil {
+		if discarded, err = knowledge.RestoreFile(staging.KnowledgeDir, staging.BaseDir, "events.md"); err != nil {
 			return false, nil, err
 		}
 	}
-	conflicted, err = mem.Import(staging.MemoryDir, staging.BaseDir)
+	conflicted, err = mem.Import(staging.KnowledgeDir, staging.BaseDir)
 	return discarded, conflicted, err
 }
 
-// prepareChanges fixes the delivery boundary at the memory branch's current
+// prepareChanges fixes the delivery boundary at the knowledge branch's current
 // commit, renders every change since the routine's cursor into changes.md in
 // the workspace, and returns the fixed `through` commit. A reporting routine
 // with no cursor starts at the current state: nothing to replay, first
 // consume initializes the cursor.
 func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
-	mem := memory.At(dir)
+	mem := knowledge.At(dir)
 	through, err := mem.Head()
 	if err != nil {
 		return "", false, err
@@ -853,18 +853,18 @@ func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
 	}
 	firstRun := cursor == nil
 	from := ""
-	var changes []memory.CommitChange
+	var changes []knowledge.CommitChange
 	if cursor != nil {
 		from = cursor.ConsumedThrough
 		if changes, err = mem.Changes(from, through); err != nil {
-			if errors.Is(err, memory.ErrCursorUnreachable) {
-				return "", false, fmt.Errorf("%w: %w -- repair or delete %s on the memory branch", ErrFatal, err, memory.CursorFile(consumer))
+			if errors.Is(err, knowledge.ErrCursorUnreachable) {
+				return "", false, fmt.Errorf("%w: %w -- repair or delete %s on the knowledge branch", ErrFatal, err, knowledge.CursorFile(consumer))
 			}
 			return "", false, err
 		}
 	}
-	rendered := memory.RenderChanges(consumer, from, through, changes)
-	return through, firstRun, os.WriteFile(filepath.Join(workspace, memory.ChangesFileName), []byte(rendered), 0o644)
+	rendered := knowledge.RenderChanges(consumer, from, through, changes)
+	return through, firstRun, os.WriteFile(filepath.Join(workspace, knowledge.ChangesFileName), []byte(rendered), 0o644)
 }
 
 // advanceConsumer moves a reporting routine's cursor through the change set
@@ -877,7 +877,7 @@ func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID str
 	if !r.FM.Reports || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
 		return
 	}
-	if err := memory.At(dir).SaveCursor(r.Name, memory.Cursor{
+	if err := knowledge.At(dir).SaveCursor(r.Name, knowledge.Cursor{
 		ConsumedThrough: staging.ConsumerThrough,
 		ByRun:           runID,
 		At:              time.Now().UTC(),
@@ -1011,7 +1011,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 // buildWorkspace assembles the run workspace by allow-list: exactly what a
 // run needs -- the configuration file, opencode.json, and routines/. Everything else a
 // run sees is staged deliberately by the pipeline: declared skills, the
-// memory snapshot, the delivery change set, the generated definition. A file not
+// knowledge snapshot, the delivery change set, the generated definition. A file not
 // on the list -- the encrypted credential store, a stray key, dev rules like
 // AGENTS.md -- does not exist in a run. (This replaced a deny-list that
 // missed exactly one entry, .openroutines/credentials.yml.enc; allow-lists don't have
@@ -1203,7 +1203,7 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 // skills with the routine's declared skills allowed, an explicit rule per
 // configured MCP server (servers is the agent's opencode.json server list --
 // passed in, so rule generation can never silently see an empty config), and
-// the standing instruction that frames memory as records, never instructions.
+// the standing instruction that frames knowledge as records, never instructions.
 func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string, meta Meta) (string, error) {
 	var b strings.Builder
 	b.WriteString("---\n")
@@ -1249,8 +1249,8 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 		RunID:         meta.RunID,
 		RecordsEvents: r.FM.RecordsEvents(),
 		Reports:       r.FM.Reports,
-		Changes:       memory.ChangesFileName,
-		Marker:        memory.ConsumeMarker,
+		Changes:       knowledge.ChangesFileName,
+		Marker:        knowledge.ConsumeMarker,
 		Variables:     variablesLine(agent),
 	}); err != nil {
 		return "", err
@@ -1343,8 +1343,8 @@ func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Lo
 // Unlike killGroup this runs after the leader has been waited on, so an
 // already-empty group's id could in principle have been recycled by then --
 // an accepted race: the alternative is leaving the descendant writing to
-// memory the supervisor is about to commit. The import re-checks staging at
-// open time and does not depend on this having worked (see memory.copyStaged).
+// knowledge the supervisor is about to commit. The import re-checks staging at
+// open time and does not depend on this having worked (see knowledge.copyStaged).
 func reapGroup(cmd *exec.Cmd) {
 	_ = syscall.Kill(signalTarget(cmd), syscall.SIGKILL)
 }

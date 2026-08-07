@@ -1,4 +1,4 @@
-package memory
+package knowledge
 
 import (
 	"fmt"
@@ -12,7 +12,7 @@ import (
 )
 
 // twoClones builds the #4 harness: a bare origin and two independent clones
-// (generations / machines) with memory materialized in each.
+// (generations / machines) with knowledge materialized in each.
 func twoClones(t *testing.T) (a, b string) {
 	t.Helper()
 	base := t.TempDir()
@@ -79,7 +79,7 @@ func blackhole(t *testing.T) string {
 			held = append(held, conn)
 		}
 	}()
-	return fmt.Sprintf("https://%s/memory.git", ln.Addr().String())
+	return fmt.Sprintf("https://%s/knowledge.git", ln.Addr().String())
 }
 
 // Every tick makes several network calls. A blackholed origin must cost the
@@ -97,7 +97,7 @@ func TestGitAbandonsABlackholedRemote(t *testing.T) {
 	remote := blackhole(t)
 	done := make(chan error, 1)
 	go func() {
-		_, err := git(dir, "ls-remote", remote, "refs/heads/memory")
+		_, err := git(dir, "ls-remote", remote, "refs/heads/knowledge")
 		done <- err
 	}()
 	select {
@@ -116,16 +116,16 @@ func TestGitAbandonsABlackholedRemote(t *testing.T) {
 	}
 }
 
-func writeMemory(t *testing.T, clone, name, content string) {
+func writeKnowledge(t *testing.T, clone, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(clone, "memory", name), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(clone, "knowledge", name), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestSyncFastForwardsWhenBehind(t *testing.T) {
 	a, b := twoClones(t)
-	writeMemory(t, a, "events.md", "fact from a\n")
+	writeKnowledge(t, a, "events.md", "fact from a\n")
 	if _, err := At(a).Commit("a fact"); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestSyncFastForwardsWhenBehind(t *testing.T) {
 	if !rep.Adopted || rep.Conflict || rep.Rewritten {
 		t.Fatalf("expected clean adoption, got %+v", rep)
 	}
-	if got, _ := os.ReadFile(filepath.Join(b, "memory", "events.md")); !strings.Contains(string(got), "fact from a") {
+	if got, _ := os.ReadFile(filepath.Join(b, "knowledge", "events.md")); !strings.Contains(string(got), "fact from a") {
 		t.Fatalf("b did not adopt a's fact: %q", got)
 	}
 }
@@ -145,14 +145,14 @@ func TestSyncFastForwardsWhenBehind(t *testing.T) {
 func TestSyncRebasesDivergedHistories(t *testing.T) {
 	a, b := twoClones(t)
 	// Human curation on a, agent commit on b, both from the same tip.
-	writeMemory(t, a, "tasks.md", "curated by human\n")
+	writeKnowledge(t, a, "tasks.md", "curated by human\n")
 	if _, err := At(a).Commit("human curation"); err != nil {
 		t.Fatal(err)
 	}
 	if err := At(a).Push(); err != nil {
 		t.Fatal(err)
 	}
-	writeMemory(t, b, "events.md", "agent fact\n")
+	writeKnowledge(t, b, "events.md", "agent fact\n")
 	if _, err := At(b).Commit("agent fact"); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestSyncRebasesDivergedHistories(t *testing.T) {
 	if err := At(b).Push(); err != nil {
 		t.Fatalf("push after rebase should fast-forward: %v", err)
 	}
-	log := gitT(t, filepath.Join(b, "memory"), "log", "--oneline")
+	log := gitT(t, filepath.Join(b, "knowledge"), "log", "--oneline")
 	if !strings.Contains(log, "human curation") || !strings.Contains(log, "agent fact") {
 		t.Fatalf("both lines of history should survive: %q", log)
 	}
@@ -176,20 +176,20 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 	if rep := At(b).Sync(); rep.Rewritten || rep.Conflict {
 		t.Fatalf("baseline sync failed: %+v", rep)
 	}
-	// a force-rewrites the memory branch (attacker or confused human).
-	wtA := filepath.Join(a, "memory")
+	// a force-rewrites the knowledge branch (attacker or confused human).
+	wtA := filepath.Join(a, "knowledge")
 	root := gitT(t, wtA, "rev-list", "--max-parents=0", "HEAD")
 	gitT(t, wtA, "reset", "-q", "--hard", root)
-	writeMemory(t, a, "events.md", "history rewritten\n")
+	writeKnowledge(t, a, "events.md", "history rewritten\n")
 	gitT(t, wtA, "add", "-A")
 	gitT(t, wtA, "commit", "-qm", "rewritten")
-	gitT(t, wtA, "push", "-q", "--force", "origin", "memory")
+	gitT(t, wtA, "push", "-q", "--force", "origin", "knowledge")
 
 	rep := At(b).Sync()
 	if !rep.Rewritten {
 		t.Fatalf("expected rewrite refusal, got %+v", rep)
 	}
-	if got, _ := os.ReadFile(filepath.Join(b, "memory", "events.md")); strings.Contains(string(got), "rewritten") {
+	if got, _ := os.ReadFile(filepath.Join(b, "knowledge", "events.md")); strings.Contains(string(got), "rewritten") {
 		t.Fatalf("b adopted rewritten content: %q", got)
 	}
 
@@ -202,7 +202,7 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 			t.Fatalf("sync call %d after rewrite: expected continued refusal, got %+v", i+2, rep)
 		}
 	}
-	if got, _ := os.ReadFile(filepath.Join(b, "memory", "events.md")); strings.Contains(string(got), "rewritten") {
+	if got, _ := os.ReadFile(filepath.Join(b, "knowledge", "events.md")); strings.Contains(string(got), "rewritten") {
 		t.Fatalf("b adopted rewritten content on a repeat sync: %q", got)
 	}
 }
@@ -215,23 +215,23 @@ func TestEnsureWorktreeRefusesRewrittenHistoryAfterReplacement(t *testing.T) {
 	if rep := At(b).Sync(); rep.Rewritten || rep.Conflict {
 		t.Fatalf("baseline sync failed: %+v", rep)
 	}
-	// Rewrite origin's memory branch while "the container is down".
-	wtA := filepath.Join(a, "memory")
+	// Rewrite origin's knowledge branch while "the container is down".
+	wtA := filepath.Join(a, "knowledge")
 	root := gitT(t, wtA, "rev-list", "--max-parents=0", "HEAD")
 	gitT(t, wtA, "reset", "-q", "--hard", root)
-	writeMemory(t, a, "events.md", "history rewritten\n")
+	writeKnowledge(t, a, "events.md", "history rewritten\n")
 	gitT(t, wtA, "add", "-A")
 	gitT(t, wtA, "commit", "-qm", "rewritten")
-	gitT(t, wtA, "push", "-q", "--force", "origin", "memory")
+	gitT(t, wtA, "push", "-q", "--force", "origin", "knowledge")
 
-	// "Redeploy": a fresh clone with no local memory branch, like a new
+	// "Redeploy": a fresh clone with no local knowledge branch, like a new
 	// container generation.
 	base := filepath.Dir(a)
 	c := filepath.Join(base, "c")
 	gitT(t, base, "clone", "-q", filepath.Join(base, "origin.git"), c)
 	err := At(c).Ensure()
 	if err == nil {
-		t.Fatal("fresh clone adopted a rewritten memory branch")
+		t.Fatal("fresh clone adopted a rewritten knowledge branch")
 	}
 	if !strings.Contains(err.Error(), "does not descend") {
 		t.Fatalf("unexpected refusal error: %v", err)
@@ -240,14 +240,14 @@ func TestEnsureWorktreeRefusesRewrittenHistoryAfterReplacement(t *testing.T) {
 
 func TestSyncReportsConflictAndAborts(t *testing.T) {
 	a, b := twoClones(t)
-	writeMemory(t, a, "events.md", "line from a\n")
+	writeKnowledge(t, a, "events.md", "line from a\n")
 	if _, err := At(a).Commit("a edit"); err != nil {
 		t.Fatal(err)
 	}
 	if err := At(a).Push(); err != nil {
 		t.Fatal(err)
 	}
-	writeMemory(t, b, "events.md", "conflicting line from b\n")
+	writeKnowledge(t, b, "events.md", "conflicting line from b\n")
 	if _, err := At(b).Commit("b edit"); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestSyncReportsConflictAndAborts(t *testing.T) {
 		t.Fatalf("expected conflict report, got %+v", rep)
 	}
 	// The rebase must have been aborted: worktree clean, still functional.
-	if status := gitT(t, filepath.Join(b, "memory"), "status", "--porcelain"); status != "" {
+	if status := gitT(t, filepath.Join(b, "knowledge"), "status", "--porcelain"); status != "" {
 		t.Fatalf("worktree left dirty after aborted rebase: %q", status)
 	}
 }

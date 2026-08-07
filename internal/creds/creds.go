@@ -174,7 +174,7 @@ func Read(dir string, key []byte) (map[string]string, error) {
 	if err := yaml.Unmarshal(plaintext, &out); err != nil {
 		return nil, fmt.Errorf("credentials content: %w", err)
 	}
-	// The whole store is in memory the moment it is decrypted, so the whole
+	// The whole store is in knowledge the moment it is decrypted, so the whole
 	// store registers -- prefixed so an agent credential name can never
 	// collide with the master or deploy key entries.
 	values := make(map[string]string, len(out))

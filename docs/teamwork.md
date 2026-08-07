@@ -2,7 +2,7 @@
 
 Most of what makes a good teammate is communication: they say what they're planning, what they did, where they're stuck, and what's still on their list. OpenRoutines teamwork primitives give your agent the same habits: declaring intentions, reporting progress, calling out blockers, and tracking tasks.
 
-The primitives are built on the agent's [memory](memory.md). **Routines that do work** write down plain facts as they go, and **reporting routines** read those facts later to compose updates for the team. That split means you can write working routines without thinking about reporting at all, and point any number of reports and destinations at the facts they leave behind.
+The primitives are built on the agent's [knowledge](knowledge.md). **Routines that do work** write down plain facts as they go, and **reporting routines** read those facts later to compose updates for the team. That split means you can write working routines without thinking about reporting at all, and point any number of reports and destinations at the facts they leave behind.
 
 ## The pieces
 
@@ -11,11 +11,11 @@ Every outcome is carried by a small set of plain files:
 | Outcome | Carried by |
 |---|---|
 | Declare intentions | Every run receives `schedule.md`, the runtime's list of what runs next. A report pairs it with the open Agent-owned tasks in `tasks.md` to say what the agent will do next and what it still owes. |
-| Report progress | Working routines record what happened as events in `events.md`. When a reporting routine runs, the runtime hands it `changes.md`: everything added to memory since that routine last reported. |
+| Report progress | Working routines record what happened as events in `events.md`. When a reporting routine runs, the runtime hands it `changes.md`: everything added to knowledge since that routine last reported. |
 | Call out blockers | Anything that needs a person becomes a Human-owned task in `tasks.md`. Routines file them when they hit a wall, and the supervisor files its own when a run fails or gives up. |
 | Track tasks | Any routine that finds work someone must do files a task in `tasks.md`. Each task is one record with a stable id and an owner, updated in place from discovery to resolution. |
 
-To read what your agent has recorded, run `openroutines sync` from an agent checkout and open the files under `memory/` -- they are ordinary Markdown, with `memory/ledgers/check-in.md` holding the latest check-in the agent delivered. Browse history with `git log memory`.
+To read what your agent has recorded, run `openroutines sync` from an agent checkout and open the files under `knowledge/` -- they are ordinary Markdown, with `knowledge/ledgers/check-in.md` holding the latest check-in the agent delivered. Browse history with `git log knowledge`.
 
 There's one piece you never see in a prompt: the runtime injects standing instructions into every run that teach the model these files and the rules for using them -- what goes where, who owns what, when to consume. Routine prompts never explain the primitives; they only describe the job.
 
@@ -31,7 +31,7 @@ Progress has two halves: recording and delivery.
 
 **Delivery is reading the record and passing it on.** A routine that declares `reports: true` receives `changes.md`, everything recorded since its last report. It turns that into an update, sends it wherever it's pointed, and marks the batch consumed once the update actually lands. A failed send just means the same changes come back next run -- nothing is lost, and nothing goes out twice. Each reporting routine keeps its own place in the feed, so a second destination (Steady and Slack, say) is just a second routine, and a new one starts from the current state instead of replaying history.
 
-If someone rewrites the memory branch's history, a reporting routine's saved place can point at a commit that no longer exists. The routine stops rather than guessing, and `openroutines status` plus a Human-owned task name the cursor file to fix: delete it to start fresh from the current state, or repair the SHA if the unreported changes still need to go out.
+If someone rewrites the knowledge branch's history, a reporting routine's saved place can point at a commit that no longer exists. The routine stops rather than guessing, and `openroutines status` plus a Human-owned task name the cursor file to fix: delete it to start fresh from the current state, or repair the SHA if the unreported changes still need to go out.
 
 ## Calling out blockers
 
@@ -43,7 +43,7 @@ Blockers are two-way. Answer one through any channel a routine watches -- a repl
 
 ## Tracking tasks
 
-A task is one canonical record from discovery to resolution: a stable id (`task-YYYYMMDD-<n>`), a section naming the owner (`## Agent-owned` / `## Human-owned`), and in-place transitions -- complete, cancel, transfer -- that show up as diffs on one entry, never re-recorded elsewhere. A task tracks where things stand, where events record what happened -- and a transition is itself a change the feed delivers, so completing a task is also how it gets reported. `tasks.md` is exempt from retention trimming -- age doesn't make a task done -- and a synced checkout reads the current list in `memory/tasks.md`.
+A task is one canonical record from discovery to resolution: a stable id (`task-YYYYMMDD-<n>`), a section naming the owner (`## Agent-owned` / `## Human-owned`), and in-place transitions -- complete, cancel, transfer -- that show up as diffs on one entry, never re-recorded elsewhere. A task tracks where things stand, where events record what happened -- and a transition is itself a change the feed delivers, so completing a task is also how it gets reported. `tasks.md` is exempt from retention trimming -- age doesn't make a task done -- and a synced checkout reads the current list in `knowledge/tasks.md`.
 
 ## How loudly a routine participates
 
@@ -88,4 +88,4 @@ Posting is delivery.
 
 Notice what the prompt never mentions: no file names, no instructions about where events, the schedule, or tasks live -- the injected instructions cover all of that. It decides the sections, the destination, and what counts as delivered. That last line matters: the routine consumes its changes only once the post lands, so a failed post means the same changes return next run.
 
-The check-in routine the template scaffolds is a worked example of the same shape, recording its report in its own ledger instead of posting to a real destination -- after a sync, `memory/ledgers/check-in.md` holds the latest one in any checkout. Treat it as a starting point, not a fixture: change its cadence and sections, point it somewhere real by granting a skill and a credential, or replace it with reporting routines of your own.
+The check-in routine the template scaffolds is a worked example of the same shape, recording its report in its own ledger instead of posting to a real destination -- after a sync, `knowledge/ledgers/check-in.md` holds the latest one in any checkout. Treat it as a starting point, not a fixture: change its cadence and sections, point it somewhere real by granting a skill and a credential, or replace it with reporting routines of your own.

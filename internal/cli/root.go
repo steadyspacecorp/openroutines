@@ -22,7 +22,7 @@ Usage:
   openroutines check                validate the agent; made for CI
   openroutines status               show what the agent has and still needs
   openroutines usage                token use and reported cost per routine (--json)
-  openroutines sync                 pull the agent's latest memory from origin (--push)
+  openroutines sync                 pull the agent's latest knowledge from origin (--push)
   openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
   openroutines skills <command>     new, list, remove
   openroutines plugin <command>     add, list, update grouped plugin bundles

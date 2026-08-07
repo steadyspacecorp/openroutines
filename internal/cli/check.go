@@ -15,7 +15,7 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/plugin"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
@@ -361,9 +361,9 @@ func cmdCheck(args []string) int {
 		warnf("%s", w)
 	}
 
-	// Memory hygiene: task discipline is convention, not schema -- warn, never
-	// rewrite. The supervisor does not interpret model-authored memory.
-	if raw, err := os.ReadFile(filepath.Join(memory.At(dir).Worktree(), "tasks.md")); err == nil {
+	// Knowledge hygiene: task discipline is convention, not schema -- warn, never
+	// rewrite. The supervisor does not interpret model-authored knowledge.
+	if raw, err := os.ReadFile(filepath.Join(knowledge.At(dir).Worktree(), "tasks.md")); err == nil {
 		inFence := false
 		for _, line := range strings.Split(string(raw), "\n") {
 			t := strings.TrimSpace(line)
@@ -380,7 +380,7 @@ func cmdCheck(args []string) int {
 	// Deploy prerequisites
 	fmt.Println("deploy")
 	if out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output(); err != nil {
-		warnf("no git origin -- required before deploy (memory needs a durable home)")
+		warnf("no git origin -- required before deploy (knowledge needs a durable home)")
 	} else {
 		okf("origin %s", strings.TrimSpace(string(out)))
 	}

@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 )
 
 // usageTokens mirrors the tokens object run records carry.
@@ -76,15 +76,15 @@ func cmdUsage(args []string) int {
 		if records == 0 {
 			// So is a fresh clone of a running agent: the records exist on
 			// origin, and no amount of waiting materializes them locally.
-			if st := memory.At(".").Status(); !st.Materialized && st.RemoteMemory {
-				fmt.Println("memory is not materialized in this checkout -- run openroutines sync to adopt the agent's records from origin")
+			if st := knowledge.At(".").Status(); !st.Materialized && st.RemoteKnowledge {
+				fmt.Println("knowledge is not materialized in this checkout -- run openroutines sync to adopt the agent's records from origin")
 			} else {
 				fmt.Println("no runs recorded yet -- records accumulate as routines run")
 			}
 		} else {
 			fmt.Printf("%d run(s) recorded, none reported token usage -- absent usage means the runtime did not report it, never zero\n", records)
 		}
-		printMemoryLag(".")
+		printKnowledgeLag(".")
 		return 0
 	}
 	fmt.Println("token usage (retention window):")
@@ -92,16 +92,16 @@ func cmdUsage(args []string) int {
 		printUsageLine(r.Routine, r, true)
 	}
 	printUsageLine("total", totalUsage(rows), false)
-	printMemoryLag(".")
+	printKnowledgeLag(".")
 	return 0
 }
 
-// printMemoryLag names the gap between what this checkout has and what
+// printKnowledgeLag names the gap between what this checkout has and what
 // origin holds. usage reads only the worktree -- that is the contract, and
 // this is what keeps a stale worktree from reading as a quiet zero.
-func printMemoryLag(dir string) {
-	if st := memory.At(dir).Status(); st.Behind > 0 {
-		fmt.Printf("\nmemory/ is %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to get the latest memory from origin\n", st.Behind, memory.Branch)
+func printKnowledgeLag(dir string) {
+	if st := knowledge.At(dir).Status(); st.Behind > 0 {
+		fmt.Printf("\nknowledge/ is %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to get the latest knowledge from origin\n", st.Behind, knowledge.Branch)
 	}
 }
 
@@ -111,7 +111,7 @@ func printMemoryLag(dir string) {
 // skipped -- absence is not zero -- so the count is what distinguishes an
 // agent that has never run from one whose runs carry no usage.
 func aggregateUsage(dir string) ([]usageRow, int) {
-	raw, err := os.ReadFile(filepath.Join(memory.At(dir).Worktree(), "runs.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(knowledge.At(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
 		return nil, 0
 	}

@@ -1,6 +1,6 @@
 ---
 name: reporter
-description: Synthetic smoke fixture -- a memory-feed consumer with a bundled skill, a raw credential, and a declared MCP server.
+description: Synthetic smoke fixture -- a knowledge-feed consumer with a bundled skill, a raw credential, and a declared MCP server.
 credentials:
   reporter_token:
     description: Fake token for the smoke test; never a real value

@@ -164,7 +164,7 @@ func Parse(path string) (*Routine, error) {
 		return nil, errors.New(`frontmatter: the events key is retired -- "events: false" is now "teamwork: off"; "events: true" was the default, so delete the line`)
 	}
 	if fm.Consumes != "" {
-		return nil, errors.New(`frontmatter: the consumes key is retired -- "consumes: memory" is now "reports: true"`)
+		return nil, errors.New(`frontmatter: the consumes key is retired -- "consumes: knowledge" is now "reports: true"`)
 	}
 	body := ""
 	if bodyStart := end + len("\n---\n"); bodyStart <= len(rest) {

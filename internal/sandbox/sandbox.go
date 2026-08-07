@@ -71,7 +71,7 @@ const (
 )
 
 // Paths computes the rule sets for one attempt: read on the workspace, the
-// OS, and the opencode installation; read-write on the staged memory the
+// OS, and the opencode installation; read-write on the staged knowledge the
 // runner names, the run tmp, and the attempt's disposable HOME -- all inside
 // the workspace -- plus /dev.
 //
@@ -91,14 +91,14 @@ const (
 // environment. That last one matters because non-dumpable does not survive
 // execve: a child inheriting the supervisor's environment would publish the
 // master key in its own /proc/<pid>/environ.
-func Paths(workspace, memoryDir, runTmp, home, attemptHome string) (ro, rw []string) {
+func Paths(workspace, knowledgeDir, runTmp, home, attemptHome string) (ro, rw []string) {
 	ro = []string{
 		workspace,
 		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/etc", "/proc",
 		filepath.Join(home, ".opencode"), // opencode's per-user install (native mode; absent in the container)
 	}
 	rw = []string{
-		memoryDir,
+		knowledgeDir,
 		runTmp,
 		attemptHome,
 		"/dev",

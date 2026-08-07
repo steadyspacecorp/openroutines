@@ -5,7 +5,7 @@
 //
 // There is one process-wide registry. Code that materializes a secret --
 // loading a key, decrypting the store, minting a token -- calls Register;
-// every consumer (the log writer, the run output stream, memory appends)
+// every consumer (the log writer, the run output stream, knowledge appends)
 // redacts from the same set. Nothing downstream decides whether its text
 // needs scrubbing, because a value can only leak from a process that
 // materialized it, and materializing is what registers it.
@@ -103,7 +103,7 @@ func NewWriter(dst io.Writer) *Writer {
 // maxBuffered caps the partial-line buffer: output with no newlines flushes
 // through redaction in chunks instead of growing without bound. A secret
 // split across the chunk boundary can evade redaction -- accepted; this is
-// defense in depth, and an unbounded buffer is a memory hole.
+// defense in depth, and an unbounded buffer is a knowledge hole.
 const maxBuffered = 1 << 20
 
 func (w *Writer) Write(p []byte) (int, error) {

@@ -16,7 +16,7 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
@@ -159,7 +159,7 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 		"Dockerfile":                                          "FROM x",
 		".openroutines/version":                               "v0",
 		"skills/s1/SKILL.md":                                  "skill",
-		"memory/events.md":                                    "events",
+		"knowledge/events.md":                                 "events",
 		".git/config":                                         "git",
 	}
 	for name, content := range files {
@@ -376,11 +376,11 @@ func TestInstructionRendering(t *testing.T) {
 	for _, want := range []string{
 		"You are test-agent",
 		"routine \"sample\" (run run_x)",
-		"memory/ledgers/sample.md",
+		"knowledge/ledgers/sample.md",
 		"Every run appends at least one event",
 		"Full facts with real links",
 		"./changes.md",
-		"memory/CONSUMED",
+		"knowledge/CONSUMED",
 		"$DOCS_URL, $PRODUCT_REPO",
 		"$TMPDIR",
 	} {
@@ -400,12 +400,12 @@ func TestInstructionRendering(t *testing.T) {
 		t.Fatalf("no-events rule rendered for an events-recording routine:\n%s", full)
 	}
 	plain := render(routine.Frontmatter{Teamwork: routine.TeamworkOff})
-	for _, banned := range []string{"Every run appends", "This routine reports", "append an event to memory/events.md"} {
+	for _, banned := range []string{"Every run appends", "This routine reports", "append an event to knowledge/events.md"} {
 		if strings.Contains(plain, banned) {
 			t.Fatalf("conditional block %q rendered when its flag was off:\n%s", banned, plain)
 		}
 	}
-	for _, want := range []string{"does not record events", "never write to memory/events.md"} {
+	for _, want := range []string{"does not record events", "never write to knowledge/events.md"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("teamwork: off instruction missing %q:\n%s", want, plain)
 		}
@@ -427,31 +427,31 @@ func TestInstructionRendering(t *testing.T) {
 
 // teamwork: off is enforced at import, not just instructed: a staged change
 // to events.md is discarded (worktree copy wins) while the rest imports.
-func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
+func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
 	setup := func(t *testing.T) (string, *Staging) {
 		t.Helper()
 		dir := t.TempDir()
-		wt := filepath.Join(dir, memory.Dir)
+		wt := filepath.Join(dir, knowledge.Dir)
 		if err := os.MkdirAll(wt, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		os.WriteFile(filepath.Join(wt, "events.md"), []byte("base\n"), 0o644)
 		os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("none\n"), 0o644)
-		staging := &Staging{MemoryDir: t.TempDir(), BaseDir: t.TempDir()}
+		staging := &Staging{KnowledgeDir: t.TempDir(), BaseDir: t.TempDir()}
 		os.WriteFile(filepath.Join(staging.BaseDir, "events.md"), []byte("base\n"), 0o644)
 		os.WriteFile(filepath.Join(staging.BaseDir, "tasks.md"), []byte("none\n"), 0o644)
-		os.WriteFile(filepath.Join(staging.MemoryDir, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
-		os.WriteFile(filepath.Join(staging.MemoryDir, "tasks.md"), []byte("- [ ] real work\n"), 0o644)
+		os.WriteFile(filepath.Join(staging.KnowledgeDir, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
+		os.WriteFile(filepath.Join(staging.KnowledgeDir, "tasks.md"), []byte("- [ ] real work\n"), 0o644)
 		return dir, staging
 	}
 
 	dir, staging := setup(t)
 	r := &routine.Routine{Name: "quiet", FM: routine.Frontmatter{Teamwork: routine.TeamworkOff}}
-	discarded, _, err := importMemory(dir, r, staging)
+	discarded, _, err := importKnowledge(dir, r, staging)
 	if err != nil || !discarded {
 		t.Fatalf("discarded=%v err=%v, want true nil", discarded, err)
 	}
-	wt := filepath.Join(dir, memory.Dir)
+	wt := filepath.Join(dir, knowledge.Dir)
 	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "base\n" {
 		t.Fatalf("events.md = %q, want staged change discarded", got)
 	}
@@ -461,17 +461,17 @@ func TestImportMemoryEnforcesEventsOptOut(t *testing.T) {
 
 	dir, staging = setup(t)
 	r = &routine.Routine{Name: "loud", FM: routine.Frontmatter{}}
-	discarded, _, err = importMemory(dir, r, staging)
+	discarded, _, err = importKnowledge(dir, r, staging)
 	if err != nil || discarded {
 		t.Fatalf("discarded=%v err=%v, want false nil", discarded, err)
 	}
-	wt = filepath.Join(dir, memory.Dir)
+	wt = filepath.Join(dir, knowledge.Dir)
 	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "base\n- sneaky event\n" {
 		t.Fatalf("events.md = %q, want staged change imported for a recording routine", got)
 	}
 }
 
-// settleFixture builds a real agent repo with a materialized memory worktree:
+// settleFixture builds a real agent repo with a materialized knowledge worktree:
 // Settle's commit step needs actual git.
 func settleFixture(t *testing.T) string {
 	t.Helper()
@@ -481,7 +481,7 @@ func settleFixture(t *testing.T) string {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
-	if err := memory.At(dir).Ensure(); err != nil {
+	if err := knowledge.At(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -492,14 +492,14 @@ func settleFixture(t *testing.T) string {
 // is another "first run" that skips forward and receives nothing forever.
 func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	dir := settleFixture(t)
-	mem := memory.At(dir)
+	mem := knowledge.At(dir)
 	through, err := mem.Head()
 	if err != nil {
 		t.Fatal(err)
 	}
 	stage := func(first bool, boundary string) *Staging {
 		s := &Staging{
-			MemoryDir:        t.TempDir(),
+			KnowledgeDir:     t.TempDir(),
 			BaseDir:          t.TempDir(),
 			workspace:        t.TempDir(),
 			ConsumerThrough:  boundary,
@@ -508,7 +508,7 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 		if err := mem.Snapshot(s.BaseDir); err != nil {
 			t.Fatal(err)
 		}
-		if err := memory.CloneTree(s.BaseDir, s.MemoryDir); err != nil {
+		if err := knowledge.CloneTree(s.BaseDir, s.KnowledgeDir); err != nil {
 			t.Fatal(err)
 		}
 		return s
@@ -537,47 +537,47 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	}
 }
 
-// A completed attempt whose staged memory is rejected settles as crashed --
+// A completed attempt whose staged knowledge is rejected settles as crashed --
 // in the returned outcome, the failure event, the run record, and the
 // settlement commit alike. The run record saying "completed" while the run
 // was reported crashed is the divergence Settle exists to prevent.
 func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
 	dir := settleFixture(t)
-	staging := &Staging{MemoryDir: t.TempDir()}
-	os.WriteFile(filepath.Join(staging.MemoryDir, ".gitignore"), []byte("x"), 0o644)
+	staging := &Staging{KnowledgeDir: t.TempDir()}
+	os.WriteFile(filepath.Join(staging.KnowledgeDir, ".gitignore"), []byte("x"), 0o644)
 
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{}}
 	settlement, err := Settle(dir, r, staging, &ExecResult{Outcome: Completed}, Meta{RunID: "run_reject", AttemptID: "attempt_01"}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settlement.Outcome != Crashed || !strings.Contains(settlement.Detail, "memory rejected") {
-		t.Fatalf("settlement = %+v, want crashed with memory-rejected detail", settlement)
+	if settlement.Outcome != Crashed || !strings.Contains(settlement.Detail, "knowledge rejected") {
+		t.Fatalf("settlement = %+v, want crashed with knowledge-rejected detail", settlement)
 	}
 	if settlement.Commit == "" {
 		t.Fatal("settlement should have committed the record and event")
 	}
-	wt := filepath.Join(dir, memory.Dir)
+	wt := filepath.Join(dir, knowledge.Dir)
 	records, _ := os.ReadFile(filepath.Join(wt, "runs.jsonl"))
 	if !strings.Contains(string(records), `"outcome":"crashed"`) {
 		t.Fatalf("run record should carry the settled outcome: %s", records)
 	}
 	events, _ := os.ReadFile(filepath.Join(wt, "events.md"))
-	if !strings.Contains(string(events), "run_reject attempt_01) memory rejected") {
+	if !strings.Contains(string(events), "run_reject attempt_01) knowledge rejected") {
 		t.Fatalf("failure event missing: %s", events)
 	}
 }
 
-// A clean completion imports staged memory, runs the caller's stage hook
+// A clean completion imports staged knowledge, runs the caller's stage hook
 // before the settlement commit (so its writes ride along), and commits.
 func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 	dir := settleFixture(t)
-	mem := memory.At(dir)
-	staging := &Staging{MemoryDir: t.TempDir()}
-	if err := mem.Snapshot(staging.MemoryDir); err != nil {
+	mem := knowledge.At(dir)
+	staging := &Staging{KnowledgeDir: t.TempDir()}
+	if err := mem.Snapshot(staging.KnowledgeDir); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(staging.MemoryDir, "ledgers", "x.md"), []byte("worked\n"), 0o644)
+	os.WriteFile(filepath.Join(staging.KnowledgeDir, "ledgers", "x.md"), []byte("worked\n"), 0o644)
 
 	staged := false
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{}}
@@ -594,9 +594,9 @@ func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 	if !staged {
 		t.Fatal("stage hook should see the settled outcome")
 	}
-	wt := filepath.Join(dir, memory.Dir)
+	wt := filepath.Join(dir, knowledge.Dir)
 	if got, _ := os.ReadFile(filepath.Join(wt, "ledgers", "x.md")); string(got) != "worked\n" {
-		t.Fatalf("staged memory not imported: %q", got)
+		t.Fatalf("staged knowledge not imported: %q", got)
 	}
 	// The stage hook's write is inside the settlement commit, not left dirty.
 	if changed, _ := exec.Command("git", "-C", wt, "status", "--porcelain").Output(); len(changed) != 0 {
@@ -623,32 +623,32 @@ func TestCopyDeclaredSkillsRejectsTraversal(t *testing.T) {
 	}
 }
 
-func TestConsumeMarkerLivesInStagedMemory(t *testing.T) {
+func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 	dir := t.TempDir()
-	wt := filepath.Join(dir, memory.Dir)
+	wt := filepath.Join(dir, knowledge.Dir)
 	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	staging := &Staging{MemoryDir: t.TempDir(), workspace: t.TempDir()}
+	staging := &Staging{KnowledgeDir: t.TempDir(), workspace: t.TempDir()}
 	if staging.Consumed() {
 		t.Fatal("Consumed() true with no marker anywhere")
 	}
-	// The sandbox leaves only staged memory writable: the marker there counts.
-	os.WriteFile(filepath.Join(staging.MemoryDir, memory.ConsumeMarker), nil, 0o644)
+	// The sandbox leaves only staged knowledge writable: the marker there counts.
+	os.WriteFile(filepath.Join(staging.KnowledgeDir, knowledge.ConsumeMarker), nil, 0o644)
 	if !staging.Consumed() {
-		t.Fatal("marker in staged memory not honored")
+		t.Fatal("marker in staged knowledge not honored")
 	}
-	// It is a receipt for the runtime, not memory content: import drops it.
+	// It is a receipt for the runtime, not knowledge content: import drops it.
 	r := &routine.Routine{Name: "report", FM: routine.Frontmatter{Reports: true}}
-	if _, _, err := importMemory(dir, r, staging); err != nil {
+	if _, _, err := importKnowledge(dir, r, staging); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(wt, memory.ConsumeMarker)); !os.IsNotExist(err) {
-		t.Fatal("consume marker imported into the memory worktree")
+	if _, err := os.Stat(filepath.Join(wt, knowledge.ConsumeMarker)); !os.IsNotExist(err) {
+		t.Fatal("consume marker imported into the knowledge worktree")
 	}
 	// Unsandboxed runs may still drop the marker at the workspace root.
-	legacy := &Staging{MemoryDir: t.TempDir(), workspace: t.TempDir()}
-	os.WriteFile(filepath.Join(legacy.workspace, memory.ConsumeMarker), nil, 0o644)
+	legacy := &Staging{KnowledgeDir: t.TempDir(), workspace: t.TempDir()}
+	os.WriteFile(filepath.Join(legacy.workspace, knowledge.ConsumeMarker), nil, 0o644)
 	if !legacy.Consumed() {
 		t.Fatal("workspace-root marker no longer honored")
 	}

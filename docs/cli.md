@@ -10,7 +10,7 @@ openroutines configure            fill in openroutines.yml, generate the master 
 openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
 openroutines usage                token use and reported cost per routine (--json)
-openroutines sync                 pull the agent's latest memory from origin (--push)
+openroutines sync                 pull the agent's latest knowledge from origin (--push)
 openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
 openroutines skills <command>     new, list, remove
 openroutines plugin <command>     add, list, update grouped plugin bundles
@@ -50,7 +50,7 @@ Validates config, frontmatter, schedules, credential wiring, and config drift. W
 openroutines status
 ```
 
-Shows master key state, models, routines and schedules, skills, memory sync state, and token usage.
+Shows master key state, models, routines and schedules, skills, knowledge sync state, and token usage.
 
 Each routine also reports what the supervisor's scheduling state says about it: how far its schedule is accounted for (the watermark), a pending run with the attempts it has spent, and an active circuit-breaker cool-down with the time it ends -- a routine sitting one out does not advertise a next firing, because it will not honor it. A routine with nothing under it has no state yet: the supervisor has never seen it, which is what every fresh checkout looks like. The grants in parentheses are the routine's declared authority -- skills, credentials, MCP servers, and web access.
 
@@ -62,7 +62,7 @@ A pending run is followed by what actually becomes of it, which the attempt coun
 - `budget spent` -- every attempt is gone; the next tick abandons the run and files a task.
 - `held` -- the routine is inactive or declares neither a schedule nor a trigger, so the tick skips it before reading its state. Nothing is coming to advance the run; activating the routine or restoring its schedule releases it.
 
-These lines come out of the `memory` branch as your checkout last fetched it, so status says when that reading is behind origin. Run `openroutines sync` for the current picture.
+These lines come out of the `knowledge` branch as your checkout last fetched it, so status says when that reading is behind origin. Run `openroutines sync` for the current picture.
 
 ## usage
 
@@ -78,13 +78,13 @@ Token use and reported cost per routine. `--json` emits the machine-readable for
 openroutines sync [--push]
 ```
 
-Reconciles `memory/` with origin. A deployed agent writes its memory on the `memory` branch, and `git pull` in the agent repository moves the remote-tracking ref without touching the memory worktree -- so a checkout keeps reading old memory until you sync it. `status` and `usage` say when that has happened and name this command.
+Reconciles `knowledge/` with origin. A deployed agent writes its knowledge on the `knowledge` branch, and `git pull` in the agent repository moves the remote-tracking ref without touching the knowledge worktree -- so a checkout keeps reading old knowledge until you sync it. `status` and `usage` say when that has happened and name this command.
 
-Syncing is also how you read the agent: the memory primitives are ordinary Markdown files under `memory/`, and `memory/ledgers/check-in.md` holds the latest check-in the agent delivered -- the teammate-style update as of the last scheduled run. For one composed right now, `openroutines routines run check-in --no-memory` echoes a fresh report without consuming the change feed.
+Syncing is also how you read the agent: the knowledge primitives are ordinary Markdown files under `knowledge/`, and `knowledge/ledgers/check-in.md` holds the latest check-in the agent delivered -- the teammate-style update as of the last scheduled run. For one composed right now, `openroutines routines run check-in --no-knowledge` echoes a fresh report without consuming the change feed.
 
-Fast-forwards when behind, rebases local commits when both sides moved, and refuses rather than resolving anything itself: a conflict is left for you to resolve inside `memory/`, and rewritten upstream history is refused outright. `--push` also publishes local memory commits.
+Fast-forwards when behind, rebases local commits when both sides moved, and refuses rather than resolving anything itself: a conflict is left for you to resolve inside `knowledge/`, and rewritten upstream history is refused outright. `--push` also publishes local knowledge commits.
 
-When a refusal happens, sync also says whether the deployed agent stranded memory on `refs/openroutines/blocked` -- a snapshot of what a supervisor whose own sync is blocked could not write to the branch, typically carrying the blocker task that explains this same refusal. Sync fetches the ref for you (git replicates nothing outside `refs/heads` and `refs/tags` on its own), so `git -C memory show refs/openroutines/blocked:tasks.md` reads it and `git -C memory diff memory refs/openroutines/blocked` shows what the agent has that the branch does not. If the container that stranded it is still running, repairing the branch is what puts that state back on it, and the ref is deleted; if that container has since been replaced, the snapshot is a record to read -- apply from it what you want, then drop the ref with `git push origin :refs/openroutines/blocked`.
+When a refusal happens, sync also says whether the deployed agent stranded knowledge on `refs/openroutines/blocked` -- a snapshot of what a supervisor whose own sync is blocked could not write to the branch, typically carrying the blocker task that explains this same refusal. Sync fetches the ref for you (git replicates nothing outside `refs/heads` and `refs/tags` on its own), so `git -C knowledge show refs/openroutines/blocked:tasks.md` reads it and `git -C knowledge diff knowledge refs/openroutines/blocked` shows what the agent has that the branch does not. If the container that stranded it is still running, repairing the branch is what puts that state back on it, and the ref is deleted; if that container has since been replaced, the snapshot is a record to read -- apply from it what you want, then drop the ref with `git push origin :refs/openroutines/blocked`.
 
 `status` and `usage` never sync on their own. This command fetches, can rebase, and publishes the accepted-tip baseline that makes rewrite refusal durable -- none of which belongs in a command whose job is to report state.
 
@@ -93,8 +93,8 @@ When a refusal happens, sync also says whether the deployed agent stranded memor
 ```
 openroutines routines new <name>         create a routine (inactive until you activate it)
 openroutines routines list               names, schedules, grants
-openroutines routines run <name> [--no-memory]
-                                         run once now; --no-memory discards memory writes
+openroutines routines run <name> [--no-knowledge]
+                                         run once now; --no-knowledge discards knowledge writes
 openroutines routines edit <name>        open in $EDITOR, validate on close
 openroutines routines activate <name>    set active: true
 openroutines routines deactivate <name>  set active: false
@@ -103,7 +103,7 @@ openroutines routines remove <name>      delete the routine and its scheduling s
 
 A routine that does not load still holds its name: `new` refuses rather than overwrite it, `run` reports the parse error instead of "no routine", and `edit` and `remove` operate on the file so you can fix or drop it.
 
-`run` always has the routine's declared credentials and tools and may perform external actions. `--no-memory` discards staged memory writes and the run record; it is not a dry run. Use `check` for non-acting validation, and point acting routines at a scratch target when exercising their external path.
+`run` always has the routine's declared credentials and tools and may perform external actions. `--no-knowledge` discards staged knowledge writes and the run record; it is not a dry run. Use `check` for non-acting validation, and point acting routines at a scratch target when exercising their external path.
 
 Deactivating a routine that is misbehaving in production stops it at the next redeploy, not the next tick -- the deployed supervisor keeps reading the copy in its image until then.
 

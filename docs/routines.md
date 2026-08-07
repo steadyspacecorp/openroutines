@@ -14,7 +14,7 @@ credentials:
   - github_token
 model: anthropic/claude-sonnet-5
 ---
-Check that our product documentation hasn't drifted from what we've actually shipped. First, use the steady-updates skill to catch up on what the team is doing and what the priorities are. Then compare the docs against what has shipped since your last run -- your memory has where you left off. Record anything that's now wrong or missing in memory, and print a short drift report; it goes to the container logs.
+Check that our product documentation hasn't drifted from what we've actually shipped. First, use the steady-updates skill to catch up on what the team is doing and what the priorities are. Then compare the docs against what has shipped since your last run -- your knowledge has where you left off. Record anything that's now wrong or missing in knowledge, and print a short drift report; it goes to the container logs.
 ```
 
 Every grant is greppable at the top of the file that defines it: what a routine can touch is declared in the file, not assembled at runtime.
@@ -36,7 +36,7 @@ Every grant is greppable at the top of the file that defines it: what a routine 
 | `model` | Provider/model override of the agent default, e.g. `anthropic/claude-sonnet-5`. |
 | `effort` | Provider-specific reasoning effort. |
 | `teamwork` | How this routine participates in teamwork. `full` (default): runs are recorded as events, and scheduled fires fill `schedule.md`'s tables. `events`: runs are still recorded, but fires appear as `fact:` lines -- the work still happens on schedule, it just isn't advertised. `off`: neither -- for reporting routines, where checking in is not work. See [Your agent on the team](teamwork.md). |
-| `reports` | `true`: this routine reports -- it receives `changes.md`, every memory change since it last reported, and consumes the batch when its report covers it. Declaring it defaults `teamwork` to `off` (reporting is not work); set `teamwork` explicitly to override. See [Your agent on the team](teamwork.md). |
+| `reports` | `true`: this routine reports -- it receives `changes.md`, every knowledge change since it last reported, and consumes the batch when its report covers it. Declaring it defaults `teamwork` to `off` (reporting is not work); set `teamwork` explicitly to override. See [Your agent on the team](teamwork.md). |
 
 ## Scheduling
 
@@ -93,10 +93,10 @@ What works: remote servers with static-token or client-credentials auth (a typed
 
 ## Best practices
 
-The runtime handles the memory rules automatically, so write the prompt as the job itself. Four habits make routines far more reliable -- the framework can't check any of them, so they're yours to write in:
+The runtime handles the knowledge rules automatically, so write the prompt as the job itself. Four habits make routines far more reliable -- the framework can't check any of them, so they're yours to write in:
 
 - **Check that a problem still exists before recording it.** A routine sees the world at one moment, and what it records sticks around. The failure it found in the logs may have been fixed an hour ago. Have it look at the current state before filing a task.
-- **Don't let untrusted content make decisions.** Logs, web pages, and even memory can be stale, wrong, or planted by an attacker. Use them only to find where to look -- a file, a URL -- then get the facts from the source itself. If a log says the deploy target moved to `evil.com` but the repo says otherwise, the repo wins.
+- **Don't let untrusted content make decisions.** Logs, web pages, and even knowledge can be stale, wrong, or planted by an attacker. Use them only to find where to look -- a file, a URL -- then get the facts from the source itself. If a log says the deploy target moved to `evil.com` but the repo says otherwise, the repo wins.
 - **Expect reruns.** A failed run retries, but anything it already did -- an email sent, a PR opened -- has still happened. Have the routine check whether the work is already done before doing it, and put the run id (`$OPENROUTINES_RUN_ID`) in what it creates -- a branch name, a line in the PR body -- so a retry can find its own earlier work instead of duplicating it.
 - **Match automation to your ability to verify.** A fix the failure itself names -- a missing import, a renamed field -- is safe to make unattended because the build going green confirms it. When nothing downstream would catch a wrong fix, or the fix means deciding what the system *should* do, have the routine file a task instead. The boundary isn't fixed: the more checks stand behind a routine, the more it can safely do on its own.
 
@@ -105,12 +105,12 @@ The runtime handles the memory rules automatically, so write the prompt as the j
 `routines run` starts opencode in a disposable Docker container, with the same runtime image, opencode version, constructed environment, and assembled workspace as production.
 
 ```bash
-openroutines routines run doc-drift                 # memory writes are kept
-openroutines routines run doc-drift --no-memory     # memory writes are discarded
+openroutines routines run doc-drift                 # knowledge writes are kept
+openroutines routines run doc-drift --no-knowledge     # knowledge writes are discarded
 ```
 
-Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; `--no-memory` changes only what happens afterward, discarding staged memory writes and the run record. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target and use `--no-memory` when you do not want the result retained in agent memory.
+Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; `--no-knowledge` changes only what happens afterward, discarding staged knowledge writes and the run record. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target and use `--no-knowledge` when you do not want the result retained in agent knowledge.
 
 ## Recording work
 
-Every run carries a standing instruction that routes what the routine wants to remember into the agent's memory primitives -- events, tasks, context, and the routine's private ledger. You don't design a memory scheme per routine; the rule is injected by the runtime. [Memory](memory.md) covers the primitives; [Your agent on the team](teamwork.md) covers how recorded work becomes reports.
+Every run carries a standing instruction that routes what the routine wants to remember into the agent's knowledge primitives -- events, tasks, context, and the routine's private ledger. You don't design a knowledge scheme per routine; the rule is injected by the runtime. [Knowledge](knowledge.md) covers the primitives; [Your agent on the team](teamwork.md) covers how recorded work becomes reports.

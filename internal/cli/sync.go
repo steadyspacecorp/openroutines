@@ -3,14 +3,14 @@ package cli
 import (
 	"fmt"
 
-	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 )
 
-// cmdSync reconciles the memory worktree with origin from a person's
-// checkout. The supervisor already syncs memory every tick on the
+// cmdSync reconciles the knowledge worktree with origin from a person's
+// checkout. The supervisor already syncs knowledge every tick on the
 // deployed side; locally there was no way to reach it, so `git pull` on
-// main -- which moves origin/memory without touching the worktree -- left
-// status, usage, and the ledgers reading old memory with no way to fix it
+// main -- which moves origin/knowledge without touching the worktree -- left
+// status, usage, and the ledgers reading old knowledge with no way to fix it
 // short of raw git against a worktree most people never think about.
 //
 // Deliberately not run by status or usage: Sync fetches, may rebase, and
@@ -32,17 +32,17 @@ func cmdSync(args []string) int {
 	}
 	_, push := flags["--push"]
 
-	// A fresh clone has no memory worktree at all -- the exact checkout most
+	// A fresh clone has no knowledge worktree at all -- the exact checkout most
 	// likely to be reaching for sync. Materialize it the way the supervisor
 	// does at boot: Ensure adopts the branch from origin and refuses a tip
 	// that does not descend from the accepted baseline.
-	mem := memory.At(".")
+	mem := knowledge.At(".")
 	materialized := !mem.Status().Materialized
 	if err := mem.Ensure(); err != nil {
 		return fail(err)
 	}
 	if materialized {
-		fmt.Printf("materialized memory/ from the %s branch\n", memory.Branch)
+		fmt.Printf("materialized knowledge/ from the %s branch\n", knowledge.Branch)
 	}
 
 	// Counted before the sync, while it is still true.
@@ -51,10 +51,10 @@ func cmdSync(args []string) int {
 	rep := mem.Sync()
 	switch {
 	case rep.NoOrigin:
-		fmt.Println("no origin -- memory is local only, nothing to reconcile")
+		fmt.Println("no origin -- knowledge is local only, nothing to reconcile")
 		return 0
 	case rep.RemoteMissing:
-		fmt.Printf("origin has no %s branch yet -- it is created the first time memory is pushed\n", memory.Branch)
+		fmt.Printf("origin has no %s branch yet -- it is created the first time knowledge is pushed\n", knowledge.Branch)
 		return 0
 	case rep.Unreachable:
 		return fail(fmt.Errorf("origin unreachable: %s", rep.Detail))
@@ -64,24 +64,24 @@ func cmdSync(args []string) int {
 		return fail(fmt.Errorf("%s", rep.Detail))
 	case rep.Conflict:
 		reportStranded(mem)
-		return fail(fmt.Errorf("memory does not reconcile cleanly: %s\n\nresolve inside memory/, commit, then rerun openroutines sync", rep.Detail))
+		return fail(fmt.Errorf("knowledge does not reconcile cleanly: %s\n\nresolve inside knowledge/, commit, then rerun openroutines sync", rep.Detail))
 	case rep.Detail != "":
 		return fail(fmt.Errorf("%s", rep.Detail))
 	}
 
 	if rep.Adopted {
 		if behind > 0 {
-			fmt.Printf("adopted %d commit(s) from origin/%s\n", behind, memory.Branch)
+			fmt.Printf("adopted %d commit(s) from origin/%s\n", behind, knowledge.Branch)
 		} else {
-			fmt.Printf("reconciled with origin/%s\n", memory.Branch)
+			fmt.Printf("reconciled with origin/%s\n", knowledge.Branch)
 		}
 	} else {
-		fmt.Printf("memory is up to date with origin/%s\n", memory.Branch)
+		fmt.Printf("knowledge is up to date with origin/%s\n", knowledge.Branch)
 	}
 
 	st := mem.Status()
 	if st.Uncommitted > 0 {
-		fmt.Printf("  ! %d file(s) with uncommitted changes in memory/ -- commit them before they can be published\n", st.Uncommitted)
+		fmt.Printf("  ! %d file(s) with uncommitted changes in knowledge/ -- commit them before they can be published\n", st.Uncommitted)
 	}
 	if st.Unpushed == 0 {
 		return 0
@@ -91,24 +91,24 @@ func cmdSync(args []string) int {
 		return 0
 	}
 	if err := mem.Push(); err != nil {
-		return fail(fmt.Errorf("publishing memory: %w", err))
+		return fail(fmt.Errorf("publishing knowledge: %w", err))
 	}
-	fmt.Printf("  published %d commit(s) to origin/%s\n", st.Unpushed, memory.Branch)
+	fmt.Printf("  published %d commit(s) to origin/%s\n", st.Unpushed, knowledge.Branch)
 	return 0
 }
 
-// reportStranded names the memory a supervisor could not put on the branch
+// reportStranded names the knowledge a supervisor could not put on the branch
 // while its sync was blocked -- typically carrying the blocker task that
 // explains this same refusal, since the block that stops sync also stops the
 // runs that would otherwise report it. Dated, because a snapshot from a
 // container that has since been replaced is a record to read, not a repair in
 // progress.
-func reportStranded(mem *memory.Memory) {
+func reportStranded(mem *knowledge.Knowledge) {
 	snap := mem.Blocked()
 	if snap.Tip == "" {
 		return
 	}
-	fmt.Printf("  ! the agent stranded memory it could not publish on %s (snapshot taken %s)\n", memory.BlockedRef, snap.When)
-	fmt.Printf("    read it: git -C memory show %s:tasks.md -- compare: git -C memory diff %s %s\n",
-		memory.BlockedRef, memory.Branch, memory.BlockedRef)
+	fmt.Printf("  ! the agent stranded knowledge it could not publish on %s (snapshot taken %s)\n", knowledge.BlockedRef, snap.When)
+	fmt.Printf("    read it: git -C knowledge show %s:tasks.md -- compare: git -C knowledge diff %s %s\n",
+		knowledge.BlockedRef, knowledge.Branch, knowledge.BlockedRef)
 }

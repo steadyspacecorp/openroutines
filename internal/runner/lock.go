@@ -46,7 +46,7 @@ func LockRoutine(dir, name string) (release func(), err error) {
 	}, nil
 }
 
-// MemoryLock serializes memory-worktree critical sections across processes:
+// KnowledgeLock serializes knowledge-worktree critical sections across processes:
 // the supervisor's staging snapshots and settlements, and a manual `routines
 // run` executing beside it, all stage from and settle into the same worktree
 // and index. The supervisor's goroutines already serialize in-process through
@@ -56,27 +56,27 @@ func LockRoutine(dir, name string) (release func(), err error) {
 // on a description that already holds the lock is a no-op, and the first
 // unlock would release it for everyone -- the mutex guarantees strict
 // acquire/release alternation on that description.
-type MemoryLock struct {
+type KnowledgeLock struct {
 	mu sync.Mutex
 	f  *os.File
 }
 
-// OpenMemoryLock opens the agent's cross-process memory-worktree lock.
-func OpenMemoryLock(dir string) (*MemoryLock, error) {
+// OpenKnowledgeLock opens the agent's cross-process knowledge-worktree lock.
+func OpenKnowledgeLock(dir string) (*KnowledgeLock, error) {
 	lockDir := filepath.Join(dir, ".openroutines-tmp", "locks")
 	if err := os.MkdirAll(lockDir, 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(lockDir, "memory.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(filepath.Join(lockDir, "knowledge.lock"), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
-	return &MemoryLock{f: f}, nil
+	return &KnowledgeLock{f: f}, nil
 }
 
 // Lock blocks until this process's goroutines and every other process
-// holding the memory lock have released it.
-func (l *MemoryLock) Lock() {
+// holding the knowledge lock have released it.
+func (l *KnowledgeLock) Lock() {
 	l.mu.Lock()
 	for {
 		err := syscall.Flock(int(l.f.Fd()), syscall.LOCK_EX)
@@ -88,14 +88,14 @@ func (l *MemoryLock) Lock() {
 			// prevent; there is no recoverable path from here. Logged before
 			// the panic so the failure has a scrubbed, structured record in
 			// the same stream as everything else.
-			slog.Error("memory worktree lock failed -- refusing to proceed unserialized", "path", l.f.Name(), "error", err)
-			panic(fmt.Sprintf("memory worktree lock: %v", err))
+			slog.Error("knowledge worktree lock failed -- refusing to proceed unserialized", "path", l.f.Name(), "error", err)
+			panic(fmt.Sprintf("knowledge worktree lock: %v", err))
 		}
 	}
 }
 
 // Unlock releases the kernel lock, then the in-process mutex.
-func (l *MemoryLock) Unlock() {
+func (l *KnowledgeLock) Unlock() {
 	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
 	l.mu.Unlock()
 }

@@ -4,7 +4,7 @@ Guidance for coding agents working on the OpenRoutines framework itself. (If you
 
 ## What this is
 
-OpenRoutines generates and runs single-purpose autonomous AI agents: one agent, one job description, one runtime, defined as a git repo and deployed as a Docker container. Routines are markdown files with frontmatter; execution goes through headless opencode; memory lives on a dedicated git branch.
+OpenRoutines generates and runs single-purpose autonomous AI agents: one agent, one job description, one runtime, defined as a git repo and deployed as a Docker container. Routines are markdown files with frontmatter; execution goes through headless opencode; knowledge lives on a dedicated git branch.
 
 ## Read before changing anything
 
@@ -25,19 +25,19 @@ Design-first is the workflow here: behavior gets decided in docs/design.md befor
 ## Implementation constraints (from docs/design.md -- the short version)
 
 - **Go, minimal dependencies.** Target roughly one dependency (a cron parser). The supervisor is the trusted component; its dependency tree is its attack surface. Stdlib first, always.
-- **The supervisor stays dumb.** Tick every minute, re-read frontmatter, run what's due -- into a bounded pool of run slots (`concurrency`, serial unless the agent opts in), with every memory-worktree operation serialized behind one lock. Enforcement lives elsewhere: skill, tool, web-access, and MCP scoping in generated opencode agent definitions, filesystem scoping via Landlock, credential scoping via built-from-scratch child environments. Do not add enforcement logic to the supervisor that a lower layer can provide.
+- **The supervisor stays dumb.** Tick every minute, re-read frontmatter, run what's due -- into a bounded pool of run slots (`concurrency`, serial unless the agent opts in), with every knowledge-worktree operation serialized behind one lock. Enforcement lives elsewhere: skill, tool, web-access, and MCP scoping in generated opencode agent definitions, filesystem scoping via Landlock, credential scoping via built-from-scratch child environments. Do not add enforcement logic to the supervisor that a lower layer can provide.
 - **At-least-once, never silently skipped.** Durable two-phase runs: watermark + pending record + per-attempt reservation (stable `run_id`, per-attempt ids, bounded retries) committed and pushed *before* execution; `flock` for overlap; process-group kills for timeouts.
-- **Model processes never touch git.** Routines write to a disposable staged copy of memory; the supervisor validates and imports the diff into its own worktree. Never hand a routine a git worktree or metadata.
+- **Model processes never touch git.** Routines write to a disposable staged copy of knowledge; the supervisor validates and imports the diff into its own worktree. Never hand a routine a git worktree or metadata.
 - **Secrets discipline.** Child envs are constructed, never inherited -- every child the supervisor spawns, git and the boot probe included, not just routines (`OPENROUTINES_MASTER_KEY` and `OPENROUTINES_DEPLOY_KEY` must never leave the supervisor's own process). Injected secret values are scrubbed from log output.
 
 ## Vocabulary
 
 Use these terms exactly; the docs and code should agree:
 
-- **routine** (not job) -- a markdown file in `routines/` (agent-owned) or `plugins/<name>/routines/` (plugin-owned); the filename is its globally unique identity. A **task** is a memory record in `tasks.md`, never a synonym for routine
+- **routine** (not job) -- a markdown file in `routines/` (agent-owned) or `plugins/<name>/routines/` (plugin-owned); the filename is its globally unique identity. A **task** is a knowledge record in `tasks.md`, never a synonym for routine
 - **ORA** -- an OpenRoutines agent
-- **memory primitives** -- `events.md`, `tasks.md`, `context.md`; per-routine state is a **ledger** (`memory/ledgers/<routine>.md`); each reporting routine's delivery cursor lives under supervisor-owned `state/`
-- **teamwork primitives** (never "teamwork loop" or "teamwork system") -- built on part of memory: events, the schedule (`schedule.md`), and the report (`changes.md`, consumed by a routine declaring `reports: true`). Teamwork reports memory; it doesn't own it. Terms of art are artifact names; everything else is plain English -- no "forecast", no "inbox" (docs/design.md "The teamwork lexicon")
+- **knowledge primitives** -- `events.md`, `tasks.md`, `context.md`; per-routine state is a **ledger** (`knowledge/ledgers/<routine>.md`); each reporting routine's delivery cursor lives under supervisor-owned `state/`
+- **teamwork primitives** (never "teamwork loop" or "teamwork system") -- built on part of knowledge: events, the schedule (`schedule.md`), and the report (`changes.md`, consumed by a routine declaring `reports: true`). Teamwork reports knowledge; it doesn't own it. Terms of art are artifact names; everything else is plain English -- no "forecast", no "inbox" (docs/design.md "The teamwork lexicon")
 - **supervisor** -- the long-running process in the container; **run** -- one execution of one routine
 
 ## Conventions

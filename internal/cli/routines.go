@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 )
@@ -20,7 +20,7 @@ skills: []
 credentials: []
 ---
 Describe the job here. The body of this file is the prompt: say what to do,
-what memory to consult (your ledger is memory/ledgers/%s.md), and what to
+what knowledge to consult (your ledger is knowledge/ledgers/%s.md), and what to
 record when done. Set active: true when it's ready to run on schedule.
 `
 
@@ -72,8 +72,8 @@ const routinesUsage = `Manage this agent's routines (markdown files in routines/
 Usage:
   openroutines routines new <name>         create a routine (inactive until you activate it)
   openroutines routines list               names, schedules, grants
-  openroutines routines run <name> [--no-memory]
-                                           run once now; --no-memory discards memory writes
+  openroutines routines run <name> [--no-knowledge]
+                                           run once now; --no-knowledge discards knowledge writes
   openroutines routines edit <name>        open in $EDITOR, validate on close
   openroutines routines activate <name>    set active: true
   openroutines routines deactivate <name>  set active: false
@@ -81,7 +81,7 @@ Usage:
 `
 
 func routinesRun(args []string) int {
-	nameArg, noMemory, help, err := parseRoutineRunArgs(args)
+	nameArg, noKnowledge, help, err := parseRoutineRunArgs(args)
 	if err != nil {
 		return fail(err)
 	}
@@ -93,7 +93,7 @@ func routinesRun(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	res, err := runner.Run(".", name, noMemory)
+	res, err := runner.Run(".", name, noKnowledge)
 	if err != nil {
 		return fail(err)
 	}
@@ -107,10 +107,10 @@ func routinesRun(args []string) int {
 	for _, f := range res.Conflicted {
 		fmt.Printf("note: a concurrent run edited the same lines in %s -- both versions kept; curate the file if they disagree\n", f)
 	}
-	if noMemory {
-		fmt.Println("memory discarded: external actions were still performed and credentials were available (first runs may still have initialized the memory worktree)")
+	if noKnowledge {
+		fmt.Println("knowledge discarded: external actions were still performed and credentials were available (first runs may still have initialized the knowledge worktree)")
 	} else if res.Commit != "" {
-		fmt.Printf("memory updated: commit %s on the %s branch\n", res.Commit, "memory")
+		fmt.Printf("knowledge updated: commit %s on the %s branch\n", res.Commit, "knowledge")
 	}
 	if res.Outcome != runner.Completed {
 		return 1
@@ -118,10 +118,10 @@ func routinesRun(args []string) int {
 	return 0
 }
 
-const routinesRunUsage = "usage: openroutines routines run <name> [--no-memory]"
+const routinesRunUsage = "usage: openroutines routines run <name> [--no-knowledge]"
 
 func parseRoutineRunArgs(args []string) (string, bool, bool, error) {
-	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--no-memory": {}})
+	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--no-knowledge": {}})
 	if err != nil {
 		return "", false, false, err
 	}
@@ -131,8 +131,8 @@ func parseRoutineRunArgs(args []string) (string, bool, bool, error) {
 	if len(positional) != 1 {
 		return "", false, false, fmt.Errorf("%s", routinesRunUsage)
 	}
-	_, noMemory := flags["--no-memory"]
-	return positional[0], noMemory, false, nil
+	_, noKnowledge := flags["--no-knowledge"]
+	return positional[0], noKnowledge, false, nil
 }
 
 func routinesNew(args []string) int {
@@ -301,13 +301,13 @@ func routinesRemove(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("Removed %s\n", path)
-	// Best effort: clean up the routine's state on the memory branch --
+	// Best effort: clean up the routine's state on the knowledge branch --
 	// scheduling state, trigger baseline, consumer cursor -- so the branch
 	// doesn't accumulate orphans that misfire a later routine with the same
-	// name. Its ledger stays -- that's memory.
-	removed, _ := memory.At(".").RemoveRoutineState(name)
+	// name. Its ledger stays -- that's knowledge.
+	removed, _ := knowledge.At(".").RemoveRoutineState(name)
 	for _, p := range removed {
-		fmt.Printf("Removed %s (commit inside memory/ to record it)\n", p)
+		fmt.Printf("Removed %s (commit inside knowledge/ to record it)\n", p)
 	}
 	return 0
 }

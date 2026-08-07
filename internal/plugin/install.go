@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/steadyspacecorp/openroutines/internal/memory"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
@@ -97,7 +97,7 @@ func (p *Plugin) collisions(routines []*routine.Routine, skills []*skill.Skill, 
 }
 
 // Apply copies the bundle into the agent: routines and skills always; ledger
-// stubs only when the memory worktree already exists (the supervisor creates
+// stubs only when the knowledge worktree already exists (the supervisor creates
 // it on first run), otherwise they are returned as pending for the caller to
 // surface.
 func (i *Install) Apply() (installed, pendingStubs []string, err error) {
@@ -136,7 +136,7 @@ func (i *Install) Apply() (installed, pendingStubs []string, err error) {
 		return nil, nil, err
 	}
 	installed = append(installed, filepath.Join(".openroutines", "plugins", p.Manifest.Name))
-	wt := memory.At(i.agentDir).Worktree()
+	wt := knowledge.At(i.agentDir).Worktree()
 	haveWorktree := false
 	if fi, err := os.Stat(wt); err == nil && fi.IsDir() {
 		haveWorktree = true
@@ -146,9 +146,9 @@ func (i *Install) Apply() (installed, pendingStubs []string, err error) {
 			pendingStubs = append(pendingStubs, stub)
 			continue
 		}
-		dest := filepath.Join(wt, strings.TrimPrefix(stub, "memory"+string(filepath.Separator)))
+		dest := filepath.Join(wt, strings.TrimPrefix(stub, "knowledge"+string(filepath.Separator)))
 		if _, err := os.Stat(dest); err == nil {
-			pendingStubs = append(pendingStubs, stub) // never clobber live memory
+			pendingStubs = append(pendingStubs, stub) // never clobber live knowledge
 			continue
 		}
 		if err := copyFile(filepath.Join(p.Dir, stub), dest); err != nil {

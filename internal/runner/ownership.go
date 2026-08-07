@@ -41,7 +41,7 @@ func prepareWorkspaceAccess(gid uint32, workspace string) error {
 }
 
 // prepareAttemptTrees makes the trees the attempt may mutate -- staged
-// memory, the run tmp, the attempt home -- group-writable for it. Files the
+// knowledge, the run tmp, the attempt home -- group-writable for it. Files the
 // model process creates inside arrive owned by the attempt uid with its own
 // gid, and the sandbox shim's umask keeps them group-rw, so the supervisor
 // can still import and remove them afterwards.

@@ -165,7 +165,7 @@ func pluginAdd(args []string) int {
 		stepf("add to opencode.json's mcp block:  %s  # %s", config.MCPSnippet(name, p.Manifest.MCP[name].URL, p.Manifest.MCP[name].Credential), firstLine(p.Manifest.MCP[name].Description))
 	}
 	for _, s := range pendingStubs {
-		stepf("seed %s after the memory worktree exists (first run creates it)", s)
+		stepf("seed %s after the knowledge worktree exists (first run creates it)", s)
 	}
 	stepf("openroutines check")
 	if len(p.Routines) > 0 {

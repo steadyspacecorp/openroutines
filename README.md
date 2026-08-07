@@ -21,11 +21,11 @@ Plenty of tools will run a prompt on a schedule. OpenRoutines helps you run auto
 
 ### 📦 The repo is the agent
 
-Everything your agent is -- routines, skills, memory, encrypted credentials -- lives in one git repository that deploys as one Docker container. Routines are markdown files: frontmatter declares the scope, the body is the prompt. It runs anywhere a container runs -- a VPS, Fly, Render, your homelab -- with no database, queue, or secrets platform behind it, on any model provider opencode supports. Simple, easy to reason about, shipped like the rest of your software.
+Everything your agent is -- routines, skills, knowledge, encrypted credentials -- lives in one git repository that deploys as one Docker container. Routines are markdown files: frontmatter declares the scope, the body is the prompt. It runs anywhere a container runs -- a VPS, Fly, Render, your homelab -- with no database, queue, or secrets platform behind it, on any model provider opencode supports. Simple, easy to reason about, shipped like the rest of your software.
 
 ### 🤝 A teammate, not a black box
 
-[Teamwork primitives come built in](docs/teamwork.md): recording work, owning tasks, stating intentions, surfacing blockers. One rule routes everything the agent remembers into events (it happened), tasks (someone must do it), or context (worth remembering). Memory lives on a git branch -- backed up on every push, surviving every redeploy -- and you review it like code. Any routine can consume what the agent recorded and report it anywhere -- Steady, Slack, a log line. You focus on the routines that do the work; the teamwork mostly takes care of itself.
+[Teamwork primitives come built in](docs/teamwork.md): recording work, owning tasks, stating intentions, surfacing blockers. One rule routes everything the agent remembers into events (it happened), tasks (someone must do it), or context (worth remembering). Knowledge lives on a git branch -- backed up on every push, surviving every redeploy -- and you review it like code. Any routine can consume what the agent recorded and report it anywhere -- Steady, Slack, a log line. You focus on the routines that do the work; the teamwork mostly takes care of itself.
 
 ### 🔒 Safe to run unattended
 

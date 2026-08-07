@@ -1,10 +1,10 @@
-package memory
+package knowledge
 
-// Delivery: the memory branch is a change feed. Every memory-writing run
+// Delivery: the knowledge branch is a change feed. Every knowledge-writing run
 // already leaves a commit; a reporting routine (frontmatter `reports: true`)
 // reads the commits since its own cursor as an injected changes.md, and the
 // cursor advances only when the routine explicitly consumes the whole change
-// set. See design decision "Delivery: the memory branch is the change feed".
+// set. See design decision "Delivery: the knowledge branch is the change feed".
 
 import (
 	"encoding/json"
@@ -18,28 +18,28 @@ import (
 	"time"
 )
 
-// Cursor records how far one consumer has processed memory history. Cursors
+// Cursor records how far one consumer has processed knowledge history. Cursors
 // are supervisor-owned bookkeeping (under state/, never staged into a run)
-// and travel with the memory branch like the rest of scheduling state.
+// and travel with the knowledge branch like the rest of scheduling state.
 type Cursor struct {
-	ConsumedThrough string    `json:"consumed_through"` // memory commit SHA
+	ConsumedThrough string    `json:"consumed_through"` // knowledge commit SHA
 	ByRun           string    `json:"by_run"`
 	At              time.Time `json:"at"`
 }
 
 // CursorFile is the cursor's branch-relative path: what every diagnostic about
 // a broken cursor names, because repairing one means editing this file on the
-// memory branch.
+// knowledge branch.
 func CursorFile(consumer string) string {
 	return path.Join(stateDirName, "cursors", consumer+".json")
 }
 
-func (m *Memory) cursorPath(consumer string) string {
+func (m *Knowledge) cursorPath(consumer string) string {
 	return filepath.Join(m.Worktree(), CursorFile(consumer))
 }
 
 // LoadCursor returns nil when the consumer has no cursor yet (first run).
-func (m *Memory) LoadCursor(consumer string) (*Cursor, error) {
+func (m *Knowledge) LoadCursor(consumer string) (*Cursor, error) {
 	raw, err := os.ReadFile(m.cursorPath(consumer))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -52,7 +52,7 @@ func (m *Memory) LoadCursor(consumer string) (*Cursor, error) {
 		return nil, fmt.Errorf("cursor %s: %w", consumer, err)
 	}
 	// The cursor value becomes a git rev-range argv element, and cursor
-	// files live on the memory branch -- an untrusted, human-writable
+	// files live on the knowledge branch -- an untrusted, human-writable
 	// channel. Only a commit SHA is acceptable.
 	if !shaPattern.MatchString(c.ConsumedThrough) {
 		return nil, fmt.Errorf("cursor %s: consumed_through %q is not a commit SHA", consumer, c.ConsumedThrough)
@@ -65,7 +65,7 @@ var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
 // SaveCursor writes the cursor into the worktree; the caller's next Commit
 // carries it, so consumption is recorded in the run's completion commit.
-func (m *Memory) SaveCursor(consumer string, c Cursor) error {
+func (m *Knowledge) SaveCursor(consumer string, c Cursor) error {
 	p := m.cursorPath(consumer)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
@@ -78,7 +78,7 @@ func (m *Memory) SaveCursor(consumer string, c Cursor) error {
 }
 
 // Cursors lists every consumer with a cursor, for `openroutines status`.
-func (m *Memory) Cursors() (map[string]Cursor, error) {
+func (m *Knowledge) Cursors() (map[string]Cursor, error) {
 	dir := filepath.Join(m.StateDir(), "cursors")
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -100,13 +100,13 @@ func (m *Memory) Cursors() (map[string]Cursor, error) {
 	return out, nil
 }
 
-// Head returns the memory branch's current commit: the fixed `through`
+// Head returns the knowledge branch's current commit: the fixed `through`
 // boundary a change set is prepared against.
-func (m *Memory) Head() (string, error) {
+func (m *Knowledge) Head() (string, error) {
 	return git(m.Worktree(), "rev-parse", "HEAD")
 }
 
-// CommitChange is one memory commit's model-facing changes.
+// CommitChange is one knowledge commit's model-facing changes.
 type CommitChange struct {
 	SHA     string
 	Date    string // committer date, YYYY-MM-DD
@@ -126,10 +126,10 @@ type FileDelta struct {
 var deliveryExcludes = []string{":(exclude)state", ":(exclude)runs.jsonl", ":(exclude)ledgers"}
 
 // ErrCursorUnreachable reports a cursor that no longer names a commit on the
-// memory branch -- a repaired history, a hand-edited cursor file. The range
+// knowledge branch -- a repaired history, a hand-edited cursor file. The range
 // cannot be walked until a person fixes the cursor, so callers should treat
 // it as a failure to diagnose rather than one to retry.
-var ErrCursorUnreachable = errors.New("consumer cursor is not on the memory branch")
+var ErrCursorUnreachable = errors.New("consumer cursor is not on the knowledge branch")
 
 // reachable checks the precondition for from..through naming a change set:
 // the cursor commit exists and the boundary descends from it. Both halves
@@ -140,7 +140,7 @@ var ErrCursorUnreachable = errors.New("consumer cursor is not on the memory bran
 // else is git failing to answer (a broken repository, a lock, a full disk),
 // and calling that unreachable would abandon a run on its first attempt over
 // a condition the next attempt might not even see.
-func (m *Memory) reachable(from, through string) error {
+func (m *Knowledge) reachable(from, through string) error {
 	wt := m.Worktree()
 	full, err := git(wt, "rev-parse", "--verify", "--quiet", from+"^{commit}")
 	if err != nil {
@@ -165,7 +165,7 @@ func (m *Memory) reachable(from, through string) error {
 // additions and removals. Commit-by-commit, never a net endpoint diff: an
 // event added and later pruned by retention must still reach a consumer that
 // hasn't seen it.
-func (m *Memory) Changes(from, through string) ([]CommitChange, error) {
+func (m *Knowledge) Changes(from, through string) ([]CommitChange, error) {
 	if from == "" || through == "" {
 		return nil, fmt.Errorf("delivery changes: empty commit range")
 	}
@@ -174,7 +174,7 @@ func (m *Memory) Changes(from, through string) ([]CommitChange, error) {
 	}
 	// The commit sentinel and field separators are emitted by git itself
 	// (%x00/%x1f) -- argv cannot carry a literal NUL. Retention trims are
-	// dropped from the walk: pruning is bookkeeping, not a memory change, and
+	// dropped from the walk: pruning is bookkeeping, not a knowledge change, and
 	// delivering its removals would re-present already-consumed history to
 	// every consumer once a day. The pattern is anchored because --grep sees
 	// the whole message, subject included, and a routine name is a filename.
@@ -254,7 +254,7 @@ const (
 // definition, not here.
 func RenderChanges(consumer, from, through string, changes []CommitChange) string {
 	var b strings.Builder
-	b.WriteString("# Pending memory changes\n\n")
+	b.WriteString("# Pending knowledge changes\n\n")
 	fmt.Fprintf(&b, "- Routine: %s\n", consumer)
 	if from == "" {
 		b.WriteString("- From: (first run -- cursor starts at the current state; history before it is not replayed)\n")

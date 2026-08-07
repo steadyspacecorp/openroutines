@@ -32,12 +32,12 @@ openroutines configure
 `scaffold` creates a fresh git repository with the agent's skeleton:
 
 - `openroutines.yml` -- the agent's identity and defaults
-- `routines/` -- a starter check-in routine, active by default (once a day, your agent reports what it did, what it intends to do, and where it's blocked -- after `openroutines sync`, `memory/ledgers/check-in.md` holds the latest one, until you point it somewhere better)
+- `routines/` -- a starter check-in routine, active by default (once a day, your agent reports what it did, what it intends to do, and where it's blocked -- after `openroutines sync`, `knowledge/ledgers/check-in.md` holds the latest one, until you point it somewhere better)
 - `skills/` -- empty, ready for you to add to
 - `AGENTS.md` -- so you can work on the agent with the coding agent of your choice (`CLAUDE.md` is a symlink to it, for the agents that read that name instead)
 - a baseline `opencode.json` permission policy, `.gitignore`, Dockerfile, and pinned framework version
 
-A `memory/` directory appears on first run -- a checkout of the agent's dedicated memory branch, kept out of `main`'s history.
+A `knowledge/` directory appears on first run -- a checkout of the agent's dedicated knowledge branch, kept out of `main`'s history.
 
 `configure` is idempotent -- run it whenever. It fills in `openroutines.yml` (name, job description, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
 
@@ -88,7 +88,7 @@ openroutines routines new doc-drift
 
 Edit the generated file -- schedule and scope in the frontmatter, prompt in the body -- then run it once locally. The local run uses the same runtime image, opencode version, constructed environment, and assembled workspace as production.
 
-`routines run` starts opencode in a disposable Docker container. It is always a real run with the routine's credentials and tools; `--no-memory` discards only its staged memory writes and run record.
+`routines run` starts opencode in a disposable Docker container. It is always a real run with the routine's credentials and tools; `--no-knowledge` discards only its staged knowledge writes and run record.
 
 ```bash
 openroutines routines run doc-drift
@@ -97,11 +97,11 @@ openroutines routines run doc-drift
 Day to day:
 
 ```bash
-openroutines status                   # master key, models, routines and what they owe, skills, memory sync state, token usage
-openroutines sync                     # pull the latest memory; memory/ledgers/check-in.md holds the last check-in
+openroutines status                   # master key, models, routines and what they owe, skills, knowledge sync state, token usage
+openroutines sync                     # pull the latest knowledge; knowledge/ledgers/check-in.md holds the last check-in
 openroutines routines list            # also: edit, activate, deactivate, remove
-openroutines routines run <name> --no-memory
-                                      # real external actions; memory discarded
+openroutines routines run <name> --no-knowledge
+                                      # real external actions; knowledge discarded
 openroutines skills new <name|url>    # scaffold a skill, or vendor one from a git repo; also: list, remove
 openroutines credentials set <name>   # add/replace one encrypted secret; also: list, remove
 openroutines usage                    # token use and reported cost per routine; --json for scripts
@@ -112,6 +112,6 @@ openroutines check                    # validate config, frontmatter, and schedu
 
 - [Creating routines](routines.md) -- the frontmatter reference, schedules, triggers, and local runs
 - [Extending your agent](extending.md) -- skills, plugins, credentials, and variables
-- [Memory](memory.md) -- the work record the agent keeps, and how to read and curate it
+- [Knowledge](knowledge.md) -- the work record the agent keeps, and how to read and curate it
 - [Your agent on the team](teamwork.md) -- how the agent reports its work and improves at its job
 - [Operating in production](operating.md) -- deploying, CI/CD, and updating

@@ -1,4 +1,4 @@
-package memory
+package knowledge
 
 import (
 	"bufio"
@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// DefaultRetention is the memory working-set window when openroutines.yml doesn't
-// set memory.retention. Git history is the unlimited archive; the working
+// DefaultRetention is the knowledge working-set window when openroutines.yml doesn't
+// set knowledge.retention. Git history is the unlimited archive; the working
 // files are the window a routine actually loads into context.
 const DefaultRetention = 30 * 24 * time.Hour
 
@@ -29,7 +29,7 @@ const runRecordsFile = "runs.jsonl"
 
 // trimTrailer marks a commit as a retention trim, and is the whole mechanism
 // keeping trims out of the delivery feed (see Changes). Nothing else on the
-// memory branch writes it: commit messages are the supervisor's own.
+// knowledge branch writes it: commit messages are the supervisor's own.
 const trimTrailer = "Openroutines-Retention-Trim: true"
 
 // CommitTrim commits what Trim rewrote, carrying the trailer that keeps it out
@@ -38,8 +38,8 @@ const trimTrailer = "Openroutines-Retention-Trim: true"
 // hand curation `status` tells an operator to commit when they are done, a
 // worktree a failed intent commit left behind -- would ride along into the one
 // commit no consumer ever reads.
-func (m *Memory) CommitTrim(keep time.Duration) (string, error) {
-	message := fmt.Sprintf("Trim memory to retention window (%s)\n\n%s\n", keep, trimTrailer)
+func (m *Knowledge) CommitTrim(keep time.Duration) (string, error) {
+	message := fmt.Sprintf("Trim knowledge to retention window (%s)\n\n%s\n", keep, trimTrailer)
 	return m.commitPaths(message, append([]string{runRecordsFile}, trimmedStreams...)...)
 }
 
@@ -69,7 +69,7 @@ func ParseRetention(s string) (time.Duration, error) {
 // own documentation -- headings, prose, blanks, and fenced format examples --
 // and always survives, as do uncommitted lines.
 // Returns whether anything changed; the caller commits.
-func (m *Memory) Trim(keep time.Duration, now time.Time) (bool, error) {
+func (m *Knowledge) Trim(keep time.Duration, now time.Time) (bool, error) {
 	wt := m.Worktree()
 	cutoff := now.Add(-keep)
 	changed := false
