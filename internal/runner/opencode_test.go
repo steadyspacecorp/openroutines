@@ -90,11 +90,54 @@ func TestHostCaptureRefusesAHomeInsideTheWorkspace(t *testing.T) {
 	}
 }
 
+// truncateOnPipe stands in for opencode's real defect: its CLI calls
+// process.exit() before an async stdout write drains, and stream writes to
+// a pipe are asynchronous, so a large payload through a pipe arrives cut
+// short with exit code 0 -- while writes to a file are synchronous and
+// arrive whole. The stand-in cuts deterministically where the real race
+// cuts sometimes: an exec that hands opencode a pipe fails these tests.
+const truncateOnPipe = `#!/bin/sh
+if [ -p /dev/stdout ]; then printf '{"messages":[{"in'; else printf '{"messages":[]}'; fi
+`
+
+func TestHostCaptureSurvivesOpencodesLossyPipeWrites(t *testing.T) {
+	fakeBin(t, "opencode", truncateOnPipe)
+	out, err := hostOpencodeExec(t.TempDir())("export", "ses_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != `{"messages":[]}` {
+		t.Fatalf("the exec must hand opencode a file, not a pipe -- got %q", out)
+	}
+}
+
+func TestNativeCaptureSurvivesOpencodesLossyPipeWrites(t *testing.T) {
+	fakeBin(t, "opencode", truncateOnPipe)
+	out, err := nativeOpencodeExec(t.TempDir())("export", "ses_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != `{"messages":[]}` {
+		t.Fatalf("the exec must hand opencode a file, not a pipe -- got %q", out)
+	}
+}
+
+// fakeDocker stands in for the docker client: it records its arguments in
+// the workspace file the exec reads back -- the container's own stdout
+// route is a pipe, so nothing the exec returns may come from there -- and
+// says something on stdout to prove that stream is ignored.
+func fakeDocker(t *testing.T, ws string) {
+	t.Helper()
+	fakeBin(t, "docker", "#!/bin/sh\necho pipe-noise\nfor a in \"$@\"; do echo \"$a\"; done > "+ws+"/"+captureOutName+"\n")
+}
+
 // The local-container variant re-enters the image; its empty home is a
-// tmpfs outside /work, so the attempt cannot reach it either.
+// tmpfs outside /work, so the attempt cannot reach it either. opencode's
+// stdout is redirected to a file inside the container, because a file is
+// what defeats its lossy exit and docker's own stdout is a pipe end to end.
 func TestContainerCaptureRunsWithAnEmptyHome(t *testing.T) {
 	ws := t.TempDir()
-	fakeBin(t, "docker", "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done\n")
+	fakeDocker(t, ws)
 
 	out, err := containerOpencodeExec(ws, "img")("export", "ses_x")
 	if err != nil {
@@ -102,6 +145,9 @@ func TestContainerCaptureRunsWithAnEmptyHome(t *testing.T) {
 	}
 	args := strings.Split(strings.TrimSpace(string(out)), "\n")
 	joined := strings.Join(args, " ")
+	if slices.Contains(args, "pipe-noise") {
+		t.Fatalf("the exec must read the workspace file, never docker's stdout: %s", joined)
+	}
 	if slices.Contains(args, "HOME=/work/"+attemptHomeName) {
 		t.Fatalf("capture must not take its home from the mounted workspace: %s", joined)
 	}
@@ -110,7 +156,9 @@ func TestContainerCaptureRunsWithAnEmptyHome(t *testing.T) {
 		"XDG_CONFIG_HOME=" + captureHomeMount + "/.config",
 		"XDG_DATA_HOME=/work/.home/.local/share",
 		"--tmpfs", captureHomeMount + ":mode=0777,exec",
-		"-w", "/work", "img", "opencode", "export", "ses_x",
+		"-w", "/work", "img",
+		"sh", "-c", `exec opencode "$@" > /work/` + captureOutName,
+		"opencode", "export", "ses_x",
 	} {
 		if !slices.Contains(args, want) {
 			t.Fatalf("missing %q in docker args: %s", want, joined)
@@ -120,6 +168,31 @@ func TestContainerCaptureRunsWithAnEmptyHome(t *testing.T) {
 		if a == "-v" && strings.HasSuffix(args[i+1], ":"+captureHomeMount) {
 			t.Fatalf("the home must be a tmpfs, not a bind mount: %s", joined)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(ws, captureOutName)); !os.IsNotExist(err) {
+		t.Fatalf("the landing file must be removed after the exec: %v", err)
+	}
+}
+
+// The workspace is model-written, so a symlink the attempt planted at the
+// landing path must not decide where the redirect writes or what the read
+// returns.
+func TestContainerCaptureClearsAPlantedLandingFile(t *testing.T) {
+	ws := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("untouched"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(ws, captureOutName)); err != nil {
+		t.Fatal(err)
+	}
+	fakeDocker(t, ws)
+
+	if _, err := containerOpencodeExec(ws, "img")("export", "ses_x"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(victim); err != nil || string(raw) != "untouched" {
+		t.Fatalf("a planted symlink must not route the exec's output elsewhere: %q (%v)", raw, err)
 	}
 }
 
