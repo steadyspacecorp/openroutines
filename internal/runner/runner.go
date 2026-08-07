@@ -35,6 +35,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
+	"github.com/steadyspacecorp/openroutines/internal/lock"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
@@ -697,20 +698,25 @@ func Run(dir, name string, noKnowledge bool) (result *Result, err error) {
 	if err != nil {
 		return nil, err
 	}
-	release, err := LockRoutine(dir, name)
-	if errors.Is(err, ErrRoutineLocked) {
+	// One attempt per routine at a time (design decision "Overlap"), held for
+	// the whole lifecycle -- snapshot through import and settlement. The
+	// supervisor takes this same lock, which is exactly what it is for: a
+	// manual run colliding with the supervisor's own run of the same routine
+	// would double external actions and race the import.
+	release, err := lock.Take(dir, name)
+	if errors.Is(err, lock.ErrLocked) {
 		return nil, fmt.Errorf("routine %s already has an attempt in flight (the supervisor or another terminal holds its lock) -- skipped", name)
 	}
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	// The cross-process knowledge lock: a supervisor may be settling runs into
-	// the same worktree beside this process -- in the production container
-	// always, on a host whenever `supervise` runs locally. Staging snapshots
-	// and settlement each take their turn behind the same kernel lock the
-	// supervisor's own critical sections hold.
-	memLock, err := OpenKnowledgeLock(dir)
+	// A supervisor may be settling runs into the same knowledge worktree
+	// beside this process -- in the production container always, on a host
+	// whenever `supervise` runs locally. Staging snapshots and settlement each
+	// take their turn behind the same lock the supervisor's own critical
+	// sections hold.
+	memLock, err := lock.Locker(dir, "knowledge")
 	if err != nil {
 		return nil, err
 	}

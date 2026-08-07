@@ -31,6 +31,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
+	"github.com/steadyspacecorp/openroutines/internal/lock"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
@@ -73,7 +74,7 @@ type Supervisor struct {
 	// `routines run` beside this process serializes through it too instead
 	// of becoming a second uncoordinated writer. Everything below through
 	// pollFailed is touched only under memMu or only by the tick goroutine.
-	memMu *runner.KnowledgeLock
+	memMu sync.Locker
 
 	// leaseMu guards the lease heartbeat state: in-flight runs heartbeat
 	// concurrently with each other and with the tick. Lease git operations
@@ -135,7 +136,7 @@ func New(dir string) (*Supervisor, error) {
 		return nil, err
 	}
 	mem := knowledge.At(dir)
-	memMu, err := runner.OpenKnowledgeLock(dir)
+	memMu, err := lock.Locker(dir, "knowledge")
 	if err != nil {
 		return nil, err
 	}
@@ -255,9 +256,12 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			slog.Debug("skipped", "reason", "shutting down")
 			return // shutting down: stop launching, nothing is reserved yet
 		}
-		release, lockErr := runner.LockRoutine(s.Dir, d.r.Name)
+		// One attempt per routine at a time (design decision "Overlap"): the
+		// holder may be this supervisor's own earlier run still settling, or
+		// a `routines run` someone started in a terminal.
+		release, lockErr := lock.Take(s.Dir, d.r.Name)
 		if lockErr != nil {
-			if errors.Is(lockErr, runner.ErrRoutineLocked) {
+			if errors.Is(lockErr, lock.ErrLocked) {
 				d.r.Log().Warn("attempt already in flight elsewhere (lock held) -- skipping this tick")
 			} else {
 				d.r.Log().Error("routine lock failed", "error", lockErr)
