@@ -106,7 +106,11 @@ func Run(args []string) int {
 			return fail(fmt.Errorf("not an agent repository (no %s found)", config.FileName))
 		}
 		setupLogging(".")
-		warnOnPinMismatch(".")
+		// check names the mismatch itself, as its first problem -- the
+		// dispatch warning on top of that is the same message twice.
+		if cmd != "check" {
+			warnOnPinMismatch(".")
+		}
 	}
 
 	return handler(rest)
