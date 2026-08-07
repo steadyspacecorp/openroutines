@@ -218,8 +218,9 @@ func TestWhetherKillingTheSandboxKillsAnEscapedDescendant(t *testing.T) {
 			t.Fatal(err)
 		}
 		beat := filepath.Join(marker, "beat")
+		pidfile := filepath.Join(marker, "escapee-pid")
 		cmd, err := b.Command(Attempt{Workspace: workspace, Writable: []string{marker}},
-			"sh", "-c", "setsid sh -c 'while :; do echo x >> "+beat+"; sleep 0.05; done' & sleep 30")
+			"sh", "-c", "setsid sh -c 'echo $$ > "+pidfile+"; while :; do echo x >> "+beat+"; sleep 0.05; done' & sleep 30")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -228,6 +229,24 @@ func TestWhetherKillingTheSandboxKillsAnEscapedDescendant(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
+		// The descendant is in a session of its own, so the group kill below
+		// cannot reach it -- that is the point -- and it must not loop on
+		// after the test either. It recorded the pid it got so the cleanup
+		// can reap it, except on a collapsing rung, where the recorded pid is
+		// namespace-local (never signal it from the host) and the kernel's
+		// reaping is the very thing under test.
+		t.Cleanup(func() {
+			if b.Capabilities().CollapsesTree {
+				return
+			}
+			raw, err := os.ReadFile(pidfile)
+			if err != nil {
+				return
+			}
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
+				_ = syscall.Kill(-pid, syscall.SIGKILL)
+			}
+		})
 		waitFor(t, beat)
 
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
@@ -248,8 +267,7 @@ func TestWhetherKillingTheSandboxKillsAnEscapedDescendant(t *testing.T) {
 			t.Skip("nothing outlived the sandbox, so this run proves nothing about a rung that does not claim collapse")
 		}
 		// Documented, not lamented: the runner sweeps the process group for
-		// exactly this case. Clean up what the kernel did not.
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		// exactly this case, and the cleanup above reaps this test's escapee.
 	})
 }
 
