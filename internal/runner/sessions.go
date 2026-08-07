@@ -53,8 +53,8 @@ type sessionExport struct {
 
 // opencodeExec runs one opencode subcommand in the attempt's context after
 // the model process exits and returns its stdout -- the contract
-// everything below fetches through, satisfied by the sessions method of
-// the attempt's deployment mode (opencode.go).
+// everything below fetches through, satisfied by the exec method of the
+// attempt's opencode runtime (opencode.go).
 type opencodeExec func(args ...string) ([]byte, error)
 
 // fetchSessions asks opencode for the attempt's sessions: `session list
