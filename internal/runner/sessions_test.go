@@ -34,9 +34,25 @@ func sessionOf(t *testing.T, msgs ...string) opencodeExec {
 	})
 }
 
+// captureVia fetches and captures in one step, the way the runner composes
+// them.
+func captureVia(t *testing.T, oc opencodeExec) Capture {
+	t.Helper()
+	exports, err := fetchSessions(oc, discardLog)
+	return captureSessions(exports, err, discardLog)
+}
+
+// exportVia fetches and exports in one step, the way the runner composes
+// them.
+func exportVia(t *testing.T, oc opencodeExec) string {
+	t.Helper()
+	exports, err := fetchSessions(oc, discardLog)
+	return exportSessions(testMeta, exports, err, discardLog)
+}
+
 // Usage sums assistant messages only; absence is nil, never zero.
 func TestCaptureUsage(t *testing.T) {
-	if got := captureSessions(stubOpencode(t, `[]`, nil), discardLog).Usage; got != nil {
+	if got := captureVia(t, stubOpencode(t, `[]`, nil)).Usage; got != nil {
 		t.Fatalf("no sessions should be nil, got %+v", got)
 	}
 	oc := sessionOf(t,
@@ -44,7 +60,7 @@ func TestCaptureUsage(t *testing.T) {
 		`{"role":"assistant","tokens":{"input":50,"output":10,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.005}`,
 		`{"role":"user","tokens":{"input":999,"output":999}}`,
 	)
-	u := captureSessions(oc, discardLog).Usage
+	u := captureVia(t, oc).Usage
 	if u == nil {
 		t.Fatal("expected usage")
 	}
@@ -88,7 +104,7 @@ func TestCaptureSessionFailure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := captureSessions(sessionOf(t, tc.messages...), discardLog).Failure
+			got := captureVia(t, sessionOf(t, tc.messages...)).Failure
 			if tc.want == "" && got != "" {
 				t.Fatalf("expected no claim, got %q", got)
 			}
@@ -107,7 +123,7 @@ func TestCaptureSessionFailureIsRedacted(t *testing.T) {
 	release := scrub.RegisterEphemeral("github_app bearer (gh)", "tok-sensitive-123")
 	defer release()
 	oc := sessionOf(t, `{"role":"assistant","error":{"name":"ProviderAuthError","data":{"message":"401 for token tok-sensitive-123"}}}`)
-	got := captureSessions(oc, discardLog).Failure
+	got := captureVia(t, oc).Failure
 	if strings.Contains(got, "tok-sensitive-123") || !strings.Contains(got, "[REDACTED:") {
 		t.Fatalf("session-derived failure text must be lifted redacted, got %q", got)
 	}
@@ -118,7 +134,7 @@ func TestCaptureSessionFailureIsRedacted(t *testing.T) {
 func TestCaptureFailsOpen(t *testing.T) {
 	broken := func(...string) ([]byte, error) { return nil, os.ErrPermission }
 
-	s := captureSessions(broken, discardLog)
+	s := captureVia(t, broken)
 
 	if s.Usage != nil {
 		t.Fatalf("broken exec should degrade to nil usage, got %+v", s.Usage)
@@ -137,7 +153,7 @@ func TestCaptureSumsEverySession(t *testing.T) {
 		"ses_b": `{"messages":[{"info":{"role":"assistant","tokens":{"input":50,"output":10,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.005}}]}`,
 	})
 
-	s := captureSessions(oc, discardLog)
+	s := captureVia(t, oc)
 
 	if s.Failure != "" {
 		t.Fatalf("unexpected failure: %q", s.Failure)
@@ -159,13 +175,77 @@ func TestCaptureJudgesTheMostRecentSession(t *testing.T) {
 		"ses_side": `{"messages":[{"info":{"role":"assistant","tokens":{"input":50,"output":10,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.005,"finish":"stop"}}]}`,
 	})
 
-	s := captureSessions(oc, discardLog)
+	s := captureVia(t, oc)
 
 	if !strings.Contains(s.Failure, "tool-calls") {
 		t.Fatalf("an older session's clean end must not mask the latest session's unfinished turn, got %q", s.Failure)
 	}
 	if u := s.Usage; u == nil || u.Input != 150 || u.Output != 30 {
 		t.Fatalf("usage must still sum every session, got %+v", u)
+	}
+}
+
+// truncatingOpencode wraps a stub so its first `count` answers to `args`
+// come back cut in half with a clean exit -- the shape of opencode's lossy
+// stdout (see completeJSON).
+func truncatingOpencode(oc opencodeExec, count int, args ...string) opencodeExec {
+	return func(got ...string) ([]byte, error) {
+		raw, err := oc(got...)
+		if err == nil && count > 0 && strings.Join(got, " ") == strings.Join(args, " ") {
+			count--
+			return raw[:len(raw)/2], nil
+		}
+		return raw, err
+	}
+}
+
+// A truncated document with a clean exit is opencode's lossy stdout, not
+// an answer: one fresh invocation is expected to return the whole thing.
+func TestFetchRetriesTruncatedJSON(t *testing.T) {
+	for name, args := range map[string][]string{
+		"list":   {"session", "list", "--format", "json"},
+		"export": {"export", "ses_x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			oc := truncatingOpencode(sessionOf(t, `{"role":"assistant","finish":"stop"}`), 1, args...)
+			exports, err := fetchSessions(oc, discardLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(exports) != 1 || !strings.Contains(string(exports[0].raw), "stop") {
+				t.Fatalf("the retry must return the whole document, got %+v", exports)
+			}
+		})
+	}
+}
+
+func TestFetchGivesUpOnPersistentTruncation(t *testing.T) {
+	oc := truncatingOpencode(sessionOf(t, `{"role":"assistant"}`), 2, "export", "ses_x")
+	if _, err := fetchSessions(oc, discardLog); err == nil {
+		t.Fatal("a document truncated twice must surface as an error, not as data")
+	}
+}
+
+// A session that could not be fetched empties the whole capture -- a
+// partial sum is a silently wrong usage record -- while export still
+// preserves the sessions that did arrive.
+func TestPartialFetchEmptiesCaptureButStillExports(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvSessionDir, root)
+	oc := stubOpencode(t, `[{"id":"ses_a"},{"id":"ses_gone"}]`, map[string]string{
+		"ses_a": `{"messages":[{"info":{"role":"assistant","tokens":{"input":9,"output":9,"reasoning":0,"cache":{"read":0,"write":0}}}}]}`,
+	})
+
+	exports, err := fetchSessions(oc, discardLog)
+	if err == nil {
+		t.Fatal("a fetch that lost a session must say so")
+	}
+	if s := captureSessions(exports, err, discardLog); s.Usage != nil || s.Failure != "" {
+		t.Fatalf("a partial fetch must empty the capture, got %+v", s)
+	}
+	dir := exportSessions(testMeta, exports, err, discardLog)
+	if _, statErr := os.Stat(filepath.Join(dir, "ses_a.json")); statErr != nil {
+		t.Fatalf("the sessions that arrived must still be preserved: %v", statErr)
 	}
 }
 
@@ -192,11 +272,8 @@ var testMeta = Meta{RunID: "run_x", AttemptID: "attempt_01"}
 
 func TestExportDisabledWhenUnset(t *testing.T) {
 	t.Setenv(EnvSessionDir, "")
-	oc := func(args ...string) ([]byte, error) {
-		t.Fatalf("no designated session dir must mean no opencode call, got %v", args)
-		return nil, nil
-	}
-	if dir := exportSessions(testMeta, oc, discardLog); dir != "" {
+	exports := []sessionExport{{id: "ses_a", raw: []byte("{}")}}
+	if dir := exportSessions(testMeta, exports, nil, discardLog); dir != "" {
 		t.Fatalf("export must be a no-op when disabled, got %q", dir)
 	}
 }
@@ -209,7 +286,7 @@ func TestExportSavesEverySession(t *testing.T) {
 		"ses_b": `{"messages":[2]}`,
 	})
 
-	dir := exportSessions(testMeta, oc, discardLog)
+	dir := exportVia(t, oc)
 	if dir != filepath.Join(root, "run_x.attempt_01") {
 		t.Fatalf("unexpected session dir %q", dir)
 	}
@@ -226,7 +303,7 @@ func TestExportSavesEverySession(t *testing.T) {
 func TestExportWritesOwnerOnly(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)
-	dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_a"}]`, map[string]string{"ses_a": "{}"}), discardLog)
+	dir := exportVia(t, stubOpencode(t, `[{"id":"ses_a"}]`, map[string]string{"ses_a": "{}"}))
 	for path, want := range map[string]os.FileMode{
 		dir:                              0o700,
 		filepath.Join(dir, "ses_a.json"): 0o600,
@@ -244,7 +321,7 @@ func TestExportWritesOwnerOnly(t *testing.T) {
 func TestExportSkipsWhenAttemptLeftNoSessions(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)
-	if dir := exportSessions(testMeta, stubOpencode(t, `[]`, nil), discardLog); dir != "" {
+	if dir := exportVia(t, stubOpencode(t, `[]`, nil)); dir != "" {
 		t.Fatalf("no sessions must mean no session dir, got %q", dir)
 	}
 	if _, err := os.Stat(filepath.Join(root, "run_x.attempt_01")); !os.IsNotExist(err) {
@@ -259,9 +336,9 @@ func TestExportRefusesUnsafeSessionIDs(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)
 	planted := filepath.Join(root, "planted.json")
-	oc := stubOpencode(t, `[{"id":"../planted"}]`, map[string]string{"../planted": "stolen"})
+	oc := stubOpencode(t, `[{"id":"../planted"}]`, map[string]string{"../planted": `{"planted":true}`})
 
-	if dir := exportSessions(testMeta, oc, discardLog); dir != "" {
+	if dir := exportVia(t, oc); dir != "" {
 		t.Fatalf("an export that landed nothing must report nothing preserved, got %q", dir)
 	}
 	if _, err := os.Stat(planted); !os.IsNotExist(err) {
@@ -279,7 +356,7 @@ func TestExportNamesAPartialExport(t *testing.T) {
 	t.Setenv(EnvSessionDir, root)
 	oc := stubOpencode(t, `[{"id":"ses_a"},{"id":"ses_gone"}]`, map[string]string{"ses_a": "{}"})
 
-	dir := exportSessions(testMeta, oc, discardLog)
+	dir := exportVia(t, oc)
 	if dir != filepath.Join(root, "run_x.attempt_01") {
 		t.Fatalf("a partial export must still name its directory, got %q", dir)
 	}
@@ -294,10 +371,10 @@ func TestExportNamesAPartialExport(t *testing.T) {
 func TestExportReplacesAPreviousAttemptsSessions(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)
-	if dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_first"}]`, map[string]string{"ses_first": "{}"}), discardLog); dir == "" {
+	if dir := exportVia(t, stubOpencode(t, `[{"id":"ses_first"}]`, map[string]string{"ses_first": "{}"})); dir == "" {
 		t.Fatal("the first attempt must export cleanly")
 	}
-	dir := exportSessions(testMeta, stubOpencode(t, `[{"id":"ses_second"}]`, map[string]string{"ses_second": "{}"}), discardLog)
+	dir := exportVia(t, stubOpencode(t, `[{"id":"ses_second"}]`, map[string]string{"ses_second": "{}"}))
 	if _, err := os.Stat(filepath.Join(dir, "ses_second.json")); err != nil {
 		t.Fatalf("the retry's own sessions must land: %v", err)
 	}
@@ -313,7 +390,7 @@ func TestExportDegradesWhenStorageUnwritable(t *testing.T) {
 	}
 	t.Setenv(EnvSessionDir, blocked)
 	oc := stubOpencode(t, `[{"id":"ses_a"}]`, map[string]string{"ses_a": "{}"})
-	if dir := exportSessions(testMeta, oc, discardLog); dir != "" {
+	if dir := exportVia(t, oc); dir != "" {
 		t.Fatalf("broken operator storage must degrade to nothing preserved, got %q", dir)
 	}
 }
@@ -322,7 +399,7 @@ func TestExportDegradesWhenListingFails(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)
 	oc := func(...string) ([]byte, error) { return nil, errors.New("no daemon") }
-	if dir := exportSessions(testMeta, oc, discardLog); dir != "" {
+	if dir := exportVia(t, oc); dir != "" {
 		t.Fatalf("an unlistable store must degrade to nothing preserved, got %q", dir)
 	}
 }
