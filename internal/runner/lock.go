@@ -17,6 +17,32 @@ import (
 // an attempt is already in flight.
 var ErrRoutineLocked = errors.New("routine attempt already in flight")
 
+// openLock opens one of the agent's lock files. Read-only, and permissive on
+// creation, because whoever created the file must not decide who can lock it
+// afterwards: flock locks the open file description regardless of the mode
+// the file was opened in, and these files have no contents anyone reads or
+// writes. Asking for write access is asking for a permission we never use,
+// and one a manual run made as another identity -- root, over `fly ssh
+// console` -- takes away for good: the supervisor failed every dispatch of
+// that one routine, once a minute, until the container was replaced. The mode
+// is set after creation because umask would otherwise decide it, and it is
+// best effort: on a file we did not create it is not ours to widen, and
+// read-only was enough anyway. World-writable is not an exposure the tree
+// does not already have -- the directory these sit in is reachable only by
+// identities that can already read the whole repository.
+func openLock(dir, name string) (*os.File, error) {
+	lockDir := filepath.Join(dir, ".openroutines-tmp", "locks")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(lockDir, name), os.O_CREATE|os.O_RDONLY, 0o666)
+	if err != nil {
+		return nil, err
+	}
+	_ = f.Chmod(0o666)
+	return f, nil
+}
+
 // LockRoutine takes the per-routine kernel lock (design decision "Overlap"): a
 // non-blocking flock on .openroutines-tmp/locks/<name>.lock, held for the
 // whole attempt lifecycle -- snapshot through import and settlement. Both
@@ -25,11 +51,7 @@ var ErrRoutineLocked = errors.New("routine attempt already in flight")
 // supervisor's own run of the same routine would double external actions
 // and race the import. The kernel drops the lock if the holder dies.
 func LockRoutine(dir, name string) (release func(), err error) {
-	lockDir := filepath.Join(dir, ".openroutines-tmp", "locks")
-	if err := os.MkdirAll(lockDir, 0o755); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(lockDir, name+".lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := openLock(dir, name+".lock")
 	if err != nil {
 		return nil, err
 	}
@@ -63,11 +85,7 @@ type KnowledgeLock struct {
 
 // OpenKnowledgeLock opens the agent's cross-process knowledge-worktree lock.
 func OpenKnowledgeLock(dir string) (*KnowledgeLock, error) {
-	lockDir := filepath.Join(dir, ".openroutines-tmp", "locks")
-	if err := os.MkdirAll(lockDir, 0o755); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(lockDir, "knowledge.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := openLock(dir, "knowledge.lock")
 	if err != nil {
 		return nil, err
 	}
@@ -115,11 +133,7 @@ func reserveManualIdentity(dir string) (uint32, func(), error) {
 	if err := sandbox.EnsureAttemptGroups(config.MaxConcurrency + 1); err != nil {
 		return 0, nil, fmt.Errorf("%w: %w", ErrFatal, err)
 	}
-	lockDir := filepath.Join(dir, ".openroutines-tmp", "locks")
-	if err := os.MkdirAll(lockDir, 0o755); err != nil {
-		return 0, nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(lockDir, "manual-attempt.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := openLock(dir, "manual-attempt.lock")
 	if err != nil {
 		return 0, nil, err
 	}

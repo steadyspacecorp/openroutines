@@ -2,6 +2,8 @@ package runner
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -30,6 +32,32 @@ func TestLockRoutineExcludesConcurrentAttempts(t *testing.T) {
 		t.Fatalf("released lock should re-acquire: %v", err)
 	}
 	release3()
+}
+
+// A lock file left behind by a differently privileged invocation -- a manual
+// run someone made as root inside the container -- must still lock. Nothing
+// ever reads or writes these files, so wanting write access to one is asking
+// for a permission that would wedge the routine forever when it is missing:
+// the supervisor failed every dispatch of one routine, once a minute, until
+// the container was replaced. Ownership cannot be faked without privilege,
+// but the mode is the half that bites, so this stands in for it.
+func TestLockRoutineTakesALockFileItCannotWrite(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the mode bits this asserts on")
+	}
+	dir := t.TempDir()
+	locks := filepath.Join(dir, ".openroutines-tmp", "locks")
+	if err := os.MkdirAll(locks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locks, "daily.lock"), nil, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	release, err := LockRoutine(dir, "daily")
+	if err != nil {
+		t.Fatalf("a read-only lock file should still lock: %v", err)
+	}
+	release()
 }
 
 // The knowledge lock's cross-process exclusion rides the same per-description
