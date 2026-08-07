@@ -196,6 +196,53 @@ func TestContainerCaptureClearsAPlantedLandingFile(t *testing.T) {
 	}
 }
 
+// Local capture accepts that a planted workspace plugin runs inside the
+// capture container (docs/design.md, "Execution"), bounded by the container.
+// Swapping the landing file for an absolute symlink mid-exec must not
+// breach that bound by walking the host filesystem with the supervisor's
+// eyes: the read must come from the descriptor opened before the exec,
+// never from re-resolving the model-writable path.
+func TestContainerCaptureIgnoresALandingFileSwappedMidExec(t *testing.T) {
+	ws := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secret, []byte(`{"host":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	landing := ws + "/" + captureOutName
+	fakeBin(t, "docker", "#!/bin/sh\nprintf legit > "+landing+"\nrm "+landing+"\nln -s "+secret+" "+landing+"\n")
+
+	out, err := (containerOpencode{workspace: ws, image: "img"}).exec("export", "ses_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "legit" {
+		t.Fatalf("the exec must return what the container wrote, not what the swapped path points at: %q", out)
+	}
+}
+
+// Capture stderr exists to explain a failure, and untrusted code can write
+// to it for the whole timeout (a workspace plugin under local capture), so
+// only a bounded tail is kept -- the end of the stream, where the
+// explanation lands.
+func TestCaptureKeepsOnlyTheTailOfStderr(t *testing.T) {
+	fakeBin(t, "opencode", `#!/bin/sh
+i=0
+while [ $i -lt 5000 ]; do echo "noise line $i" >&2; i=$((i+1)); done
+echo "the real failure" >&2
+exit 1
+`)
+	_, err := nativeOpencode{workspace: t.TempDir()}.exec("session", "list")
+	if err == nil {
+		t.Fatal("the exec must surface the failure")
+	}
+	if !strings.Contains(err.Error(), "the real failure") {
+		t.Fatalf("the tail of stderr must survive, got %q", err.Error()[:min(len(err.Error()), 200)])
+	}
+	if len(err.Error()) > 16<<10 {
+		t.Fatalf("kept stderr must be bounded, got %d bytes", len(err.Error()))
+	}
+}
+
 func parseEnv(t *testing.T, out string) map[string]string {
 	t.Helper()
 	env := map[string]string{}
