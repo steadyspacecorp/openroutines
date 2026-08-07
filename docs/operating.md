@@ -127,7 +127,7 @@ Set `OPENROUTINES_LOG_LEVEL` to change how much of the log survives -- unset mea
 - `warn` -- the local default: degraded-but-running conditions (unreachable origin, a routine that stopped loading, a disabled sandbox) and everything `error` shows.
 - `error` -- failed and abandoned runs, held dispatch, and nothing else.
 
-`debug` is accepted for the standard ladder's sake and currently adds nothing beyond `info`. The environment variable is the only level knob -- there is no configuration-file setting -- so quieting or opening up a live container is an environment change, never a redeploy.
+`debug` adds the supervisor's working-out, most usefully the sandbox probe's: which rung the boot check settled on, or what each mechanism reported where none could be built (see [run confinement](#run-confinement)). The environment variable is the only level knob -- there is no configuration-file setting -- so quieting or opening up a live container is an environment change, never a redeploy.
 
 ## Continuous deployment
 
