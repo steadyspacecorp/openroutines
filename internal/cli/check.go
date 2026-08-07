@@ -258,11 +258,15 @@ func cmdCheck(args []string) int {
 			}
 		}
 		if len(errs) == 0 {
-			state := "active"
-			if !r.FM.IsActive() {
-				state = "inactive"
+			// A dormant routine is valid but will never run; a check mark
+			// there reads as "this will run", which is exactly the
+			// misreading that hides a silently parked reporter. The circle
+			// says: fine, and off.
+			if r.FM.IsActive() {
+				okf("%s (%s, active)", r.Name, scheduleSummary(r))
+			} else {
+				fmt.Printf("  ○ %s (%s, inactive)\n", r.Name, scheduleSummary(r))
 			}
-			okf("%s (%s, %s)", r.Name, scheduleSummary(r), state)
 		} else {
 			for _, e := range errs {
 				failf("%s: %s", r.Name, e)
