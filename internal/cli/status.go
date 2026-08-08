@@ -291,12 +291,11 @@ func stamp(t time.Time, now time.Time, loc *time.Location) string {
 // `openroutines usage`. Silent when no record carries usage (older
 // releases, native dev runs) -- absence of bookkeeping is not news.
 func printTokenUsage(dir string) {
-	rows, _ := aggregateUsage(dir)
-	if len(rows) == 0 {
+	t := totalUsage(aggregateUsage(dir))
+	if t.RunsReported == 0 {
 		return
 	}
-	t := totalUsage(rows)
-	fmt.Printf("\ntoken usage (retention window): in %s  out %s", formatTokens(t.Tokens.Input), formatTokens(t.Tokens.Output))
+	fmt.Printf("\ntoken usage (%s): in %s  out %s", retentionLabel(dir), formatTokens(t.Tokens.Input), formatTokens(t.Tokens.Output))
 	if t.CostReported > 0 {
 		fmt.Printf("  ~$%.2f reported", t.CostReported)
 	}
