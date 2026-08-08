@@ -87,7 +87,7 @@ func cmdStatus(args []string) int {
 	stateDir := knowledge.At(dir).StateDir()
 	settled := settledAttempts(dir)
 	routines, parseErrs := routine.LoadAgent(dir)
-	fmt.Printf("\nroutines (%d):\n", len(routines))
+	fmt.Printf("\n%s\n", bold(fmt.Sprintf("routines (%d):", len(routines))))
 	reported := false
 	for _, r := range routines {
 		st, stErr := schedule.Load(stateDir, r.Name)
@@ -111,7 +111,7 @@ func cmdStatus(args []string) int {
 		}
 		fmt.Printf("  %-20s %-14s %s%s%s\n", r.Name, scheduleSummary(r), state, next, grants)
 		if stErr != nil {
-			fmt.Printf("      ! %v\n", stErr)
+			fmt.Printf("      %s %v\n", warnMark, stErr)
 		}
 		for _, line := range scheduleStateLines(st, r, now, loc, settled) {
 			reported = true
@@ -124,43 +124,43 @@ func cmdStatus(args []string) int {
 	// the command prints.
 	if reported {
 		if ms := knowledge.At(dir).Status(); ms.Behind > 0 {
-			fmt.Printf("  ! scheduling state above is from knowledge %d commit(s) behind origin/%s -- run openroutines sync\n", ms.Behind, knowledge.Branch)
+			fmt.Printf("  %s scheduling state above is from knowledge %d commit(s) behind origin/%s -- run openroutines sync\n", warnMark, ms.Behind, knowledge.Branch)
 		}
 	}
 	for _, e := range parseErrs {
-		fmt.Printf("  ! %v\n", e)
+		fmt.Printf("  %s %v\n", warnMark, e)
 	}
 
 	// Skills.
 	skills, skillErrs := skill.ListAgent(dir)
-	fmt.Printf("\nskills (%d):\n", len(skills))
+	fmt.Printf("\n%s\n", bold(fmt.Sprintf("skills (%d):", len(skills))))
 	for _, s := range skills {
 		fmt.Printf("  %-20s %s\n", s.Name, firstLine(s.Description))
 	}
 	for _, e := range skillErrs {
-		fmt.Printf("  ! %v\n", e)
+		fmt.Printf("  %s %v\n", warnMark, e)
 	}
 
 	// Knowledge.
-	fmt.Printf("\nknowledge:\n")
+	fmt.Printf("\n%s\n", bold("knowledge:"))
 	mem := knowledge.At(dir)
 	ms := mem.Status()
 	if !ms.Materialized {
 		if ms.RemoteKnowledge {
-			fmt.Printf("  ! not materialized in this checkout -- origin has the agent's knowledge; run openroutines sync to adopt it\n")
+			fmt.Printf("  %s not materialized in this checkout -- origin has the agent's knowledge; run openroutines sync to adopt it\n", warnMark)
 		} else {
 			fmt.Printf("  not materialized yet -- appears on first run\n")
 		}
 	} else {
 		fmt.Printf("  last commit: %s\n", ms.LastCommit)
 		if ms.Uncommitted > 0 {
-			fmt.Printf("  ! %d file(s) with uncommitted changes -- commit inside knowledge/ when done curating\n", ms.Uncommitted)
+			fmt.Printf("  %s %d file(s) with uncommitted changes -- commit inside knowledge/ when done curating\n", warnMark, ms.Uncommitted)
 		}
 		if ms.Unpushed > 0 {
 			fmt.Printf("  %d commit(s) not yet pushed to origin\n", ms.Unpushed)
 		}
 		if ms.Behind > 0 {
-			fmt.Printf("  ! %d commit(s) behind origin/%s -- this checkout is reading old knowledge; run openroutines sync to get the latest from origin\n", ms.Behind, knowledge.Branch)
+			fmt.Printf("  %s %d commit(s) behind origin/%s -- this checkout is reading old knowledge; run openroutines sync to get the latest from origin\n", warnMark, ms.Behind, knowledge.Branch)
 		}
 		if cursors, err := mem.Cursors(); err == nil && len(cursors) > 0 {
 			head, _ := mem.Head()
@@ -183,14 +183,14 @@ func cmdStatus(args []string) int {
 		}
 	}
 	if !mem.HasOrigin() {
-		fmt.Printf("  ! no git origin -- knowledge is not durable until one is set\n")
+		fmt.Printf("  %s no git origin -- knowledge is not durable until one is set\n", warnMark)
 	}
 
 	printTokenUsage(dir)
 
 	// What's still needed.
 	if problems := agent.Problems(); len(problems) > 0 {
-		fmt.Printf("\nstill needed:\n")
+		fmt.Printf("\n%s\n", bold("still needed:"))
 		for _, p := range problems {
 			fmt.Printf("  - %s\n", p)
 		}
