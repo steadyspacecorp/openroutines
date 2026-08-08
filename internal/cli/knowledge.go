@@ -115,8 +115,12 @@ func knowledgeInteractive(mem *knowledge.Store, snap *knowledge.OriginSnapshot) 
 			}
 			return fail(err)
 		}
+		// The blank line keeps a choice's output off the prompt's back;
+		// browse brings its own. Never clear the screen: earlier output --
+		// a briefing someone is acting on -- is the point of the session.
 		switch strings.ToLower(strings.TrimSpace(choice)) {
 		case "1", "summarize", "s":
+			fmt.Println()
 			if code := knowledgeSummarizeWithReader(snap, 24*time.Hour, false, in); code != 0 {
 				return code
 			}
@@ -125,6 +129,7 @@ func knowledgeInteractive(mem *knowledge.Store, snap *knowledge.OriginSnapshot) 
 				return code
 			}
 		case "3", "stats":
+			fmt.Println()
 			if code := knowledgeStats(snap, nil); code != 0 {
 				return code
 			}
