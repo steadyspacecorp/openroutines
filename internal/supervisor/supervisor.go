@@ -143,7 +143,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	// Before the deploy key is materialized, the lease is taken, or anything
 	// touches git: a key the runs could read is worth failing on while the
 	// deployment has changed nothing yet.
-	if err := verifyKeyDelivery(); err != nil {
+	if err := VerifyKeyDelivery(); err != nil {
 		return err
 	}
 	if configured, err := knowledge.ConfigureDeployKey(); err != nil {
