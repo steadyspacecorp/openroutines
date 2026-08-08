@@ -72,8 +72,10 @@ const routinesUsage = `Manage this agent's routines (markdown files in routines/
 Usage:
   openroutines routines new <name>         create a routine (inactive until you activate it)
   openroutines routines list               names, schedules, grants
-  openroutines routines run <name> [--write-knowledge]
-                                           run once now, knowledge writes discarded; --write-knowledge settles them
+  openroutines routines run <name> [--write-knowledge] [--rehearse [scenario]]
+                                           run once now, knowledge writes discarded; --write-knowledge
+                                           settles them; --rehearse runs against rehearsals/ fixtures
+                                           with every grant stripped
   openroutines routines edit <name>        open in $EDITOR, validate on close
   openroutines routines activate <name>    set active: true
   openroutines routines deactivate <name>  set active: false
@@ -81,7 +83,7 @@ Usage:
 `
 
 func routinesRun(args []string) int {
-	nameArg, writeKnowledge, help, err := parseRoutineRunArgs(args)
+	nameArg, scenario, writeKnowledge, rehearse, help, err := parseRoutineRunArgs(args)
 	if err != nil {
 		return fail(err)
 	}
@@ -93,7 +95,19 @@ func routinesRun(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	res, err := runner.Run(".", name, !writeKnowledge)
+	fixture := ""
+	if rehearse {
+		if fixture, err = resolveRehearsal(name, scenario); err != nil {
+			return fail(err)
+		}
+		if fixture != "" {
+			fmt.Printf("rehearsal: fixture world from %s -- grants stripped, knowledge discarded\n\n", fixture)
+		} else {
+			fmt.Println("rehearsal: live world -- external actions instructed read-only, knowledge discarded")
+			fmt.Println()
+		}
+	}
+	res, err := runner.Run(".", name, !writeKnowledge, rehearse, fixture)
 	if err != nil {
 		return fail(err)
 	}
@@ -118,21 +132,73 @@ func routinesRun(args []string) int {
 	return 0
 }
 
-const routinesRunUsage = "usage: openroutines routines run <name> [--write-knowledge]"
+const routinesRunUsage = "usage: openroutines routines run <name> [--write-knowledge] [--rehearse [scenario]]"
 
-func parseRoutineRunArgs(args []string) (string, bool, bool, error) {
-	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--write-knowledge": {}})
-	if err != nil {
-		return "", false, false, err
+func parseRoutineRunArgs(args []string) (name, scenario string, writeKnowledge, rehearse, help bool, err error) {
+	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--write-knowledge": {}, "--rehearse": {}})
+	if err != nil || help {
+		return "", "", false, false, help, err
 	}
-	if help {
-		return "", false, true, nil
+	_, writeKnowledge = flags["--write-knowledge"]
+	_, rehearse = flags["--rehearse"]
+	switch {
+	case len(positional) == 1:
+		return positional[0], "", writeKnowledge, rehearse, false, nil
+	case len(positional) == 2 && rehearse:
+		if writeKnowledge {
+			return "", "", false, false, false, errors.New("--rehearse and --write-knowledge cannot combine: a rehearsal never settles")
+		}
+		return positional[0], positional[1], writeKnowledge, rehearse, false, nil
 	}
-	if len(positional) != 1 {
-		return "", false, false, fmt.Errorf("%s", routinesRunUsage)
+	if rehearse && writeKnowledge {
+		return "", "", false, false, false, errors.New("--rehearse and --write-knowledge cannot combine: a rehearsal never settles")
 	}
-	_, writeKnowledge := flags["--write-knowledge"]
-	return positional[0], writeKnowledge, false, nil
+	return "", "", false, false, false, fmt.Errorf("%s", routinesRunUsage)
+}
+
+// resolveRehearsal maps a routine and optional scenario to its fixture file:
+// rehearsals/<name>.md for the common single-fixture case, or
+// rehearsals/<name>/<scenario>.md (default.md when no scenario is named)
+// once a routine has more than one. No fixtures at all is not an error --
+// it selects the live rehearsal, which needs no files. A named scenario
+// that does not exist is an error listing what does.
+func resolveRehearsal(name, scenario string) (string, error) {
+	flat := filepath.Join("rehearsals", name+".md")
+	dir := filepath.Join("rehearsals", name)
+	if scenario == "" {
+		if _, err := os.Stat(flat); err == nil {
+			return flat, nil
+		}
+		if p := filepath.Join(dir, "default.md"); fileExists(p) {
+			return p, nil
+		}
+	} else {
+		if filepath.Base(scenario) != scenario || strings.HasSuffix(scenario, ".md") {
+			return "", fmt.Errorf("invalid scenario name %q", scenario)
+		}
+		if p := filepath.Join(dir, scenario+".md"); fileExists(p) {
+			return p, nil
+		}
+	}
+	entries, _ := os.ReadDir(dir)
+	var have []string
+	for _, e := range entries {
+		if s, ok := strings.CutSuffix(e.Name(), ".md"); ok && !e.IsDir() {
+			have = append(have, s)
+		}
+	}
+	if scenario != "" {
+		if len(have) > 0 {
+			return "", fmt.Errorf("no rehearsal fixture %q for %s -- have: %s", scenario, name, strings.Join(have, ", "))
+		}
+		return "", fmt.Errorf("no rehearsal fixtures for %s -- a named scenario needs %s", name, filepath.Join("rehearsals", name, scenario+".md"))
+	}
+	return "", nil
+}
+
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
 }
 
 func routinesNew(args []string) int {

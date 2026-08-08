@@ -34,7 +34,7 @@ func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
 	// stale deploy image. The working path runs in bin/smoke's container
 	// stage.
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
-	_, err := Run(t.TempDir(), "daily", false)
+	_, err := Run(t.TempDir(), "daily", false, false, "")
 	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "cap_setgid") {
 		t.Fatalf("manual run error = %v, want fatal manual-identity contract error", err)
 	}

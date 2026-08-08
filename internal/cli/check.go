@@ -277,6 +277,25 @@ func cmdCheck(args []string) int {
 		warnf("no routines defined")
 	}
 
+	// Rehearsal fixtures are bound to routines by name; an orphan is the
+	// drift this convention exists to catch -- a routine renamed or removed
+	// out from under the fixture that rehearses it.
+	routineNames := map[string]bool{}
+	for _, r := range routines {
+		routineNames[r.Name] = true
+	}
+	if entries, err := os.ReadDir(filepath.Join(dir, "rehearsals")); err == nil {
+		for _, entry := range entries {
+			stem, isMD := strings.CutSuffix(entry.Name(), ".md")
+			switch {
+			case entry.IsDir() && !routineNames[entry.Name()]:
+				warnf("rehearsals/%s/ matches no routine -- orphaned fixtures", entry.Name())
+			case !entry.IsDir() && isMD && !routineNames[stem]:
+				warnf("rehearsals/%s matches no routine -- orphaned fixture", entry.Name())
+			}
+		}
+	}
+
 	// Provider-auth readiness: every active routine's effective model needs
 	// its provider key. Runs construct a clean environment, so there is no
 	// ambient fallback in the container -- without the key, the first run

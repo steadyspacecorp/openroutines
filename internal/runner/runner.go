@@ -61,6 +61,7 @@ type Meta struct {
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
 	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
+	Rehearsal      string // fixture path; set only for manual rehearsal runs
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -388,6 +389,15 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		if err := prepareSchedule(dir, workspace, r, agent.Timezone, time.Now()); err != nil {
 			return fmt.Errorf("forward schedule: %w", err)
 		}
+		if meta.Rehearsal != "" {
+			fixture, err := os.ReadFile(meta.Rehearsal)
+			if err != nil {
+				return fmt.Errorf("rehearsal fixture: %w", err)
+			}
+			if err := os.WriteFile(filepath.Join(workspace, RehearsalFileName), fixture, 0o444); err != nil {
+				return fmt.Errorf("rehearsal fixture: %w", err)
+			}
+		}
 		return nil
 	}(); err != nil {
 		return nil, err
@@ -592,12 +602,45 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	return res, staging, nil
 }
 
+// RehearsalFileName is the fixture document injected into a rehearsal
+// run's workspace; rehearsalPreamble frames it, prepended to the routine's
+// own prompt so the rules stay the routine's and only the world is swapped.
+const RehearsalFileName = "rehearsal.md"
+
+const fixturePreamble = `REHEARSAL RUN, fixture world. The fixtures in ./rehearsal.md replace
+every outside read for this run -- including ./changes.md and
+./schedule.md wherever the fixtures provide stand-ins. You have no
+credentials, no MCP servers, no skills, and no web access; do not
+attempt external calls, the fixtures are the world. Nothing you produce
+leaves the run: knowledge writes are discarded. Follow the routine
+below exactly, against the fixtures.
+
+`
+
+// livePreamble governs a rehearsal with no fixtures: the real world,
+// read-only by instruction. The routine keeps its grants so its reads
+// work; the restraint is asked of the model, not enforced -- the enforced
+// part is that nothing settles.
+const livePreamble = `REHEARSAL RUN, live world. Read anything this routine normally reads --
+your credentials and tools are present -- but treat every external
+action as read-only and idempotent: write nothing, post nothing, change
+no state in any outside system. Anything the routine would deliver to a
+destination, print here instead; printed output is this rehearsal's
+delivery. Knowledge writes are discarded and nothing is consumed.
+Follow the routine below exactly, under these restraints.
+
+`
+
 // Run executes routine `name` manually. skipKnowledge discards staged knowledge
 // writes and the run record after the otherwise ordinary run completes.
+// rehearse runs the routine as a rehearsal: with fixture (a path), every
+// grant is stripped and the fixture is the world; without one, grants stay
+// and the world is real, read-only by instruction. Either way knowledge is
+// always discarded.
 // Inside the production container a manual run reserves the manual attempt
 // identity first, so it can never share a uid with a supervisor slot.
-func Run(dir, name string, skipKnowledge bool) (result *Result, err error) {
-	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
+func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result *Result, err error) {
+	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01", Rehearsal: fixture}
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
 		if err != nil {
@@ -613,6 +656,26 @@ func Run(dir, name string, skipKnowledge bool) (result *Result, err error) {
 	r, err := routine.Find(dir, name)
 	if err != nil {
 		return nil, err
+	}
+	if rehearse {
+		rr := *r
+		if fixture != "" {
+			// The routine keeps its rules; the fixture swaps its world.
+			// Grants are stripped at the source so the existing pipeline
+			// enforces the absence: no credentials resolve, no MCP servers
+			// mount, the generated definition denies skills and web access.
+			rr.FM.Credentials = nil
+			rr.FM.MCP = nil
+			rr.FM.Skills = nil
+			rr.FM.Webfetch = false
+			rr.FM.Websearch = false
+			rr.Body = fixturePreamble + r.Body
+		} else {
+			// Live rehearsal: the real world, read-only by instruction.
+			rr.Body = livePreamble + r.Body
+		}
+		r = &rr
+		skipKnowledge = true
 	}
 	// One attempt per routine at a time (design decision "Overlap"), held for
 	// the whole lifecycle -- snapshot through import and settlement. The

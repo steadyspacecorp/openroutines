@@ -111,6 +111,21 @@ openroutines routines run doc-drift --write-knowledge   # knowledge writes are s
 
 Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; the flag changes only what happens afterward. By default a manual run discards its staged knowledge writes and run record -- the terminal is the iteration path, and iterating must not teach the agent or consume its change feed by accident. Pass `--write-knowledge` when the run should count. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target.
 
+## Rehearsals
+
+A rehearsal runs the real routine without consequence -- for seeing what a routine would do, auditioning models, and testing prompt changes without waiting for a live fire or touching anything that counts.
+
+```bash
+openroutines routines run steady-check-in --rehearse             # live world, read-only by instruction
+openroutines routines run announcements --rehearse cold-start    # fixture world: rehearsals/announcements/cold-start.md
+```
+
+Out of the box, `--rehearse` needs no files: the routine keeps its credentials and tools so its reads work, and an injected preamble instructs the model to keep every external action read-only and idempotent, and to print what it would have delivered instead of delivering it. That restraint is instruction, not enforcement. The enforced part is that nothing settles -- no knowledge writes, no feed consumption, no run record -- so rehearsing is always safe to repeat.
+
+Fixtures deepen a rehearsal into a simulated world: deterministic inputs, a frozen "work as if it is ..." moment, no grants at all -- the runner strips credentials, MCP, skills, and web access, and injects the fixture as read-only `./rehearsal.md`. Use fixtures when you want repeatable scenarios (model comparisons, edge cases like a quiet day or a cold start) rather than whatever the real world contains right now.
+
+Fixtures bind to routines by name. One fixture is a flat file, `rehearsals/<name>.md`. A routine that earns multiple scenarios graduates to a directory: `rehearsals/<name>/default.md` plus named scenarios. A fixture is ordinary markdown describing the simulated world in whatever shape the routine's inputs take. `check` warns when a fixture's name matches no routine, which is how you learn a rename stranded one.
+
 ## Recording work
 
 Every run carries a standing instruction that routes what the routine wants to remember into the agent's knowledge primitives -- events, tasks, context, and the routine's private ledger. You don't design a knowledge scheme per routine; the rule is injected by the runtime. [Knowledge](knowledge.md) covers the primitives; [Your agent on the team](teamwork.md) covers how recorded work becomes reports.
