@@ -91,7 +91,7 @@ func cmdUsage(args []string) int {
 	fmt.Println(bold("token usage (" + retentionLabel(".") + "):"))
 	printUsageTable(rows, total)
 	if total.RunsReported < total.Runs {
-		fmt.Println(dim(fmt.Sprintf("token sums cover the %d of %d run(s) whose runtime reported usage -- absent usage is unreported, never zero", total.RunsReported, total.Runs)))
+		fmt.Println(dim(fmt.Sprintf("token sums cover the %d of %d run(s) whose runtime reported usage", total.RunsReported, total.Runs)))
 	}
 	printKnowledgeLag(".")
 	return 0
