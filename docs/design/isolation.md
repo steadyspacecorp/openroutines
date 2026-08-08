@@ -90,8 +90,9 @@ The exchange runs the other way too: a microVM host has no runtime profile to li
 What a rung is worth is declared rather than assumed: each backend states whether it provides unnameable paths, a private process list, peer signal isolation, private IPC, a private `/tmp` and `/dev/shm`, and process-tree collapse, and code that depends on a property asks for it by name.
 That is load-bearing in exactly one place -- the runner sweeps the run's process group only where nothing else collapses the tree.
 On the Landlock rung the sweep is incomplete: a descendant that called `setsid` is outside the process group and lingers, still confined by an inherited domain it cannot drop.
-Signal isolation is the one capability that varies with the kernel rather than the rung: `LANDLOCK_SCOPE_SIGNAL` arrived in Linux 6.12, so below it a run can signal a peer -- a denial of service between routines, never a disclosure, because a peer's secrets are protected by the `ptrace_may_access` check Landlock has hooked since its first version.
-It is reported rather than assumed, and the setsid regression above is recorded in SECURITY.md rather than glossed.
+Two capabilities vary with the kernel rather than the rung, and both are reported rather than assumed: `LANDLOCK_SCOPE_SIGNAL` arrived in Linux 6.12, so below it a run can signal a peer -- a denial of service between routines, never a disclosure, because a peer's secrets are protected by the `ptrace_may_access` check Landlock has hooked since its first version -- and `LANDLOCK_ACCESS_FS_TRUNCATE` arrived in 6.2, so below it a run can empty an ungranted file it can neither read nor write.
+File metadata is outside Landlock at any ABI.
+Those limits are recorded in SECURITY.md rather than guarded in code.
 
 The dependency posture is the one place this decision spends something.
 `bwrap` is an OS package invoked as a subprocess, which keeps it out of the supervisor's Go dependency tree and brings two properties from outside the argument list: every bind is mounted `nodev`, and `PR_SET_NO_NEW_PRIVS` is set unconditionally.

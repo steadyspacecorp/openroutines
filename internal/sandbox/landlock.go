@@ -33,8 +33,9 @@ var landlockABI = sync.OnceValue(func() int {
 // The fallback rung, and the only one that asks the host for nothing at all: no
 // runtime flag, no capability, no sysctl, no privilege. Weaker in ways worth
 // stating -- an ungranted path is denied rather than absent, peers are listed
-// in /proc, /tmp and /dev/shm are the container's, and nothing collapses the
-// process tree.
+// in /proc, /tmp and /dev/shm are the container's, nothing collapses the
+// process tree, and an ungranted file's metadata stays changeable at any ABI
+// because Landlock has no right that covers it.
 //
 // What makes falling back safe automatically is the ptrace hook: it checks the
 // domain boundary, and every way one process reads another's secrets goes
@@ -160,7 +161,9 @@ func ExecConfined(args []string) error {
 // Requested at ABI v6 -- the level that scopes signals and abstract sockets --
 // and best effort from there down, which is safe only because of the check
 // below: a kernel with no Landlock would otherwise degrade silently to
-// enforcing nothing.
+// enforcing nothing. What each ABI gives up is recorded in SECURITY.md; below
+// v3 the notable loss is the truncate right, so an ungranted file can be
+// emptied though never read or written.
 func confine(ro, rw []string) error {
 	if landlockABI() == 0 {
 		return errors.New("this kernel has no Landlock support")
