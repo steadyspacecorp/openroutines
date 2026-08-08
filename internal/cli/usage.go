@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 )
 
@@ -22,11 +25,14 @@ type usageTokens struct {
 }
 
 // usageRow is one routine's aggregate over the records the retention
-// window keeps. Model and effort are the most recently recorded values --
-// a routine's identity for cost purposes, not a per-run breakdown.
+// window keeps. Runs counts every recorded run; the token sums and
+// RunsReported cover only the runs whose runtime reported usage. Model
+// and effort are the most recently recorded values -- a routine's
+// identity for cost purposes, not a per-run breakdown.
 type usageRow struct {
 	Routine      string      `json:"routine"`
 	Runs         int         `json:"runs"`
+	RunsReported int         `json:"runs_reported"`
 	Tokens       usageTokens `json:"tokens"`
 	CostReported float64     `json:"cost_reported"`
 	Model        string      `json:"model,omitempty"`
@@ -53,7 +59,7 @@ func cmdUsage(args []string) int {
 	}
 	_, asJSON := flags["--json"]
 
-	rows, records := aggregateUsage(".")
+	rows := aggregateUsage(".")
 
 	if asJSON {
 		out := struct {
@@ -70,30 +76,45 @@ func cmdUsage(args []string) int {
 	}
 
 	if len(rows) == 0 {
-		// Three different situations reached this line as one silent "no
-		// usage yet". Records that carry no tokens are the confusing case:
-		// runs did happen, so telling someone to wait for them is wrong.
-		if records == 0 {
-			// So is a fresh clone of a running agent: the records exist on
-			// origin, and no amount of waiting materializes them locally.
-			if st := knowledge.At(".").Status(); !st.Materialized && st.RemoteKnowledge {
-				fmt.Println("knowledge is not materialized in this checkout -- run openroutines sync to adopt the agent's records from origin")
-			} else {
-				fmt.Println("no runs recorded yet -- records accumulate as routines run")
-			}
+		// A fresh clone of a running agent reads as "no runs" too, but the
+		// records exist on origin and no amount of waiting materializes
+		// them locally.
+		if st := knowledge.At(".").Status(); !st.Materialized && st.RemoteKnowledge {
+			fmt.Println("knowledge is not materialized in this checkout -- run openroutines sync to adopt the agent's records from origin")
 		} else {
-			fmt.Printf("%d run(s) recorded, none reported token usage -- absent usage means the runtime did not report it, never zero\n", records)
+			fmt.Println("no runs recorded yet -- records accumulate as routines run")
 		}
 		printKnowledgeLag(".")
 		return 0
 	}
-	fmt.Println("token usage (retention window):")
-	for _, r := range rows {
-		printUsageLine(r.Routine, r, true)
+	total := totalUsage(rows)
+	fmt.Println(bold("token usage (" + retentionLabel(".") + "):"))
+	printUsageTable(rows, total)
+	if total.RunsReported < total.Runs {
+		fmt.Println(dim(fmt.Sprintf("token sums cover the %d of %d run(s) whose runtime reported usage", total.RunsReported, total.Runs)))
 	}
-	printUsageLine("total", totalUsage(rows), false)
 	printKnowledgeLag(".")
 	return 0
+}
+
+// retentionLabel names the window usage aggregates over -- the knowledge
+// retention that trims run records -- so the header reads "last 30 days"
+// instead of asking the reader to know the term of art.
+func retentionLabel(dir string) string {
+	retention := knowledge.DefaultRetention
+	if agent, err := config.Load(dir); err == nil {
+		if d, err := knowledge.ParseRetention(agent.Retention()); err == nil {
+			retention = d
+		}
+	}
+	span := retention.String()
+	if days := int(retention.Hours() / 24); days >= 1 && retention == time.Duration(days)*24*time.Hour {
+		span = fmt.Sprintf("%d days", days)
+		if days == 1 {
+			span = "1 day"
+		}
+	}
+	return fmt.Sprintf("last %s, since %s", span, time.Now().Add(-retention).Format("January 2, 2006"))
 }
 
 // printKnowledgeLag names the gap between what this checkout has and what
@@ -101,21 +122,20 @@ func cmdUsage(args []string) int {
 // this is what keeps a stale worktree from reading as a quiet zero.
 func printKnowledgeLag(dir string) {
 	if st := knowledge.At(dir).Status(); st.Behind > 0 {
-		fmt.Printf("\nknowledge/ is %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to get the latest knowledge from origin\n", st.Behind, knowledge.Branch)
+		fmt.Printf("\n%s these numbers read local knowledge/, %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to count the latest runs\n", warnMark, st.Behind, knowledge.Branch)
 	}
 }
 
-// aggregateUsage folds runs.jsonl into per-routine rows, sorted by name,
-// and returns how many records it read. Records without a tokens object
-// (older releases, native dev runs, a runtime that did not report) are
-// skipped -- absence is not zero -- so the count is what distinguishes an
-// agent that has never run from one whose runs carry no usage.
-func aggregateUsage(dir string) ([]usageRow, int) {
+// aggregateUsage folds runs.jsonl into per-routine rows, sorted by name.
+// Every parseable record counts as a run; the token sums and RunsReported
+// cover only records that carry a tokens object (older releases, native
+// dev runs, and a runtime that did not report leave none -- absence is
+// not zero, so those runs count without contributing to the sums).
+func aggregateUsage(dir string) []usageRow {
 	raw, err := os.ReadFile(filepath.Join(knowledge.At(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
-		return nil, 0
+		return nil
 	}
-	records := 0
 	byName := map[string]*usageRow{}
 	for _, line := range strings.Split(string(raw), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -131,37 +151,38 @@ func aggregateUsage(dir string) ([]usageRow, int) {
 		if json.Unmarshal([]byte(line), &rec) != nil {
 			continue
 		}
-		records++
-		if rec.Tokens == nil {
-			continue
-		}
 		r := byName[rec.Routine]
 		if r == nil {
 			r = &usageRow{Routine: rec.Routine}
 			byName[rec.Routine] = r
 		}
 		r.Runs++
+		r.CostReported += rec.Cost
+		if rec.Model != "" {
+			r.Model, r.Effort = rec.Model, rec.Effort
+		}
+		if rec.Tokens == nil {
+			continue
+		}
+		r.RunsReported++
 		r.Tokens.Input += rec.Tokens.Input
 		r.Tokens.Output += rec.Tokens.Output
 		r.Tokens.Reasoning += rec.Tokens.Reasoning
 		r.Tokens.CacheRead += rec.Tokens.CacheRead
 		r.Tokens.CacheWrite += rec.Tokens.CacheWrite
-		r.CostReported += rec.Cost
-		if rec.Model != "" {
-			r.Model, r.Effort = rec.Model, rec.Effort
-		}
 	}
 	out := make([]usageRow, 0, len(byName))
 	for _, name := range slices.Sorted(maps.Keys(byName)) {
 		out = append(out, *byName[name])
 	}
-	return out, records
+	return out
 }
 
 func totalUsage(rows []usageRow) usageRow {
 	t := usageRow{Routine: "total"}
 	for _, r := range rows {
 		t.Runs += r.Runs
+		t.RunsReported += r.RunsReported
 		t.Tokens.Input += r.Tokens.Input
 		t.Tokens.Output += r.Tokens.Output
 		t.Tokens.Reasoning += r.Tokens.Reasoning
@@ -172,30 +193,117 @@ func totalUsage(rows []usageRow) usageRow {
 	return t
 }
 
-func printUsageLine(label string, r usageRow, withRuns bool) {
-	runs := "        "
-	if withRuns {
-		runs = fmt.Sprintf("%3d run(s)", r.Runs)
+// printUsageTable renders the rows and the total as aligned columns sized
+// to their widest cell, numbers right-aligned under a dim header. Every
+// run counts in the runs column; a routine whose runs never reported
+// usage keeps blank token cells rather than misreading as zero. Columns
+// no row has -- reasoning, cache traffic, cost, model -- are dropped whole
+// rather than printed empty. Cache traffic usually dwarfs fresh input and
+// is priced differently: without it a human cannot derive the spend from
+// the counts.
+func printUsageTable(rows []usageRow, total usageRow) {
+	all := append(slices.Clone(rows), total)
+	var hasReasoning, hasCache, hasCost, hasModel bool
+	for _, r := range all {
+		hasReasoning = hasReasoning || r.Tokens.Reasoning > 0
+		hasCache = hasCache || r.Tokens.CacheRead > 0 || r.Tokens.CacheWrite > 0
+		hasCost = hasCost || r.CostReported > 0
+		hasModel = hasModel || r.Model != ""
 	}
-	fmt.Printf("  %-20s %s  in %s  out %s", label, runs, formatTokens(r.Tokens.Input), formatTokens(r.Tokens.Output))
-	if r.Tokens.Reasoning > 0 {
-		fmt.Printf(" (reasoning %s)", formatTokens(r.Tokens.Reasoning))
+	blankZero := func(n int64) string {
+		if n == 0 {
+			return ""
+		}
+		return formatTokens(n)
 	}
-	// Cache traffic usually dwarfs fresh input and is priced differently --
-	// without it a human cannot derive the spend from the counts.
-	if r.Tokens.CacheRead > 0 || r.Tokens.CacheWrite > 0 {
-		fmt.Printf("  cache-read %s  cache-write %s", formatTokens(r.Tokens.CacheRead), formatTokens(r.Tokens.CacheWrite))
+
+	heads := []string{"routine", "runs", "in", "out"}
+	leftAligned := []bool{true, false, false, false}
+	addCol := func(head string, left bool) {
+		heads = append(heads, head)
+		leftAligned = append(leftAligned, left)
 	}
-	if r.CostReported > 0 {
-		fmt.Printf("  ~$%.2f reported", r.CostReported)
+	if hasReasoning {
+		addCol("reasoning", false)
 	}
-	if r.Model != "" {
-		fmt.Printf("  %s", r.Model)
-		if r.Effort != "" {
-			fmt.Printf(" @%s", r.Effort)
+	if hasCache {
+		addCol("cache-read", false)
+		addCol("cache-write", false)
+	}
+	if hasCost {
+		addCol("reported", false)
+	}
+	if hasModel {
+		addCol("model", true)
+	}
+
+	cells := make([][]string, 0, len(all))
+	for _, r := range all {
+		reported := func(n int64) string {
+			if r.RunsReported == 0 {
+				return ""
+			}
+			return formatTokens(n)
+		}
+		c := []string{r.Routine, strconv.Itoa(r.Runs), reported(r.Tokens.Input), reported(r.Tokens.Output)}
+		if hasReasoning {
+			c = append(c, blankZero(r.Tokens.Reasoning))
+		}
+		if hasCache {
+			c = append(c, blankZero(r.Tokens.CacheRead), blankZero(r.Tokens.CacheWrite))
+		}
+		if hasCost {
+			cost := ""
+			if r.CostReported > 0 {
+				cost = fmt.Sprintf("~$%.2f", r.CostReported)
+			}
+			c = append(c, cost)
+		}
+		if hasModel {
+			m := r.Model
+			if r.Effort != "" {
+				m += " @" + r.Effort
+			}
+			c = append(c, m)
+		}
+		cells = append(cells, c)
+	}
+
+	widths := make([]int, len(heads))
+	for i, h := range heads {
+		widths[i] = len(h)
+	}
+	for _, c := range cells {
+		for i, v := range c {
+			widths[i] = max(widths[i], len(v))
 		}
 	}
-	fmt.Println()
+
+	// Pad before styling: escape bytes inside a padding verb would count
+	// toward the width and break the column.
+	pad := func(i int, v string) string {
+		if leftAligned[i] {
+			return fmt.Sprintf("%-*s", widths[i], v)
+		}
+		return fmt.Sprintf("%*s", widths[i], v)
+	}
+	line := make([]string, len(heads))
+	for i, h := range heads {
+		line[i] = pad(i, h)
+	}
+	fmt.Println(dim("  " + strings.TrimRight(strings.Join(line, "  "), " ")))
+	for row, c := range cells {
+		for i, v := range c {
+			line[i] = pad(i, v)
+			if i == len(heads)-1 && hasModel && v != "" {
+				line[i] = dim(line[i])
+			}
+		}
+		if row == len(cells)-1 {
+			line[0] = bold(line[0])
+		}
+		fmt.Println("  " + strings.TrimRight(strings.Join(line, "  "), " "))
+	}
 }
 
 // formatTokens keeps counts scannable: 812, 13.8k, 2.1M.

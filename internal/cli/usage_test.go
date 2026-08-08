@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// Aggregation folds only records that carry tokens (absence is not zero),
-// sums per routine, and keeps the most recent model/effort.
+// Every parseable record counts as a run; token sums and RunsReported
+// cover only records that carry tokens (absence is not zero). Model and
+// effort are the most recent record's.
 func TestAggregateUsage(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "knowledge"), 0o755); err != nil {
@@ -22,35 +23,35 @@ not json
 	if err := os.WriteFile(filepath.Join(dir, "knowledge", "runs.jsonl"), []byte(lines), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rows, records := aggregateUsage(dir)
-	if len(rows) != 2 || rows[0].Routine != "a" || rows[1].Routine != "b" {
+	rows := aggregateUsage(dir)
+	// "old" ran without reporting tokens and still counts as a run; the
+	// unparseable line is not a record at all.
+	if len(rows) != 3 || rows[0].Routine != "a" || rows[1].Routine != "b" || rows[2].Routine != "old" {
 		t.Fatalf("rows wrong: %+v", rows)
 	}
-	// Every parseable record counts, tokens or not: "old" has none, and the
-	// unparseable line is not a record at all.
-	if records != 4 {
-		t.Fatalf("records = %d, want 4", records)
-	}
 	a := rows[0]
-	if a.Runs != 2 || a.Tokens.Input != 150 || a.Tokens.Output != 15 || a.Tokens.Reasoning != 2 ||
-		a.Tokens.CacheRead != 5 || a.Tokens.CacheWrite != 1 {
+	if a.Runs != 2 || a.RunsReported != 2 || a.Tokens.Input != 150 || a.Tokens.Output != 15 ||
+		a.Tokens.Reasoning != 2 || a.Tokens.CacheRead != 5 || a.Tokens.CacheWrite != 1 {
 		t.Fatalf("a sums wrong: %+v", a)
 	}
 	if a.Model != "m2" || a.Effort != "" {
 		t.Fatalf("model/effort should be the most recent record's: %+v", a)
 	}
+	if old := rows[2]; old.Runs != 1 || old.RunsReported != 0 || old.Tokens.Input != 0 {
+		t.Fatalf("old should count its run and report nothing: %+v", old)
+	}
 	tot := totalUsage(rows)
-	if tot.Runs != 3 || tot.Tokens.Input != 157 || tot.Tokens.Output != 18 {
+	if tot.Runs != 4 || tot.RunsReported != 3 || tot.Tokens.Input != 157 || tot.Tokens.Output != 18 {
 		t.Fatalf("total wrong: %+v", tot)
 	}
-	if none, records := aggregateUsage(t.TempDir()); none != nil || records != 0 {
-		t.Fatalf("no runs.jsonl should aggregate to nil/0, got %+v/%d", none, records)
+	if none := aggregateUsage(t.TempDir()); none != nil {
+		t.Fatalf("no runs.jsonl should aggregate to nil, got %+v", none)
 	}
 }
 
-// The case that reads as a silent zero: runs happened, none carried usage.
-// Telling someone to wait for records that already exist sends them looking
-// in the wrong place -- as a stale knowledge worktree did in practice.
+// Runs whose runtime reported no usage still count as runs -- the table
+// shows them with blank token cells rather than pretending they did not
+// happen, which in practice sent someone hunting for missing runs.
 func TestAggregateUsageCountsRecordsWithoutTokens(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "knowledge"), 0o755); err != nil {
@@ -62,11 +63,13 @@ func TestAggregateUsageCountsRecordsWithoutTokens(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "knowledge", "runs.jsonl"), []byte(lines), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rows, records := aggregateUsage(dir)
-	if len(rows) != 0 {
-		t.Fatalf("records without tokens must not aggregate: %+v", rows)
+	rows := aggregateUsage(dir)
+	if len(rows) != 2 {
+		t.Fatalf("every run should have a row: %+v", rows)
 	}
-	if records != 2 {
-		t.Fatalf("records = %d, want 2 -- the count is what separates this from a fresh agent", records)
+	for _, r := range rows {
+		if r.Runs != 1 || r.RunsReported != 0 {
+			t.Fatalf("run without tokens should count and report nothing: %+v", r)
+		}
 	}
 }
