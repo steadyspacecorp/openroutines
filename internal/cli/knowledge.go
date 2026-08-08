@@ -214,13 +214,13 @@ func knowledgeStats(snap *knowledge.OriginSnapshot, args []string) int {
 		fmt.Println(string(raw))
 		return 0
 	}
-	fmt.Printf("snapshot     %s\n", shortCommit(stats.Commit))
-	fmt.Printf("first write  %s\n", formatTime(stats.FirstWrite))
-	fmt.Printf("last write   %s (%s)\n", formatTime(stats.LastWrite), stats.LastSubject)
-	fmt.Printf("history      %d days, %d commits\n", stats.HistoryDays, stats.Commits)
-	fmt.Printf("current tree %s across %d files\n", formatBytes(stats.SizeBytes), stats.Files)
+	fmt.Printf("%s %s\n", dim("snapshot    "), shortCommit(stats.Commit))
+	fmt.Printf("%s %s\n", dim("first write "), formatTime(stats.FirstWrite))
+	fmt.Printf("%s %s %s\n", dim("last write  "), formatTime(stats.LastWrite), dim("("+stats.LastSubject+")"))
+	fmt.Printf("%s %d days, %d commits\n", dim("history     "), stats.HistoryDays, stats.Commits)
+	fmt.Printf("%s %s across %d files\n", dim("current tree"), formatBytes(stats.SizeBytes), stats.Files)
 	if stats.LargestPath != "" {
-		fmt.Printf("largest file %s (%s)\n", stats.LargestPath, formatBytes(stats.LargestBytes))
+		fmt.Printf("%s %s (%s)\n", dim("largest file"), stats.LargestPath, formatBytes(stats.LargestBytes))
 	}
 	return 0
 }
@@ -279,6 +279,89 @@ func knowledgeSummarize(snap *knowledge.OriginSnapshot, args []string) int {
 	return knowledgeSummarizeWithReader(snap, window, yes, bufio.NewReader(os.Stdin))
 }
 
+// briefingWriter renders the streamed briefing for a terminal. The model
+// answers in light markdown; on a tty the markers become the same ANSI
+// emphasis the rest of the CLI uses -- headings bold, bullet marks dimmed,
+// **spans** bold. Unstyled output passes through untouched, so a pipe gets
+// the model's raw text.
+type briefingWriter struct {
+	out io.Writer
+	buf []byte
+}
+
+func (w *briefingWriter) Write(p []byte) (int, error) {
+	if !styled {
+		return w.out.Write(p)
+	}
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		line := string(w.buf[:i])
+		w.buf = w.buf[i+1:]
+		if _, err := io.WriteString(w.out, styleBriefingLine(line)+"\n"); err != nil {
+			return len(p), err
+		}
+	}
+}
+
+// Flush styles whatever remains buffered without a trailing newline.
+func (w *briefingWriter) Flush() {
+	if len(w.buf) == 0 {
+		return
+	}
+	_, _ = io.WriteString(w.out, styleBriefingLine(string(w.buf)))
+	w.buf = nil
+}
+
+// briefingHeadings are the sections the summary prompt asks for; they are
+// recognized whether the model writes them bare, as markdown headings, or
+// bold, and rendered the one way the CLI writes headings.
+var briefingHeadings = []string{"Recently", "Next", "Waiting on a human"}
+
+func styleBriefingLine(line string) string {
+	head := strings.TrimSpace(line)
+	head = strings.TrimLeft(head, "# ")
+	head = strings.TrimSuffix(head, ":")
+	head = strings.TrimPrefix(head, "**")
+	head = strings.TrimSuffix(head, "**")
+	head = strings.TrimSuffix(head, ":")
+	for _, h := range briefingHeadings {
+		if strings.EqualFold(head, h) {
+			return bold(h)
+		}
+	}
+	rest := strings.TrimLeft(line, " \t")
+	indent := line[:len(line)-len(rest)]
+	if after, ok := strings.CutPrefix(rest, "- "); ok {
+		return indent + dim("-") + " " + styleInlineBold(after)
+	}
+	if after, ok := strings.CutPrefix(rest, "* "); ok {
+		return indent + dim("-") + " " + styleInlineBold(after)
+	}
+	return styleInlineBold(line)
+}
+
+// styleInlineBold turns balanced **spans** into terminal bold; an odd edge
+// leaves the line untouched rather than guess.
+func styleInlineBold(s string) string {
+	parts := strings.Split(s, "**")
+	if len(parts) < 3 || len(parts)%2 == 0 {
+		return s
+	}
+	var b strings.Builder
+	for i, p := range parts {
+		if i%2 == 1 {
+			b.WriteString(bold(p))
+		} else {
+			b.WriteString(p)
+		}
+	}
+	return b.String()
+}
+
 func knowledgeSummarizeWithReader(snap *knowledge.OriginSnapshot, window time.Duration, yes bool, in *bufio.Reader) int {
 	agent, err := config.Load(".")
 	if err != nil {
@@ -301,10 +384,12 @@ func knowledgeSummarizeWithReader(snap *knowledge.OriginSnapshot, window time.Du
 	if err != nil {
 		return fail(err)
 	}
-	res, err := runner.SummarizeKnowledge(".", snap.Dir, snap.Commit, since, through, recent, os.Stdout)
+	bw := &briefingWriter{out: os.Stdout}
+	res, err := runner.SummarizeKnowledge(".", snap.Dir, snap.Commit, since, through, recent, bw)
 	if err != nil {
 		return fail(err)
 	}
+	bw.Flush()
 	fmt.Println("\n" + dim(fmt.Sprintf("%s · snapshot %s", runner.FormatUsage(res.Usage), shortCommit(snap.Commit))))
 	if res.Outcome != runner.Completed {
 		if res.Hint != "" {

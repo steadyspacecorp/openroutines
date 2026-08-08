@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,5 +69,31 @@ func TestKnowledgeStatsAndListReadOriginWithoutMaterializing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "knowledge")); !os.IsNotExist(err) {
 		t.Fatalf("inspection materialized local knowledge: %v", err)
+	}
+}
+
+// The briefing renderer recognizes a section heading however the model
+// dresses it, and leaves piped output byte-for-byte alone.
+func TestBriefingStyling(t *testing.T) {
+	was := styled
+	defer func() { styled = was }()
+
+	styled = true
+	for _, in := range []string{"Recently", "## Recently", "**Recently**", "Recently:"} {
+		if got := styleBriefingLine(in); got != "\x1b[1mRecently\x1b[0m" {
+			t.Fatalf("styleBriefingLine(%q) = %q", in, got)
+		}
+	}
+	if got := styleBriefingLine("- shipped **v2** today"); got != "\x1b[2m-\x1b[0m shipped \x1b[1mv2\x1b[0m today" {
+		t.Fatalf("bullet line = %q", got)
+	}
+
+	styled = false
+	var buf bytes.Buffer
+	w := &briefingWriter{out: &buf}
+	_, _ = w.Write([]byte("## Recently\n- raw **markdown**"))
+	w.Flush()
+	if buf.String() != "## Recently\n- raw **markdown**" {
+		t.Fatalf("unstyled passthrough altered the stream: %q", buf.String())
 	}
 }
