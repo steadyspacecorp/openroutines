@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +65,43 @@ func genDef(t *testing.T, meta Meta, fm ...routine.Frontmatter) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+func TestReadOnlyDefinitionDeniesActingAndMutationTools(t *testing.T) {
+	def := genDef(t, Meta{ReadOnly: true})
+	for _, want := range []string{"\"*\": deny", "read: allow", "glob: allow", "grep: allow", "webfetch: deny", "websearch: deny"} {
+		if !strings.Contains(def, want) {
+			t.Fatalf("read-only definition missing %q:\n%s", want, def)
+		}
+	}
+}
+
+func TestStageUsesSuppliedKnowledgeSnapshotWithoutMaterializingLocalBranch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte("name: Test\ndescription: Test agent\nowner:\n  email: test@example.com\ntimezone: UTC\ndefaults:\n  model: test/model\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(snapshot, "events.md"), []byte("remote fact\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &routine.Routine{Name: "knowledge-summary", FM: routine.Frontmatter{Teamwork: routine.TeamworkOff}, Body: "summarize"}
+	agent, err := config.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := Stage(dir, agent, r, Meta{RunID: "run_test", AttemptID: "attempt_01", SnapshotDir: snapshot, ReadOnly: true}, &sync.Mutex{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.staging.Cleanup()
+	raw, err := os.ReadFile(filepath.Join(staged.staging.KnowledgeDir, "events.md"))
+	if err != nil || string(raw) != "remote fact\n" {
+		t.Fatalf("staged snapshot = %q, %v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "knowledge")); !os.IsNotExist(err) {
+		t.Fatalf("read-only staging materialized local knowledge: %v", err)
+	}
 }
 
 // The ceiling is the agent's own max_timeout, applied where attempts read

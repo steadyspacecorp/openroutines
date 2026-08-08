@@ -20,6 +20,32 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
+// FormatUsage renders captured usage for an immediate, ephemeral call.
+func FormatUsage(u *Usage) string {
+	if u == nil {
+		return "usage unavailable"
+	}
+	parts := []string{fmt.Sprintf("%s input", formatUsageTokens(u.Input)), fmt.Sprintf("%s output", formatUsageTokens(u.Output))}
+	if u.Reasoning > 0 {
+		parts = append(parts, fmt.Sprintf("%s reasoning", formatUsageTokens(u.Reasoning)))
+	}
+	if u.CostReported > 0 {
+		parts = append(parts, fmt.Sprintf("~$%.2f reported", u.CostReported))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatUsageTokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
 // Usage is one attempt's token consumption, summed from the assistant
 // messages of the attempt's opencode session. CostReported is opencode's
 // own estimate -- informational; tokens with the model and effort are the
