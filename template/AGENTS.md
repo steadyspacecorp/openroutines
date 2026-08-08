@@ -39,8 +39,8 @@ deployed container runs whatever routine is due.
   update with local plugin edits.
 - **Validate after every change**: `openroutines check`. Run a routine once
   with `openroutines routines run <name>` -- knowledge writes are discarded
-unless you add `--write-knowledge` to settle its
-  knowledge writes. Both forms may perform real external actions.
+  unless you add `--write-knowledge` to settle them. Both forms may perform
+  real external actions.
 - **Skills** follow the Agent Skills standard: `skills/<name>/SKILL.md`.
   Treat third-party skills as executable dependencies -- review before
   vendoring.
