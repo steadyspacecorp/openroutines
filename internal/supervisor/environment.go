@@ -20,16 +20,17 @@ var supervisorKeys = []struct{ what, valueEnv, fileEnv string }{
 	{"deploy key", knowledge.EnvDeployKey, knowledge.EnvDeployKeyFile},
 }
 
-// Inspects how the supervisor's own secrets arrived, in production only, where
-// there are sandboxed runs to keep them from. It composes here because neither
-// creds nor knowledge can answer alone: the question is about a key *and* what
-// the sandbox grants.
+// VerifyKeyDelivery inspects how the supervisor's own secrets arrived, in
+// production only. It runs at boot and again before a manual `routines run`, so
+// a layout boot would refuse cannot be accepted just because the supervisor is
+// not the one asking. It composes here because neither creds nor knowledge can
+// answer alone: the question is about a key *and* what the sandbox grants.
 //
 // A key file inside a granted path is fatal -- runs hold the supervisor's uid,
 // so the file's mode stops nobody. A key value in the environment is a warning:
 // weaker delivery, but out of reach of a run, whose environment is constructed
 // rather than inherited. It fires on a leftover variable too.
-func verifyKeyDelivery() error {
+func VerifyKeyDelivery() error {
 	if mode.Current() != mode.DeployedContainer {
 		return nil
 	}
