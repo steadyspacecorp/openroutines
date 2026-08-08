@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
@@ -87,11 +88,8 @@ func cmdUsage(args []string) int {
 		printKnowledgeLag(".")
 		return 0
 	}
-	fmt.Println("token usage (retention window):")
-	for _, r := range rows {
-		printUsageLine(r.Routine, r, true)
-	}
-	printUsageLine("total", totalUsage(rows), false)
+	fmt.Println(bold("token usage (retention window):"))
+	printUsageTable(rows, totalUsage(rows))
 	printKnowledgeLag(".")
 	return 0
 }
@@ -101,7 +99,7 @@ func cmdUsage(args []string) int {
 // this is what keeps a stale worktree from reading as a quiet zero.
 func printKnowledgeLag(dir string) {
 	if st := knowledge.At(dir).Status(); st.Behind > 0 {
-		fmt.Printf("\nknowledge/ is %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to get the latest knowledge from origin\n", st.Behind, knowledge.Branch)
+		fmt.Printf("\n%s knowledge/ is %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to get the latest knowledge from origin\n", warnMark, st.Behind, knowledge.Branch)
 	}
 }
 
@@ -172,30 +170,113 @@ func totalUsage(rows []usageRow) usageRow {
 	return t
 }
 
-func printUsageLine(label string, r usageRow, withRuns bool) {
-	runs := "        "
-	if withRuns {
-		runs = fmt.Sprintf("%3d run(s)", r.Runs)
+// printUsageTable renders the rows and the total as aligned columns sized
+// to their widest cell, numbers right-aligned under a dim header. Columns
+// no row has -- reasoning, cache traffic, cost, model -- are dropped whole
+// rather than printed empty. Cache traffic usually dwarfs fresh input and
+// is priced differently: without it a human cannot derive the spend from
+// the counts.
+func printUsageTable(rows []usageRow, total usageRow) {
+	all := append(slices.Clone(rows), total)
+	var hasReasoning, hasCache, hasCost, hasModel bool
+	for _, r := range all {
+		hasReasoning = hasReasoning || r.Tokens.Reasoning > 0
+		hasCache = hasCache || r.Tokens.CacheRead > 0 || r.Tokens.CacheWrite > 0
+		hasCost = hasCost || r.CostReported > 0
+		hasModel = hasModel || r.Model != ""
 	}
-	fmt.Printf("  %-20s %s  in %s  out %s", label, runs, formatTokens(r.Tokens.Input), formatTokens(r.Tokens.Output))
-	if r.Tokens.Reasoning > 0 {
-		fmt.Printf(" (reasoning %s)", formatTokens(r.Tokens.Reasoning))
+	blankZero := func(n int64) string {
+		if n == 0 {
+			return ""
+		}
+		return formatTokens(n)
 	}
-	// Cache traffic usually dwarfs fresh input and is priced differently --
-	// without it a human cannot derive the spend from the counts.
-	if r.Tokens.CacheRead > 0 || r.Tokens.CacheWrite > 0 {
-		fmt.Printf("  cache-read %s  cache-write %s", formatTokens(r.Tokens.CacheRead), formatTokens(r.Tokens.CacheWrite))
+
+	heads := []string{"routine", "runs", "in", "out"}
+	leftAligned := []bool{true, false, false, false}
+	addCol := func(head string, left bool) {
+		heads = append(heads, head)
+		leftAligned = append(leftAligned, left)
 	}
-	if r.CostReported > 0 {
-		fmt.Printf("  ~$%.2f reported", r.CostReported)
+	if hasReasoning {
+		addCol("reasoning", false)
 	}
-	if r.Model != "" {
-		fmt.Printf("  %s", r.Model)
-		if r.Effort != "" {
-			fmt.Printf(" @%s", r.Effort)
+	if hasCache {
+		addCol("cache-read", false)
+		addCol("cache-write", false)
+	}
+	if hasCost {
+		addCol("reported", false)
+	}
+	if hasModel {
+		addCol("model", true)
+	}
+
+	cells := make([][]string, 0, len(all))
+	for i, r := range all {
+		runs := ""
+		if i < len(all)-1 {
+			runs = strconv.Itoa(r.Runs)
+		}
+		c := []string{r.Routine, runs, formatTokens(r.Tokens.Input), formatTokens(r.Tokens.Output)}
+		if hasReasoning {
+			c = append(c, blankZero(r.Tokens.Reasoning))
+		}
+		if hasCache {
+			c = append(c, blankZero(r.Tokens.CacheRead), blankZero(r.Tokens.CacheWrite))
+		}
+		if hasCost {
+			cost := ""
+			if r.CostReported > 0 {
+				cost = fmt.Sprintf("~$%.2f", r.CostReported)
+			}
+			c = append(c, cost)
+		}
+		if hasModel {
+			m := r.Model
+			if r.Effort != "" {
+				m += " @" + r.Effort
+			}
+			c = append(c, m)
+		}
+		cells = append(cells, c)
+	}
+
+	widths := make([]int, len(heads))
+	for i, h := range heads {
+		widths[i] = len(h)
+	}
+	for _, c := range cells {
+		for i, v := range c {
+			widths[i] = max(widths[i], len(v))
 		}
 	}
-	fmt.Println()
+
+	// Pad before styling: escape bytes inside a padding verb would count
+	// toward the width and break the column.
+	pad := func(i int, v string) string {
+		if leftAligned[i] {
+			return fmt.Sprintf("%-*s", widths[i], v)
+		}
+		return fmt.Sprintf("%*s", widths[i], v)
+	}
+	line := make([]string, len(heads))
+	for i, h := range heads {
+		line[i] = pad(i, h)
+	}
+	fmt.Println(dim("  " + strings.TrimRight(strings.Join(line, "  "), " ")))
+	for row, c := range cells {
+		for i, v := range c {
+			line[i] = pad(i, v)
+			if i == len(heads)-1 && hasModel && v != "" {
+				line[i] = dim(line[i])
+			}
+		}
+		if row == len(cells)-1 {
+			line[0] = bold(line[0])
+		}
+		fmt.Println("  " + strings.TrimRight(strings.Join(line, "  "), " "))
+	}
 }
 
 // formatTokens keeps counts scannable: 812, 13.8k, 2.1M.
