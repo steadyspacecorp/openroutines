@@ -19,9 +19,9 @@ import (
 )
 
 // Update is a prepared update: the recorded and current upstream revisions,
-// what changed between them, and the validated upstream bundle -- everything
-// the person reviews before consenting. Apply is reachable only through
-// PrepareUpdate, so the merge cannot run past a failed check.
+// what changed between them, and the validated upstream bundle. Apply is
+// reachable only through PrepareUpdate, so the merge cannot run past a
+// failed check.
 type Update struct {
 	Old, New Source
 	Changes  []string // upstream additions, modifications, and removals
@@ -107,10 +107,9 @@ func PrepareUpdate(agentDir, name string) (*Update, error) {
 }
 
 // Apply merges local edits, the recorded base, and upstream file-wise into a
-// staging directory beside the plugin, deactivates routines new since the
-// base, revalidates the merged bundle, and swaps it in atomically. Provenance
-// advances only on a conflict-free merge: conflicted files keep their markers
-// for the person to resolve, and the recorded revision stays put so rerunning
+// staging directory, deactivates routines new since the base, revalidates
+// the merged bundle, and swaps it in atomically. Provenance advances only on
+// a conflict-free merge, so conflicted files keep their markers and rerunning
 // the update converges.
 func (u *Update) Apply() (conflicts []string, err error) {
 	ours := filepath.Join(u.agentDir, ".openroutines", "plugins", u.name)
@@ -182,7 +181,7 @@ func (u *Update) Apply() (conflicts []string, err error) {
 	return conflicts, nil
 }
 
-// writeSource replaces framework-owned provenance after a clean update.
+// Replaces framework-owned provenance after a clean update.
 func writeSource(dir string, source Source) error {
 	raw, err := yaml.Marshal(source)
 	if err != nil {
@@ -191,7 +190,7 @@ func writeSource(dir string, source Source) error {
 	return os.WriteFile(filepath.Join(dir, SourceFileName), raw, 0o644)
 }
 
-// changes summarizes upstream file additions, modifications, and removals.
+// Summarizes upstream file additions, modifications, and removals.
 func changes(base, next string) ([]string, error) {
 	files := map[string]bool{}
 	for _, root := range []string{base, next} {
@@ -240,7 +239,7 @@ func changes(base, next string) ([]string, error) {
 	return out, nil
 }
 
-// mergeTrees performs a file-wise three-way merge into dest. It intentionally
+// Performs a file-wise three-way merge into dest. Intentionally
 // excludes provenance: Apply advances that only after a clean merge.
 func mergeTrees(base, ours, theirs, dest string) ([]string, error) {
 	files := map[string]bool{}

@@ -24,13 +24,9 @@ func (m *Knowledge) HasOrigin() bool {
 	return err == nil
 }
 
-// acceptedRef records, on origin, the last knowledge tip this agent accepted.
-// It is what makes rewrite refusal durable: the remote-tracking ref is
-// overwritten by every fetch (so the rewritten tip would become the next
-// comparison's baseline) and dies with the container (so a redeploy would
-// adopt anything). An attacker force-pushing the knowledge branch must now also
-// know to move this ref -- and the refusal survives both the next sync call
-// and a container replacement.
+// acceptedRef records, on origin, the last knowledge tip this agent accepted
+// -- what makes rewrite refusal durable across fetches and container
+// replacement. A force-push must also know to move this ref.
 const acceptedRef = "refs/openroutines/accepted"
 
 // AcceptedTip returns the last accepted knowledge tip recorded on origin, ""
@@ -55,12 +51,9 @@ func (m *Knowledge) recordAccepted(tip string) {
 	}
 }
 
-// Sync reconciles the local knowledge branch with origin, defensively
-// (design decision "Knowledge"): fast-forward when behind; rebase local commits when
-// diverged (append-only files rebase cleanly); refuse rewritten remote
-// history and conflicts -- never resolve silently. The rewrite baseline is
-// the durable accepted ref, so refusal holds across repeated syncs and
-// process restarts alike.
+// Sync reconciles the local knowledge branch with origin: fast-forward when
+// behind, rebase when diverged, refuse rewritten history and conflicts --
+// never resolve silently. The rewrite baseline is the durable accepted ref.
 func (m *Knowledge) Sync() SyncReport {
 	wt := m.Worktree()
 	if !m.HasOrigin() {
@@ -73,8 +66,8 @@ func (m *Knowledge) Sync() SyncReport {
 		return SyncReport{Unreachable: true, Detail: err.Error()}
 	}
 
-	// The baseline for rewrite detection: the durably recorded accepted tip,
-	// falling back to the remote-tracking ref for repos that predate it.
+	// The accepted tip, falling back to the remote-tracking ref for repos
+	// that predate it.
 	oldTip := m.AcceptedTip()
 	if oldTip == "" {
 		oldTip, _ = git(m.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch)
@@ -136,12 +129,10 @@ func (m *Knowledge) Push() error {
 }
 
 // BlockedRef is where the supervisor strands knowledge it cannot put on the
-// branch. A blocked sync (rewritten history, conflict) refuses to write the
-// knowledge branch -- which is also where the supervisor records the blocker
-// that says so, and a commit that never leaves the container dies with it.
-// The ref is supervisor-owned and uncontended, so publishing there resolves
-// nothing and hides nothing: origin's branch stays exactly as the human left
-// it, and the record is still on origin when someone looks.
+// branch: a blocked sync refuses the branch, which is also where the blocker
+// record lives, and a commit that never leaves the container dies with it.
+// Supervisor-owned and uncontended -- origin's branch stays as the human
+// left it.
 const BlockedRef = "refs/openroutines/blocked"
 
 // BlockedSnapshot is what a blocked supervisor left on origin. Tip is "" when
@@ -151,16 +142,10 @@ type BlockedSnapshot struct {
 	When string // when the supervisor stranded it, RFC3339
 }
 
-// PublishBlocked strands the committed knowledge state on the blocked ref as a
-// parentless snapshot: the tree, and no history. Pushing the local tip would
-// drag its whole lineage to origin instead -- and when a rewrite is what
-// blocked sync, that lineage is the history a human just rewrote away, so a
-// rewrite meant to purge something would be undone under a ref nobody thinks
-// to look at. The snapshot carries the record (tasks.md says what broke)
-// without republishing anything.
-//
-// Force is safe and necessary: the ref is the supervisor's own, and each
-// snapshot supersedes the last.
+// PublishBlocked strands the committed knowledge state on the blocked ref as
+// a parentless snapshot -- pushing the local tip would drag along the very
+// lineage a rewrite may have just purged. Force is safe: the ref is the
+// supervisor's own, and each snapshot supersedes the last.
 func (m *Knowledge) PublishBlocked() error {
 	if !m.HasOrigin() {
 		return nil
@@ -185,10 +170,9 @@ func (m *Knowledge) ClearBlocked() {
 	_, _ = git(m.repoDir, "push", "--quiet", "origin", ":"+BlockedRef)
 }
 
-// Blocked reports what a blocked supervisor stranded on origin -- what a
-// person repairing a blocked branch needs to know it is there. Fetching it is
-// part of the answer: the ref is outside the namespaces git replicates on its
-// own, so nothing else in a checkout would ever show it.
+// Blocked reports what a blocked supervisor stranded on origin. Fetching is
+// part of the answer: the ref is outside the namespaces git replicates, so
+// nothing else in a checkout would ever show it.
 func (m *Knowledge) Blocked() BlockedSnapshot {
 	if _, err := git(m.repoDir, "fetch", "--quiet", "origin", "+"+BlockedRef+":"+BlockedRef); err != nil {
 		return BlockedSnapshot{}
@@ -216,12 +200,9 @@ func short(sha string) string {
 
 // --- Lease: "one writer" enforced, not assumed -------------------------------
 
-// The lease: a single-writer heartbeat ref with a bounded TTL. The supervisor
-// heartbeats before every run it dispatches and on a quarter-TTL cadence
-// while a run executes, so the lease never goes more than half a TTL stale
-// under a live supervisor no matter how long its runs are -- the TTL bounds
-// takeover latency, not run length (design decision "The lease is renewed
-// per run, not per tick").
+// The lease: a single-writer heartbeat ref with a bounded TTL. Heartbeats
+// happen per dispatch and on a quarter-TTL cadence during runs, so the TTL
+// bounds takeover latency, not run length.
 const (
 	leaseRef = "refs/openroutines/lease"
 	LeaseTTL = 30 * time.Minute
@@ -283,11 +264,10 @@ func (m *Knowledge) WriteLease(instanceID string, now time.Time, expectedSHA str
 	return blob, nil
 }
 
-// ReleaseLease removes this instance's lease from origin (best effort) --
-// but only if origin's lease is still the one this instance last wrote.
-// Unconditional deletion let a stale instance, shutting down after losing
-// the lease, delete the new holder's live lease. ownedSHA "" means this
-// instance never held the lease; there is nothing to release.
+// ReleaseLease removes this instance's lease (best effort), but only if it
+// is still the one this instance last wrote -- unconditional deletion let a
+// stale instance delete the new holder's live lease. ownedSHA "" means this
+// instance never held it.
 func (m *Knowledge) ReleaseLease(ownedSHA string) {
 	if ownedSHA == "" {
 		return

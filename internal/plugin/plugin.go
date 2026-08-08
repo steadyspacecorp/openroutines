@@ -210,7 +210,6 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		switch {
 		case rel == FileName || benignRoot[rel]:
 		case rel == "routines" || rel == "skills" || rel == "knowledge" || rel == filepath.Join("knowledge", "ledgers"):
-			// structural directories
 		case strings.HasPrefix(rel, "routines"+string(filepath.Separator)):
 			if d.IsDir() {
 				badf("%s: routines/ holds flat markdown files only", rel)
@@ -249,7 +248,6 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 		return nil, err
 	}
 
-	// Parse the payload's routines and skills.
 	routines, parseErrs := routine.LoadDir(filepath.Join(dir, "routines"))
 	p.Routines = routines
 	for _, e := range parseErrs {

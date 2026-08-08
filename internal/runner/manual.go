@@ -10,12 +10,12 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
-// reserveManualIdentity reserves the manual attempt identity: the one uid
-// past the supervisor's slot pool, pre-created by the template Dockerfile.
-// Production refuses to spawn a model process without a reserved attempt
-// uid, and only the supervisor holds the slot pool -- so `routines run`
-// inside the container takes this fixed identity instead, locked so two
-// manual runs cannot share it.
+// Reserves the manual attempt identity: the one uid past the supervisor's
+// slot pool, pre-created by the template Dockerfile. Production refuses to
+// spawn a model process without a reserved attempt uid, and only the
+// supervisor holds the slot pool -- so `routines run` inside the container
+// takes this fixed identity instead, locked so two manual runs cannot share
+// it.
 func reserveManualIdentity(dir string) (uint32, func(), error) {
 	const uid = uint32(sandbox.AttemptUIDBase + config.MaxConcurrency)
 	// Group membership is how the staged trees are shared with the identity.
@@ -33,11 +33,8 @@ func reserveManualIdentity(dir string) (uint32, func(), error) {
 		return 0, nil, err
 	}
 	// Prove the identity is empty before handing it out, not only after: a
-	// previous manual run that died (the kernel dropped its lock) can leave
-	// an escaped descendant that would share -- and be able to inspect --
-	// this run's identity. The release-side reap is best effort because the
-	// lock dies with the process anyway; this acquire-side proof is what the
-	// next run can rely on.
+	// previous manual run that died can leave an escaped descendant that
+	// would share -- and be able to inspect -- this run's identity.
 	if err := sandbox.ReapIdentity(uid); err != nil {
 		release()
 		return 0, nil, fmt.Errorf("manual attempt identity is not clean -- refusing to reuse it: %w", err)

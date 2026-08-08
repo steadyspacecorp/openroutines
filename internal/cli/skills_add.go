@@ -11,9 +11,9 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
-// skillsAdd vendors a skill from a git repository into skills/<name>,
-// recording provenance (source + commit) in the SKILL.md frontmatter.
-// A skill is an executable dependency: the user reviews the diff like code.
+// Vendors a skill from a git repository into skills/<name>, recording
+// provenance (source + commit) in the SKILL.md frontmatter. A skill is an
+// executable dependency: the user reviews the diff like code.
 const skillsAddUsage = "usage: openroutines skills add <git-url | owner/repo> [--path sub/dir]"
 
 func skillsAdd(args []string) int {
@@ -31,7 +31,6 @@ func skillsAdd(args []string) int {
 	source := rest[0]
 	subPath := flags["--path"]
 	cloneURL := source
-	// GitHub shorthand: owner/repo.
 	if !strings.Contains(source, "://") && !strings.Contains(source, "@") && strings.Count(source, "/") == 1 {
 		cloneURL = "https://github.com/" + source + ".git"
 	}
@@ -42,10 +41,9 @@ func skillsAdd(args []string) int {
 	}
 	defer os.RemoveAll(tmp)
 
-	// Ambient git on purpose: vendoring happens on a dev machine and may
-	// need the user's own auth for private sources. But the URL is pasted
-	// input: disable the ext:: command-execution transport and terminate
-	// option parsing so a leading-dash "URL" can't become a flag.
+	// Ambient git (vendoring needs the user's own auth), but the URL is
+	// pasted input: disable protocol.ext and terminate option parsing so a
+	// leading-dash "URL" can't become a flag or trigger command execution.
 	clone := exec.Command("git", "-c", "protocol.ext.allow=never", "clone", "--quiet", "--depth", "1", "--", cloneURL, tmp)
 	clone.Stderr = os.Stderr
 	if err := clone.Run(); err != nil {
@@ -54,8 +52,6 @@ func skillsAdd(args []string) int {
 	revBytes, _ := exec.Command("git", "-C", tmp, "rev-parse", "--short", "HEAD").Output()
 	revision := strings.TrimSpace(string(revBytes))
 
-	// Locate the skill: --path if given, SKILL.md at the root, or exactly one
-	// SKILL.md anywhere in the repo.
 	root := tmp
 	if subPath != "" {
 		root = filepath.Join(tmp, filepath.Clean(subPath))
@@ -124,8 +120,8 @@ func skillsAdd(args []string) int {
 	return 0
 }
 
-// findSkillDir returns the directory containing the skill's SKILL.md: the
-// root itself, or exactly one SKILL.md found below it.
+// Returns the directory containing SKILL.md: root itself, or the one
+// SKILL.md found below it.
 func findSkillDir(root string) (string, error) {
 	if _, err := os.Stat(filepath.Join(root, "SKILL.md")); err == nil {
 		return root, nil
@@ -158,8 +154,8 @@ func findSkillDir(root string) (string, error) {
 	}
 }
 
-// stampProvenance records source and revision in the SKILL.md frontmatter
-// metadata block (string key-values, allowed by the Agent Skills spec).
+// Records source and revision in the SKILL.md frontmatter's metadata block
+// (string key-values, allowed by the Agent Skills spec).
 func stampProvenance(path, source, revision string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {

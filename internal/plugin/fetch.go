@@ -9,10 +9,9 @@ import (
 )
 
 // Fetch acquires a plugin source: a local directory, a git URL, or an
-// owner/repo GitHub shorthand. Local directories and remote sources both go
-// through a temporary clone, so the returned bundle root always corresponds
-// to the recorded provenance. revision pins the checkout; empty means the
-// clone's head. cleanup releases the clone and is always safe to call.
+// owner/repo GitHub shorthand. Both go through a temporary clone, so the
+// returned bundle root always corresponds to the recorded provenance.
+// revision pins the checkout; empty means the clone's head.
 func Fetch(source, subPath, revision string) (root string, prov Source, cleanup func(), err error) {
 	cleanup = func() {}
 	repository := source
@@ -89,7 +88,7 @@ func Fetch(source, subPath, revision string) (root string, prov Source, cleanup 
 	return root, Source{Repository: repository, Path: subPath, Revision: strings.TrimSpace(string(revBytes))}, cleanup, nil
 }
 
-// subdir resolves a --path inside the clone, refusing traversal or symlink
+// Resolves a --path inside the clone, refusing traversal or symlink
 // escapes out of the repository.
 func subdir(root, subPath string) (string, error) {
 	clean := filepath.Clean(subPath)

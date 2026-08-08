@@ -15,9 +15,8 @@ import (
 )
 
 // Install is a validated install: the bundle, the agent it targets, and the
-// provenance to record. It exists only as proof that the payload, the agent
-// namespace, and the collision check all passed -- Apply is reachable solely
-// through PrepareInstall, so nothing can be copied past a failed check.
+// provenance to record. Apply is reachable only through PrepareInstall, so
+// nothing can be copied past a failed check.
 type Install struct {
 	Plugin *Plugin
 
@@ -29,9 +28,6 @@ type Install struct {
 // to record, the whole payload at bundleDir, and the agent's namespace.
 // Install refuses to replace anything -- an existing path is the user's.
 func PrepareInstall(agentDir, bundleDir string, source Source) (*Install, error) {
-	// Provenance is validated as strictly as ReadSource validates it later:
-	// an installed plugin whose metadata later commands reject is worse than
-	// a refused install.
 	if err := source.validate(); err != nil {
 		return nil, err
 	}
@@ -58,10 +54,9 @@ func PrepareInstall(agentDir, bundleDir string, source Source) (*Install, error)
 	return &Install{Plugin: p, agentDir: agentDir, source: source}, nil
 }
 
-// collisions reports the bundle's routine and skill names already taken in
+// Reports the bundle's routine and skill names already taken in
 // the agent namespace. Content under ownDir is the bundle's own installed
-// copy, not a collision; ownDir is empty for a fresh install, where nothing
-// is owned yet.
+// copy, not a collision; ownDir is empty for a fresh install.
 func (p *Plugin) collisions(routines []*routine.Routine, skills []*skill.Skill, ownDir string) []string {
 	own := func(path string) bool {
 		if ownDir == "" {
@@ -97,9 +92,8 @@ func (p *Plugin) collisions(routines []*routine.Routine, skills []*skill.Skill, 
 }
 
 // Apply copies the bundle into the agent: routines and skills always; ledger
-// stubs only when the knowledge worktree already exists (the supervisor creates
-// it on first run), otherwise they are returned as pending for the caller to
-// surface.
+// stubs only when the knowledge worktree already exists (the supervisor
+// creates it on first run), otherwise they're returned as pending.
 func (i *Install) Apply() (installed, pendingStubs []string, err error) {
 	p := i.Plugin
 	destRoot := filepath.Join(i.agentDir, ".openroutines", "plugins", p.Manifest.Name)
@@ -184,8 +178,8 @@ func writeFileExclusive(dest string, raw []byte) error {
 	return f.Close()
 }
 
-// copyTreeExclusive independently enforces the payload boundary while copying:
-// validation and copy can be separated in time for a local development source.
+// Re-enforces the payload boundary during the copy itself, since
+// validation and copy can be separated in time for a local dev source.
 func copyTreeExclusive(src, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err

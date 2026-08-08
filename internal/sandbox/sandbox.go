@@ -27,11 +27,11 @@ var ErrUnsupported = errors.New("landlock is unavailable on this platform")
 const AttemptUIDBase = 20000
 
 // EnsureAttemptGroups makes this process a member of every attempt group,
-// joining the missing ones with the binary's cap_setgid. The image grants
-// the membership via useradd -G, but whether it reaches the process depends
-// on the init that booted the container: some call initgroups, others set
-// only uid and gid and clear the supplementary groups. So membership is
-// asserted here, not assumed from /etc/group.
+// joining the missing ones with the binary's cap_setgid. The image grants the membership via
+// useradd -G, but whether it reaches the process depends on the init that
+// booted the container: some call initgroups, others set only uid and gid
+// and clear the supplementary groups. So membership is asserted here, not
+// assumed from /etc/group.
 func EnsureAttemptGroups(identities int) error {
 	current, err := os.Getgroups()
 	if err != nil {
@@ -52,8 +52,8 @@ func EnsureAttemptGroups(identities int) error {
 	return nil
 }
 
-// HelperPath is the capless production re-exec target. The supervisor binary
-// is executable only by the agent identity because it carries UID-switching
+// HelperPath is the capless production re-exec target. The supervisor binary is
+// executable only by the agent identity because it carries UID-switching
 // capabilities; attempts may execute this copy, but it carries no capability
 // with which to change identity.
 const HelperPath = "/usr/local/lib/openroutines/sandbox-exec"
@@ -70,27 +70,19 @@ const (
 	EnvAttemptUID = "OPENROUTINES_ATTEMPT_UID"
 )
 
-// Paths computes the rule sets for one attempt: read on the workspace, the
-// OS, and the opencode installation; read-write on the staged knowledge the
-// runner names, the run tmp, and the attempt's disposable HOME -- all inside
-// the workspace -- plus /dev.
+// Paths computes the rule sets for one attempt: read on the workspace, the OS,
+// and the opencode installation; read-write on the staged knowledge the
+// runner names, the run tmp, and the attempt's disposable HOME.
 //
-// Landlock rules are additive: a grant on a parent subsumes everything
-// beneath it. That is why /tmp is conspicuously absent -- the workspace
-// lives inside it, and a blanket /tmp grant would make the entire workspace
-// writable. Also absent: the real HOME's dotdirs (.local/.config/.cache are
-// per-attempt now -- a shared writable opencode home let one routine plant
-// state, plugins included, for a later, more privileged one), the repo, and
-// the supervisor's ~/.ssh (the deploy key file).
+// Landlock rules are additive, so /tmp is deliberately absent -- the
+// workspace lives inside it, and a blanket grant would make the whole
+// workspace writable. The real HOME's dotdirs, the repo, and the
+// supervisor's ~/.ssh are excluded for the same reason.
 //
-// /proc stays readable: /dev/fd resolves through /proc/self/fd (bash process
-// substitution) and node reads its own cgroup files. The secrets that made
-// /proc dangerous are protected at the source instead -- the supervisor is
-// non-dumpable (ProtectProcess), keys are file-delivered, and every child the
-// supervisor spawns (git included) gets a constructed, secret-free
-// environment. That last one matters because non-dumpable does not survive
-// execve: a child inheriting the supervisor's environment would publish the
-// master key in its own /proc/<pid>/environ.
+// /proc stays readable (needed for /dev/fd and cgroup access); the
+// supervisor protects its own secrets separately via ProtectProcess and
+// constructed, secret-free child environments, since Landlock can't cover
+// ptrace-style procfs access.
 func Paths(workspace, knowledgeDir, runTmp, home, attemptHome string) (ro, rw []string) {
 	ro = []string{
 		workspace,

@@ -27,9 +27,8 @@ type Cursor struct {
 	At              time.Time `json:"at"`
 }
 
-// CursorFile is the cursor's branch-relative path: what every diagnostic about
-// a broken cursor names, because repairing one means editing this file on the
-// knowledge branch.
+// CursorFile is the cursor's branch-relative path -- what diagnostics name,
+// because repair means editing this file on the knowledge branch.
 func CursorFile(consumer string) string {
 	return path.Join(stateDirName, "cursors", consumer+".json")
 }
@@ -131,15 +130,11 @@ var deliveryExcludes = []string{":(exclude)state", ":(exclude)runs.jsonl", ":(ex
 // it as a failure to diagnose rather than one to retry.
 var ErrCursorUnreachable = errors.New("consumer cursor is not on the knowledge branch")
 
-// reachable checks the precondition for from..through naming a change set:
-// the cursor commit exists and the boundary descends from it. Both halves
-// matter -- a commit left behind by a repaired history is still in the object
-// store, and walking from it would deliver a change set nobody made.
-//
-// Only git's own "no" counts, which is exit 1 from either question: anything
-// else is git failing to answer (a broken repository, a lock, a full disk),
-// and calling that unreachable would abandon a run on its first attempt over
-// a condition the next attempt might not even see.
+// reachable checks that the cursor commit exists and the boundary descends
+// from it -- a commit left behind by a repaired history is still in the
+// object store, and walking from it would deliver a change set nobody made.
+// Only git's own "no" (exit 1) counts; anything else is git failing to
+// answer, which must not abandon a run.
 func (m *Knowledge) reachable(from, through string) error {
 	wt := m.Worktree()
 	full, err := git(wt, "rev-parse", "--verify", "--quiet", from+"^{commit}")
@@ -172,12 +167,9 @@ func (m *Knowledge) Changes(from, through string) ([]CommitChange, error) {
 	if err := m.reachable(from, through); err != nil {
 		return nil, err
 	}
-	// The commit sentinel and field separators are emitted by git itself
-	// (%x00/%x1f) -- argv cannot carry a literal NUL. Retention trims are
-	// dropped from the walk: pruning is bookkeeping, not a knowledge change, and
-	// delivering its removals would re-present already-consumed history to
-	// every consumer once a day. The pattern is anchored because --grep sees
-	// the whole message, subject included, and a routine name is a filename.
+	// The %x00/%x1f sentinels are emitted by git itself -- argv cannot carry
+	// a literal NUL. Retention trims are dropped: delivering their removals
+	// would re-present consumed history to every consumer daily.
 	args := append([]string{
 		"log", "--reverse", "--date=format:%Y-%m-%d",
 		"--format=%x00%H%x1f%ad%x1f%s", "-p", "-U0", "--no-color",
@@ -250,8 +242,7 @@ const (
 )
 
 // RenderChanges formats the pending change set as the markdown a reporting
-// run reads. Pure data: the consume instructions live in the generated agent
-// definition, not here.
+// run reads. Pure data: consume instructions live in the generated definition.
 func RenderChanges(consumer, from, through string, changes []CommitChange) string {
 	var b strings.Builder
 	b.WriteString("# Pending knowledge changes\n\n")

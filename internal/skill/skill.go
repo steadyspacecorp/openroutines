@@ -13,8 +13,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// NamePattern is the Agent Skills name constraint: lowercase alphanumerics
-// and hyphens, matching the directory name.
+// NamePattern is the Agent Skills name constraint: lowercase
+// alphanumerics and hyphens, matching the directory name.
 var NamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // Skill is one parsed SKILL.md: name, description, directory.
@@ -76,8 +76,9 @@ func List(dir string) ([]*Skill, []error) {
 	return skills, errs
 }
 
-// ListAgent reads agent-owned skills plus every installed plugin's skills.
-// Skill names are global because routine grants name them without a path.
+// ListAgent reads agent-owned skills plus every installed plugin's
+// skills. Skill names are global because routine grants name them
+// without a path.
 func ListAgent(root string) ([]*Skill, []error) {
 	skills, errs := List(filepath.Join(root, "skills"))
 	pluginDirs, err := os.ReadDir(filepath.Join(root, ".openroutines", "plugins"))

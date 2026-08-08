@@ -12,15 +12,12 @@ import (
 
 // The oauth2_client derived type: the stored value is an OAuth2 client's
 // secret, and the run receives a short-lived bearer minted via the
-// client-credentials grant (RFC 6749 section 4.4) in its place -- the
-// standard server-to-server flow at Help Scout, Stripe, Slack app-level
-// APIs, and most OAuth2-fronted SaaS. Unlike github_app installation
-// tokens, client-credentials bearers are typically not revocable -- they
-// just expire -- so this type has no cleanup; token lifetime is bounded by
-// the provider.
+// client-credentials grant (RFC 6749 section 4.4) in its place. Unlike
+// github_app installation tokens, these bearers are typically not
+// revocable -- they just expire -- so this type has no cleanup.
 //
-// oauth2HTTP never follows redirects: a redirect would carry the client
-// secret or minted bearer toward a location the framework did not choose.
+// Never follows redirects: a redirect would carry the client secret or
+// minted bearer toward a location the framework did not choose.
 var oauth2HTTP = &http.Client{
 	Timeout: 30 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error {

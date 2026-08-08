@@ -1,9 +1,8 @@
-// Package trigger implements event-driven routine wake-ups: a
-// cheap, outbound change-detection poll evaluated on the supervisor's tick.
-// A trigger carries no payload -- on change the routine simply becomes due,
-// and pulls its actual work through its own skills. The response is opaque:
-// compared and stored, never logged raw, never interpreted beyond an optional
-// single JSON pointer lookup, never shown to the model.
+// Package trigger implements event-driven routine wake-ups: a cheap,
+// outbound change-detection poll evaluated on the supervisor's tick. A
+// trigger carries no payload -- on change the routine simply becomes due and
+// pulls its actual work through its own skills. The poll response is opaque:
+// compared and stored, never logged raw or shown to the model.
 package trigger
 
 import (
@@ -45,8 +44,8 @@ const StateDirName = "triggers"
 
 // State is one routine's durable trigger record: the last comparison value
 // and the conditional-request validators that produced it. Poll timing is
-// deliberately absent -- the last-poll clock is supervisor knowledge, since
-// persisting it would dirty the knowledge worktree on every poll.
+// deliberately absent -- persisting it would dirty the knowledge worktree on
+// every poll.
 type State struct {
 	Routine      string `json:"routine"`
 	Value        string `json:"value"`
@@ -139,10 +138,10 @@ type Result struct {
 	Next    State
 }
 
-// Poll performs one change-detection request. prior may be nil (first sight):
-// the first observation establishes the baseline and never reports a change,
-// mirroring how a new consumer starts at the current commit. The credential,
-// when present, is sent as a bearer token and never appears in errors.
+// Poll performs one change-detection request. prior may be nil (first
+// sight): the first observation establishes the baseline and never reports a
+// change. The credential, when present, is sent as a bearer token and never
+// appears in errors.
 func Poll(client *http.Client, spec Spec, credential string, name string, prior *State) (Result, error) {
 	req, err := http.NewRequest(http.MethodGet, spec.Poll, nil)
 	if err != nil {
@@ -190,7 +189,7 @@ func Poll(client *http.Client, spec Spec, credential string, name string, prior 
 	return Result{Changed: prior != nil && value != prior.Value, Next: next}, nil
 }
 
-// observe reduces a response body to the comparison value: the JSON-pointed
+// Reduces a response body to the comparison value: the JSON-pointed
 // scalar when select is set, otherwise a digest of the raw bytes.
 func observe(body io.Reader, selector string) (string, error) {
 	if selector == "" {
@@ -237,7 +236,7 @@ func observe(body io.Reader, selector string) (string, error) {
 	}
 }
 
-// redactURL strips the poll URL from transport errors: query strings can
+// Strips the poll URL from transport errors: query strings can
 // carry tokens, and poll errors are logged and committed to knowledge.
 func redactURL(err error) error {
 	var u *url.Error
@@ -247,7 +246,7 @@ func redactURL(err error) error {
 	return err
 }
 
-// validatePointer checks RFC 6901 syntax: non-empty, leading /, and no
+// Checks RFC 6901 syntax: non-empty, leading /, and no
 // dangling ~ escapes.
 func validatePointer(p string) error {
 	if !strings.HasPrefix(p, "/") {
@@ -263,7 +262,7 @@ func validatePointer(p string) error {
 	return nil
 }
 
-// resolvePointer walks an unmarshalled JSON document by RFC 6901 pointer.
+// Walks an unmarshalled JSON document by RFC 6901 pointer.
 func resolvePointer(doc any, pointer string) (any, bool) {
 	cur := doc
 	for _, tok := range strings.Split(pointer[1:], "/") {

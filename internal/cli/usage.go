@@ -15,7 +15,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 )
 
-// usageTokens mirrors the tokens object run records carry.
+// Mirrors the tokens object run records carry.
 type usageTokens struct {
 	Input      int64 `json:"input"`
 	Output     int64 `json:"output"`
@@ -24,11 +24,10 @@ type usageTokens struct {
 	CacheWrite int64 `json:"cache_write"`
 }
 
-// usageRow is one routine's aggregate over the records the retention
-// window keeps. Runs counts every recorded run; the token sums and
-// RunsReported cover only the runs whose runtime reported usage. Model
-// and effort are the most recently recorded values -- a routine's
-// identity for cost purposes, not a per-run breakdown.
+// One routine's aggregate over the records the retention window keeps. Runs
+// counts every recorded run; the token sums and RunsReported cover only runs
+// whose runtime reported usage. Model and effort are the most recently
+// recorded values, not a per-run breakdown.
 type usageRow struct {
 	Routine      string      `json:"routine"`
 	Runs         int         `json:"runs"`
@@ -39,10 +38,8 @@ type usageRow struct {
 	Effort       string      `json:"effort,omitempty"`
 }
 
-// cmdUsage reports token use and reported cost per routine, aggregated
-// from runs.jsonl. --json emits the machine-readable form for scripts and
-// monitors; tokens with model and effort are the durable record, and
-// cost_reported is opencode's own estimate (informational -- prices drift).
+// cost_reported is opencode's own cost estimate -- informational, since
+// prices drift; tokens with model and effort are the durable record.
 const usageUsage = "usage: openroutines usage [--json]"
 
 func cmdUsage(args []string) int {
@@ -76,9 +73,8 @@ func cmdUsage(args []string) int {
 	}
 
 	if len(rows) == 0 {
-		// A fresh clone of a running agent reads as "no runs" too, but the
-		// records exist on origin and no amount of waiting materializes
-		// them locally.
+		// A fresh clone of a running agent also reads as "no runs", but the
+		// records exist on origin and won't materialize locally on their own.
 		if st := knowledge.At(".").Status(); !st.Materialized && st.RemoteKnowledge {
 			fmt.Println("knowledge is not materialized in this checkout -- run openroutines sync to adopt the agent's records from origin")
 		} else {
@@ -97,9 +93,8 @@ func cmdUsage(args []string) int {
 	return 0
 }
 
-// retentionLabel names the window usage aggregates over -- the knowledge
-// retention that trims run records -- so the header reads "last 30 days"
-// instead of asking the reader to know the term of art.
+// Names the window usage aggregates over, so the header reads "last 30 days"
+// instead of the retention term of art.
 func retentionLabel(dir string) string {
 	retention := knowledge.DefaultRetention
 	if agent, err := config.Load(dir); err == nil {
@@ -117,20 +112,18 @@ func retentionLabel(dir string) string {
 	return fmt.Sprintf("last %s, since %s", span, time.Now().Add(-retention).Format("January 2, 2006"))
 }
 
-// printKnowledgeLag names the gap between what this checkout has and what
-// origin holds. usage reads only the worktree -- that is the contract, and
-// this is what keeps a stale worktree from reading as a quiet zero.
+// Names the gap between what this checkout has and what origin holds, so a
+// stale worktree doesn't read as a quiet zero.
 func printKnowledgeLag(dir string) {
 	if st := knowledge.At(dir).Status(); st.Behind > 0 {
 		fmt.Printf("\n%s these numbers read local knowledge/, %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to count the latest runs\n", warnMark, st.Behind, knowledge.Branch)
 	}
 }
 
-// aggregateUsage folds runs.jsonl into per-routine rows, sorted by name.
-// Every parseable record counts as a run; the token sums and RunsReported
-// cover only records that carry a tokens object (older releases, native
-// dev runs, and a runtime that did not report leave none -- absence is
-// not zero, so those runs count without contributing to the sums).
+// Folds runs.jsonl into per-routine rows, sorted by name. Every parseable
+// record counts as a run; the token sums and RunsReported cover only records
+// that carry a tokens object -- older releases, native dev runs, and
+// unreported usage count as runs without contributing sums.
 func aggregateUsage(dir string) []usageRow {
 	raw, err := os.ReadFile(filepath.Join(knowledge.At(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
@@ -193,14 +186,11 @@ func totalUsage(rows []usageRow) usageRow {
 	return t
 }
 
-// printUsageTable renders the rows and the total as aligned columns sized
-// to their widest cell, numbers right-aligned under a dim header. Every
-// run counts in the runs column; a routine whose runs never reported
-// usage keeps blank token cells rather than misreading as zero. Columns
-// no row has -- reasoning, cache traffic, cost, model -- are dropped whole
-// rather than printed empty. Cache traffic usually dwarfs fresh input and
-// is priced differently: without it a human cannot derive the spend from
-// the counts.
+// Renders the rows and the total as aligned columns, numbers right-aligned
+// under a dim header. A routine whose runs never reported usage keeps blank
+// token cells rather than misreading as zero. Columns no row has --
+// reasoning, cache traffic, cost, model -- are dropped whole rather than
+// printed empty.
 func printUsageTable(rows []usageRow, total usageRow) {
 	all := append(slices.Clone(rows), total)
 	var hasReasoning, hasCache, hasCost, hasModel bool
@@ -279,8 +269,7 @@ func printUsageTable(rows []usageRow, total usageRow) {
 		}
 	}
 
-	// Pad before styling: escape bytes inside a padding verb would count
-	// toward the width and break the column.
+	// Pad before styling: escape bytes inside would count toward the width.
 	pad := func(i int, v string) string {
 		if leftAligned[i] {
 			return fmt.Sprintf("%-*s", widths[i], v)
@@ -306,7 +295,7 @@ func printUsageTable(rows []usageRow, total usageRow) {
 	}
 }
 
-// formatTokens keeps counts scannable: 812, 13.8k, 2.1M.
+// Keeps counts scannable: 812, 13.8k, 2.1M.
 func formatTokens(n int64) string {
 	switch {
 	case n >= 1_000_000:

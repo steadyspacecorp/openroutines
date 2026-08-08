@@ -10,14 +10,12 @@ import (
 	"time"
 )
 
-// Passthrough passes an external process's own log lines -- already
-// formatted, logfmt by convention -- into a log stream one line at a time,
-// with fixed attributes appended. Appending is the whole treatment: logfmt
-// is a bag of key=value pairs, so decoration needs no parse, and each line
-// keeps the emitting process's own timestamp, level, and field names --
-// they are its records, not ours. The lines cannot go through slog itself:
-// a handler renders a Record, and there is no seam for adopting a line that
-// is already rendered.
+// Passthrough passes an external process's already-formatted (logfmt) log
+// lines through one at a time, appending fixed attributes -- no parsing
+// needed, since logfmt is just key=value pairs and each line keeps the
+// emitting process's own timestamp, level, and fields. Can't go through
+// slog itself: a handler renders a Record, and there's no seam for adopting
+// a line that's already rendered.
 type Passthrough struct {
 	dst    io.Writer
 	suffix string
@@ -52,9 +50,9 @@ func (w *Passthrough) Flush() {
 	}
 }
 
-// emit writes one decorated line in a single Write call, so concurrent
-// streams sharing dst interleave at line granularity -- the same grain a
-// slog handler writes at. A write error is swallowed: the log destination
+// Writes one decorated line in a single Write call, so concurrent streams
+// sharing dst interleave at line granularity -- the same grain a slog
+// handler writes at. A write error is swallowed: the log destination
 // failing must not fail the process being logged.
 func (w *Passthrough) emit(line []byte) {
 	trimmed := bytes.TrimSpace(line)
@@ -64,9 +62,9 @@ func (w *Passthrough) emit(line []byte) {
 	_, _ = fmt.Fprintf(w.dst, "%s%s\n", trimmed, w.suffix)
 }
 
-// renderAttrs formats attrs through a TextHandler with the record built-ins
-// elided (a zero time is omitted by the handler on its own), leaving only
-// the key=value pairs to append.
+// Formats attrs through a TextHandler with the record built-ins elided (a
+// zero time is omitted by the handler on its own), leaving only the
+// key=value pairs to append.
 func renderAttrs(attrs []slog.Attr) string {
 	var buf bytes.Buffer
 	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{

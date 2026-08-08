@@ -5,18 +5,16 @@ import (
 	"strings"
 )
 
-// flagSpec says whether a recognized flag consumes the following argument
-// as its value (--path sub/dir) or is a bare switch (--yes).
+// Says whether a recognized flag consumes the following argument as its
+// value (--path sub/dir) or is a bare switch (--yes).
 type flagSpec struct {
 	value bool
 }
 
-// parseFlags splits args into positional arguments and recognized flags,
-// rejecting anything else that looks like a flag rather than silently
-// dropping it -- a typo'd or unsupported flag must never look like it took
-// effect. --help and -h are always recognized and checked first, before any
-// other argument is validated, so `cmd --bogus --help` still shows help
-// instead of failing on the unknown flag.
+// Splits args into positional arguments and recognized flags, rejecting
+// anything unrecognized that looks like a flag rather than silently
+// dropping it. --help/-h are checked before any other validation, so
+// `cmd --bogus --help` still shows help instead of failing.
 func parseFlags(args []string, known map[string]flagSpec) (positional []string, flags map[string]string, help bool, err error) {
 	if wantsHelp(args) {
 		return nil, nil, true, nil
@@ -50,9 +48,8 @@ func parseFlags(args []string, known map[string]flagSpec) (positional []string, 
 	return positional, flags, false, nil
 }
 
-// wantsHelp reports whether args ask for help via --help or -h, wherever it
-// appears -- so `check --help` shows what check accepts instead of running
-// the check.
+// Reports whether args ask for help via --help or -h, wherever it appears --
+// so `check --help` shows what check accepts instead of running the check.
 func wantsHelp(args []string) bool {
 	for _, a := range args {
 		if a == "--help" || a == "-h" {

@@ -23,8 +23,6 @@ import (
 
 const statusUsage = "usage: openroutines status"
 
-// cmdStatus shows what the agent has and still needs: identity, key, model,
-// routines with their next firing, skills, and knowledge sync state.
 func cmdStatus(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {
@@ -47,9 +45,9 @@ func cmdStatus(args []string) int {
 	fmt.Printf("agent      %s\n", orUnset(agent.Name))
 	fmt.Printf("job        %s\n", orUnset(firstLine(agent.Description)))
 	fmt.Printf("owner      %s <%s>\n", orUnset(agent.Owner.Name), orUnset(agent.Owner.Email))
-	// The supervisor refuses to start on an unloadable timezone; status is a
-	// diagnostic, so it says so and carries on in UTC rather than quietly
-	// printing fire times the agent would never use.
+	// The supervisor refuses to start on an unloadable timezone; status just
+	// says so and carries on in UTC rather than quietly printing fire times
+	// the agent would never use.
 	loc, err := time.LoadLocation(agent.Timezone)
 	tzNote := ""
 	if err != nil {
@@ -65,7 +63,6 @@ func cmdStatus(args []string) int {
 		fmt.Printf("framework  %s (pinned; this binary is %s)\n", strings.TrimSpace(string(pin)), version.Version)
 	}
 
-	// Master key + credentials.
 	if key, err := creds.LoadKey(dir); err != nil {
 		fmt.Printf("master key MISSING -- run openroutines configure\n")
 	} else if store, err := creds.Read(dir, key); err != nil {
@@ -82,7 +79,6 @@ func cmdStatus(args []string) int {
 		}
 	}
 
-	// Routines.
 	now := time.Now().In(loc)
 	stateDir := knowledge.At(dir).StateDir()
 	settled := settledAttempts(dir)
@@ -95,10 +91,9 @@ func cmdStatus(args []string) int {
 		next := ""
 		if r.FM.IsActive() {
 			state = "active"
-			// A routine in cool-down does not fire at its next occurrence, so
-			// don't print one: a confident time that will not happen is worse
-			// than no time at all. The cool-down's end is on the breaker line
-			// below, which is the one place it lives.
+			// A routine in cool-down doesn't fire at its next occurrence, so
+			// don't print a time that won't happen; the cool-down's end is on
+			// the breaker line below instead.
 			if st != nil && st.CoolingDown(now) {
 				next = " -- cooling down"
 			} else if spec, err := schedule.Parse(r.FM.Schedule, loc); err == nil {
@@ -118,10 +113,8 @@ func cmdStatus(args []string) int {
 			fmt.Printf("      %s\n", line)
 		}
 	}
-	// The lines above came out of the knowledge worktree, so they are only as
-	// current as the last fetch. The knowledge section says so too, but it is
-	// screens away by then and these are the most staleness-sensitive numbers
-	// the command prints.
+	// These numbers are only as current as the last fetch; call that out here
+	// too since the knowledge section's own warning is screens away by now.
 	if reported {
 		if ms := knowledge.At(dir).Status(); ms.Behind > 0 {
 			fmt.Printf("  %s scheduling state above is from knowledge %d commit(s) behind origin/%s -- run openroutines sync\n", warnMark, ms.Behind, knowledge.Branch)
@@ -131,7 +124,6 @@ func cmdStatus(args []string) int {
 		fmt.Printf("  %s %v\n", warnMark, e)
 	}
 
-	// Skills.
 	skills, skillErrs := skill.ListAgent(dir)
 	fmt.Printf("\n%s\n", bold(fmt.Sprintf("skills (%d):", len(skills))))
 	for _, s := range skills {
@@ -141,7 +133,6 @@ func cmdStatus(args []string) int {
 		fmt.Printf("  %s %v\n", warnMark, e)
 	}
 
-	// Knowledge.
 	fmt.Printf("\n%s\n", bold("knowledge:"))
 	mem := knowledge.At(dir)
 	ms := mem.Status()
@@ -169,9 +160,8 @@ func cmdStatus(args []string) int {
 				if head != "" && !strings.HasPrefix(head, c.ConsumedThrough) && head != c.ConsumedThrough {
 					changes, err := mem.Changes(c.ConsumedThrough, head)
 					switch {
-					// Silence here would read as caught up, which is the one
-					// thing a stuck consumer is not: its runs are abandoned on
-					// sight until a person repairs the file.
+					// Silence here would read as caught up; a stuck consumer's
+					// runs are abandoned on sight until a person repairs the file.
 					case errors.Is(err, knowledge.ErrCursorUnreachable):
 						lag = fmt.Sprintf(" -- ! not on the knowledge branch, delivery is stuck: repair or delete %s", knowledge.CursorFile(name))
 					case err == nil && len(changes) > 0:
@@ -188,7 +178,6 @@ func cmdStatus(args []string) int {
 
 	printTokenUsage(dir)
 
-	// What's still needed.
 	if problems := agent.Problems(); len(problems) > 0 {
 		fmt.Printf("\n%s\n", bold("still needed:"))
 		for _, p := range problems {
@@ -198,12 +187,11 @@ func cmdStatus(args []string) int {
 	return 0
 }
 
-// scheduleStateLines renders the supervisor's durable scheduling record for
-// one routine: what it still owes, and what is holding it. Without them a
-// routine four attempts into a retry, or sitting out a 24h circuit-breaker
-// cool-down, reads exactly like a healthy one. Nil state means the supervisor
-// has never seen the routine, which every local checkout looks like -- silence
-// is the honest rendering of that.
+// Renders the supervisor's durable scheduling record for one routine: what
+// it still owes, and what is holding it. Without them a routine mid-retry or
+// sitting out a circuit-breaker cool-down reads exactly like a healthy one.
+// Nil state means the supervisor has never seen the routine -- which every
+// local checkout looks like -- so it prints nothing.
 func scheduleStateLines(st *schedule.State, r *routine.Routine, now time.Time, loc *time.Location, settled map[string]bool) []string {
 	if st == nil {
 		return nil
@@ -221,19 +209,18 @@ func scheduleStateLines(st *schedule.State, r *routine.Routine, now time.Time, l
 	return append(lines, "watermark "+stamp(st.Watermark, now, loc))
 }
 
-// pendingDisposition says what becomes of a pending run, which the attempt
-// count alone does not tell. The order matters: a routine the tick skips is
-// held whatever its budget says, and an attempt that is still running only
-// looks like one that failed.
+// Says what becomes of a pending run. The case order matters: a routine the
+// tick skips is held whatever its budget says, and an attempt still running
+// would otherwise look like one that failed.
 func pendingDisposition(p *schedule.Pending, r *routine.Routine, now time.Time, loc *time.Location, settled map[string]bool) string {
 	switch {
 	case !supervisor.Schedulable(r):
 		return "held -- the supervisor skips this routine, so no attempt is coming"
 	case p.Attempts > 0 && settled != nil && !settled[attemptKey(p.RunID, p.Attempts)]:
-		// Reserved and not yet settled. The state file cannot tell this from
-		// an attempt that failed and is backing off -- reserve writes the
-		// count, and a non-final failure leaves it untouched -- so the run
-		// record, which only exists once an attempt settles, is the tell.
+		// Reserved but not yet settled. The state file alone can't tell this
+		// from a failed attempt backing off -- reserve writes the count and a
+		// non-final failure leaves it untouched -- so the run record, written
+		// only on settlement, is the tell.
 		return fmt.Sprintf("attempt %d started %s, still in flight", p.Attempts, stamp(p.LastAttemptAt, now, loc))
 	case p.Attempts >= supervisor.MaxAttempts:
 		return "budget spent -- the next tick abandons it"
@@ -248,10 +235,9 @@ func attemptKey(runID string, attempt int) string {
 	return fmt.Sprintf("%s#%d", runID, attempt)
 }
 
-// settledAttempts collects the attempts runs.jsonl has a record for; a record
-// is appended at settlement, so a reserved attempt missing from it is still
-// running. Nil when there is no log to read at all (never run, or a release
-// that predates it): absent evidence must not be read as "in flight".
+// Collects the attempts runs.jsonl has a record for; a record is appended at
+// settlement, so a reserved attempt missing from it is still running. Nil
+// when there's no log at all -- absence must not read as "in flight".
 func settledAttempts(dir string) map[string]bool {
 	raw, err := os.ReadFile(filepath.Join(knowledge.At(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
@@ -271,10 +257,9 @@ func settledAttempts(dir string) map[string]bool {
 	return settled
 }
 
-// stamp formats a scheduling time at the coarsest precision that stays
+// Formats a scheduling time at the coarsest precision that stays
 // unambiguous: weekday and clock inside a week, calendar date beyond it, the
-// year once it differs. A held pending run is old by definition -- that is
-// why it is on screen -- and "Mon 21:12" nine days stale reads as two.
+// year once it differs -- "Mon 21:12" nine days stale would misread as two.
 func stamp(t time.Time, now time.Time, loc *time.Location) string {
 	t = t.In(loc)
 	switch d := t.Sub(now); {
@@ -287,9 +272,8 @@ func stamp(t time.Time, now time.Time, loc *time.Location) string {
 	}
 }
 
-// printTokenUsage shows the one-line total; the numbers live in
-// `openroutines usage`. Silent when no record carries usage (older
-// releases, native dev runs) -- absence of bookkeeping is not news.
+// Shows the one-line total; the breakdown lives in `openroutines usage`.
+// Silent when no record carries usage.
 func printTokenUsage(dir string) {
 	t := totalUsage(aggregateUsage(dir))
 	if t.RunsReported == 0 {

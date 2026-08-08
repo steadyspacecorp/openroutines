@@ -45,7 +45,8 @@ Use these terms exactly; the docs and code should agree:
 - The project is **OpenRoutines** in prose and `openroutines` in code, commands, URLs, paths, and other machine identifiers. Never "Open Routines". (docs/design.md "The name".)
 - README.md and the `docs/` pages use `--` double hyphens, not em dashes; conversational but technical tone; no marketing superlatives.
 - docs/design.md entries are `## Heading` + `**Decision.**` + `**Why.**` -- state the decision, then argue it.
-- Documentation paragraphs use one physical line per paragraph; do not add hard line breaks for column wrapping.
+- Documentation paragraphs use one sentence per physical line, a blank line between paragraphs -- no column-wrapping, and no giant one-line paragraphs either. A single-sentence edit should produce a single-line diff, not a whole-paragraph one.
+- Go comments: default to none. Write one only when it explains something non-obvious -- a hidden invariant, a rejected alternative, a security or kernel gotcha, the reason behind a magic number -- never what the adjacent code already says. Delete a comment that just restates its code; keep the ones you write to 1-3 lines. An exported identifier's doc comment still leads with its own name (`Foo does X`), which golangci-lint's `revive` enforces; an unexported one should not repeat its own name -- drop the lead-in and start with the verb, so a rename never has to touch the comment too. Never touch `//go:embed`, `//go:build`, or `// gitleaks:allow` directives.
 - Tests: minimal and behavior-focused. Prefer exercising a real flow (scaffold a temp agent, run a routine against a stub) over unit-testing internals. Don't let testing infrastructure outgrow the thing it tests.
 - Commit messages: short imperative subject; body only when the why isn't obvious.
 

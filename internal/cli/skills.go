@@ -113,7 +113,6 @@ func skillsList() int {
 		fmt.Println("No skills. Create one (openroutines skills new <name>) or vendor one in from the ecosystem (agentskills.io).")
 		return 0
 	}
-	// Show which routines use each skill: grants are the interesting part.
 	usedBy := map[string][]string{}
 	routines, _ := routine.LoadAgent(".")
 	for _, r := range routines {
@@ -156,7 +155,6 @@ func skillsRemove(args []string) int {
 	if _, err := os.Stat(dir); err != nil {
 		return fail(fmt.Errorf("no skill %q", name))
 	}
-	// Refuse while any routine still declares the grant.
 	routines, _ := routine.LoadAgent(".")
 	var holders []string
 	for _, r := range routines {

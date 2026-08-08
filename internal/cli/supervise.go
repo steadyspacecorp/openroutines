@@ -12,8 +12,7 @@ import (
 
 const superviseUsage = "usage: openroutines supervise"
 
-// cmdSupervise runs the scheduler until SIGTERM/SIGINT: the container
-// entrypoint.
+// Runs the scheduler until SIGTERM/SIGINT: the container entrypoint.
 func cmdSupervise(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {
@@ -34,9 +33,7 @@ func cmdSupervise(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := s.Run(ctx); err != nil {
-		// The process logger -- scrubbing included -- has existed since
-		// package load and was configured by the dispatch, so Run's
-		// failure is logged rather than handed to fail().
+		// Logged (not handed to fail()) via the scrubbing logger configured at dispatch.
 		slog.Error("supervisor stopped", "error", err, "instance", s.InstanceID, "dir", s.Dir)
 		return 1
 	}

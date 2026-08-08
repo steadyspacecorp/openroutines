@@ -39,10 +39,9 @@ func cmdPlugin(args []string) int {
 
 const pluginAddUsage = "usage: openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir] [--yes]"
 
-// pluginAdd installs a plugin: clone (or read a local directory), validate
-// the whole payload, show the manifest and the grant summary, confirm, copy.
-// Everything the bundle asks for is stated before anything lands -- review
-// is the only gate (design decision "Plugins").
+// Installs a plugin: fetch, validate, show the manifest and grant summary,
+// confirm, copy. Everything it asks for is stated before anything lands --
+// review is the only gate (design decision "Plugins").
 func pluginAdd(args []string) int {
 	rest, flags, help, err := parseFlags(args, map[string]flagSpec{
 		"--path": {value: true},
@@ -105,11 +104,9 @@ func pluginAdd(args []string) int {
 	}
 	fmt.Println()
 
-	// Declared MCP servers: offer to write each entry, one consent per
-	// endpoint, showing the exact bytes. Only a live interactive answer
-	// writes harness config -- --yes covers the install, never an endpoint
-	// definition, and a non-interactive run only prints the snippet. An
-	// already-defined name is the person's entry and is left untouched.
+	// Declared MCP servers: one consent per endpoint, showing the exact
+	// bytes. --yes covers the install but never an endpoint definition; a
+	// non-interactive run only prints the snippet.
 	mcpHandled := map[string]bool{}
 	if interactive && !yes && len(p.Manifest.MCP) > 0 {
 		oc, err := config.LoadOpenCode(".")
@@ -156,9 +153,8 @@ func pluginAdd(args []string) int {
 		stepf("set the %s variable in openroutines.yml  # %s", name, firstLine(p.Manifest.Variables[name].Description))
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
-		// The plugin declares the server; only a person puts the endpoint
-		// into opencode.json -- via the interactive consent above, or by
-		// pasting this snippet. A plugin can never author harness config.
+		// A plugin declares the server but never authors harness config;
+		// only a person puts the endpoint into opencode.json.
 		if mcpHandled[name] {
 			continue
 		}

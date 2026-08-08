@@ -156,12 +156,10 @@ func parseRoutineRunArgs(args []string) (name, scenario string, writeKnowledge, 
 	return "", "", false, false, false, fmt.Errorf("%s", routinesRunUsage)
 }
 
-// resolveRehearsal maps a routine and optional scenario to its fixture file:
-// rehearsals/<name>.md for the common single-fixture case, or
-// rehearsals/<name>/<scenario>.md (default.md when no scenario is named)
-// once a routine has more than one. No fixtures at all is not an error --
-// it selects the live rehearsal, which needs no files. A named scenario
-// that does not exist is an error listing what does.
+// Maps a routine and optional scenario to its fixture file:
+// rehearsals/<name>.md for a single fixture, or rehearsals/<name>/<scenario>.md
+// (default.md when unnamed) once a routine has more than one. No fixtures at
+// all selects the live rehearsal rather than erroring.
 func resolveRehearsal(name, scenario string) (string, error) {
 	flat := filepath.Join("rehearsals", name+".md")
 	dir := filepath.Join("rehearsals", name)
@@ -222,9 +220,8 @@ func routinesNew(args []string) int {
 	if err == nil {
 		return fail(fmt.Errorf("routine %q already exists at %s", name, existing.Path))
 	}
-	// "Not found" is the only error that clears the way: a file that does not
-	// load still claims its name, and creating over it would replace someone's
-	// prompt with the template.
+	// A file that fails to load still claims its name; only "not found" clears
+	// the way to create over it.
 	if !errors.Is(err, routine.ErrNotFound) {
 		return fail(fmt.Errorf("cannot create %q: %w", name, err))
 	}
@@ -239,11 +236,11 @@ func routinesNew(args []string) int {
 	return 0
 }
 
-// routineFile resolves the file a named routine lives in, for the two
-// commands that act on the file rather than on what it declares. A routine
-// that does not load is exactly the one you need to edit or remove, so take
-// the file the load error names -- unless the name is claimed by two files,
-// where picking one would be a guess.
+// Resolves the file a named routine lives in, for the two commands that act
+// on the file rather than on what it declares. A routine that fails to load
+// is exactly the one you'd want to edit or remove, so fall back to the file
+// its load error names -- unless the name is claimed by two files, where
+// picking one would be a guess.
 func routineFile(name string) (string, error) {
 	r, err := routine.Find(".", name)
 	if err == nil {
@@ -256,9 +253,9 @@ func routineFile(name string) (string, error) {
 	return "", err
 }
 
-// routineName validates a CLI routine argument against the name grammar.
-// Names become paths (routines/<name>.md, lock files, ledgers), so this
-// runs before any path construction.
+// Validates a CLI routine argument against the name grammar. Names become
+// paths (routines/<name>.md, lock files, ledgers), so this runs before any
+// path construction.
 func routineName(arg string) (string, error) {
 	name := strings.TrimSuffix(arg, ".md")
 	if !routine.NamePattern.MatchString(name) {
@@ -367,10 +364,9 @@ func routinesRemove(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("Removed %s\n", path)
-	// Best effort: clean up the routine's state on the knowledge branch --
-	// scheduling state, trigger baseline, consumer cursor -- so the branch
-	// doesn't accumulate orphans that misfire a later routine with the same
-	// name. Its ledger stays -- that's knowledge.
+	// Best effort: also clear scheduling state, trigger baseline, and consumer
+	// cursor from the knowledge branch, so a later routine with the same name
+	// doesn't inherit orphaned state. The ledger stays -- that's knowledge.
 	removed, _ := knowledge.At(".").RemoveRoutineState(name)
 	for _, p := range removed {
 		fmt.Printf("Removed %s (commit inside knowledge/ to record it)\n", p)
@@ -394,9 +390,8 @@ func routinesList() int {
 	return 0
 }
 
-// grantSummary names every authority a routine declares. Web access and MCP
-// servers are grants like skills and credentials -- a surface that answers
-// "what can this routine reach" and omits them answers it wrong.
+// Names every authority a routine declares -- skills, credentials, MCP
+// servers, and web access are all grants.
 func grantSummary(r *routine.Routine) []string {
 	var grants []string
 	if n := len(r.FM.Skills); n > 0 {
@@ -417,8 +412,6 @@ func grantSummary(r *routine.Routine) []string {
 	return grants
 }
 
-// scheduleSummary describes when a routine runs: its cron schedule, its
-// trigger, or both.
 func scheduleSummary(r *routine.Routine) string {
 	switch {
 	case r.FM.Schedule != "" && r.FM.Trigger != nil:

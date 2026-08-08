@@ -62,9 +62,8 @@ func ConfigureDeployKey() (bool, error) {
 	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
 		return false, err
 	}
-	// Keepalives bound a silently dropped connection: without them a stalled
-	// push parks until the kernel gives up, and the single-instance lease
-	// goes stale underneath a supervisor that is still running.
+	// Keepalives bound a silently dropped connection -- a stalled push would
+	// park while the single-instance lease goes stale.
 	sshCommand = fmt.Sprintf(
 		"ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=%s"+
 			" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4",
@@ -87,20 +86,9 @@ func registerDeployKey(key string) {
 	scrub.Register(values)
 }
 
-// ConfigureOriginRewrite routes an HTTPS origin through SSH, so the deploy
-// key -- an SSH credential -- can authenticate it. `scaffold` leaves the
-// origin for the operator to add and `gh` defaults to https, so an HTTPS
-// origin is the common case; without this the container has no credential
-// for it at all and git exits asking for a username it cannot read. The
-// rewrite lives on the supervisor's own invocations: .git/config and the
-// built image stay as the operator wrote them.
-//
-// Left alone: an origin that is already SSH, one carrying credentials of its
-// own, and one on a non-default port, whose SSH port the URL does not say.
-//
-// Reports whether a rewrite was applied, so the supervisor can log the
-// protocol switch: a boot that suddenly speaks SSH to a host configured as
-// https is otherwise invisible when SSH egress is what's failing.
+// ConfigureOriginRewrite routes an HTTPS origin through SSH so the deploy
+// key can authenticate it -- the container has no HTTPS credential. Left
+// alone: SSH origins, origins with credentials, non-default ports.
 func ConfigureOriginRewrite(repoDir string) bool {
 	if sshCommand == "" {
 		return false

@@ -32,12 +32,9 @@ const runRecordsFile = "runs.jsonl"
 // knowledge branch writes it: commit messages are the supervisor's own.
 const trimTrailer = "Openroutines-Retention-Trim: true"
 
-// CommitTrim commits what Trim rewrote, carrying the trailer that keeps it out
-// of the delivery feed. Scoped to the files Trim touches, precisely because
-// the feed skips this commit whole: anything else dirty at the daily trim --
-// hand curation `status` tells an operator to commit when they are done, a
-// worktree a failed intent commit left behind -- would ride along into the one
-// commit no consumer ever reads.
+// CommitTrim commits what Trim rewrote, carrying the trailer that keeps it
+// out of the delivery feed. Scoped to the files Trim touches: anything else
+// dirty would ride along into the one commit no consumer ever reads.
 func (m *Knowledge) CommitTrim(keep time.Duration) (string, error) {
 	message := fmt.Sprintf("Trim knowledge to retention window (%s)\n\n%s\n", keep, trimTrailer)
 	return m.commitPaths(message, append([]string{runRecordsFile}, trimmedStreams...)...)
@@ -63,12 +60,10 @@ func ParseRetention(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// Trim drops entries older than the window from the record streams. Age is
-// the line's git commit time (via blame) -- no timestamp format is imposed
-// on routines. Records are list items ("- "); everything else is the file's
-// own documentation -- headings, prose, blanks, and fenced format examples --
-// and always survives, as do uncommitted lines.
-// Returns whether anything changed; the caller commits.
+// Trim drops record entries older than the window. Age is the line's git
+// commit time via blame -- no timestamp format imposed on routines. Only
+// list items ("- ") outside fences are records; everything else survives, as
+// do uncommitted lines. Returns whether anything changed; the caller commits.
 func (m *Knowledge) Trim(keep time.Duration, now time.Time) (bool, error) {
 	wt := m.Worktree()
 	cutoff := now.Add(-keep)

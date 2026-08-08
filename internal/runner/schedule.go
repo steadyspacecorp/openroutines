@@ -49,16 +49,11 @@ func prepareSchedule(dir, workspace string, r *routine.Routine, tz string, now t
 	return os.WriteFile(filepath.Join(workspace, ScheduleFileName), []byte(rendered), 0o644)
 }
 
-// renderSchedule formats the forward schedule a run receives: every active
-// routine's next fires, split fact lines (routines below full teamwork
-// participation) from the tables, and -- when the running routine is
-// scheduled -- the window through its next fire-day with the
-// full-participation routines partitioned in-window/out. The running routine's window computes even
-// when it is inactive: a manually-run routine still has a schedule to
-// stand in. Everything is computed and displayed in loc, the agent's
-// timezone, by the same bound parser that dispatches runs -- so the
-// schedule a routine reads and the times it actually fires at cannot
-// disagree.
+// renderSchedule formats the forward schedule a run receives: fact lines for
+// routines below full participation, tables for the rest, partitioned by the
+// running routine's window when it has one (computed even when inactive -- a
+// manually-run routine still has a schedule to stand in). Same bound parser
+// as dispatch, so what a routine reads and when it fires cannot disagree.
 func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time, loc *time.Location) string {
 	now = now.In(loc)
 	until := now.AddDate(0, 0, scheduleHorizonDays)

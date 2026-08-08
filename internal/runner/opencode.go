@@ -1,10 +1,7 @@
 // How the runner executes opencode -- one implementation per deployment
-// mode, minted once per attempt. Each mode answers for the whole
-// lifecycle: run spawns the model process, kill and reap end it, exec runs
-// the supervisor's follow-up subcommands. run and exec share the mode's
-// facts but point in opposite trust directions: run builds the attempt's
-// confined world, exec is the supervisor's way back in that the attempt
-// must not influence.
+// mode, minted once per attempt. run and exec point in opposite trust
+// directions: run builds the attempt's confined world, exec is the
+// supervisor's way back in that the attempt must not influence.
 
 package runner
 
@@ -25,12 +22,9 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
-// opencode is one attempt's grip on its opencode runtime. run hands back
-// the model process ready to start; kill ends it the way the mode demands
-// and reap sweeps what it left behind; exec runs any one subcommand to
-// completion as the supervisor afterward and returns its stdout. The
-// runtime doesn't know what its consumers ask -- sessions.go is one,
-// fetching through the opencodeExec contract exec happens to satisfy.
+// opencode is one attempt's grip on its opencode runtime: run hands back the
+// model process ready to start, kill and reap end it, exec runs one
+// follow-up subcommand as the supervisor and returns its stdout.
 type opencode interface {
 	run(ocArgs []string) *exec.Cmd
 	kill(cmd *exec.Cmd, done chan error, log *slog.Logger)
@@ -38,10 +32,7 @@ type opencode interface {
 	exec(args ...string) ([]byte, error)
 }
 
-// opencode picks the attempt's deployment mode and checks its
-// prerequisites: in the runtime container by default (the container
-// boundary is the trust boundary), natively inside the production image or
-// when a contributor opts out.
+// opencode picks the attempt's deployment mode and checks its prerequisites.
 func (sr *StagedRun) opencode() (opencode, error) {
 	switch {
 	case nativeMode() && os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
@@ -108,20 +99,15 @@ type hostOpencode struct {
 	env          []string
 }
 
-// home is the disposable per-attempt HOME inside the workspace -- the fact
-// both paths share: run lives in it, exec reads the store under it.
+// home is the disposable per-attempt HOME inside the workspace.
 func (h hostOpencode) home() string { return filepath.Join(h.workspace, attemptHomeName) }
 
 func (h hostOpencode) dataHome() string { return filepath.Join(h.home(), ".local", "share") }
 
 // run builds the model process behind the Landlock shim -- our own binary
-// applies the rules to itself, then execs opencode. See design decision
-// "Runs are sandboxed" for the fail-closed policy.
-//
-// HOME is disposable and the attempt's alone: a shared writable opencode
-// home let one routine persist state -- plugins included -- into a later
-// routine's session. Provider auth arrives by env var, so opencode needs
-// no durable home.
+// applies the rules to itself, then execs opencode. HOME is disposable and
+// the attempt's alone: a shared writable home let one routine persist state,
+// plugins included, into a later routine's session.
 func (h hostOpencode) run(ocArgs []string) *exec.Cmd {
 	ro, rw := sandbox.Paths(h.workspace, h.knowledgeDir, h.runTmp, os.Getenv("HOME"), h.home())
 	cmd := exec.Command(sandbox.HelperPath, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
@@ -145,11 +131,8 @@ func (h hostOpencode) run(ocArgs []string) *exec.Cmd {
 	return cmd
 }
 
-// exec runs one subcommand with a minted hygiene HOME: this process is not
-// sandboxed -- it is an ordinary child of the supervisor -- so it must not
-// take its home from the attempt (see captureHome). The attempt's store is
-// reached by XDG_DATA_HOME instead: that path carries the attempt's data,
-// never its code.
+// exec runs one subcommand with a minted hygiene HOME (see captureHome); the
+// attempt's store is reached by XDG_DATA_HOME -- data, never code.
 func (h hostOpencode) exec(args ...string) ([]byte, error) {
 	gid := attemptGroup(h.home())
 	home, cleanup, err := captureHome(h.workspace, gid)
@@ -167,12 +150,9 @@ func (h hostOpencode) exec(args ...string) ([]byte, error) {
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 		"XDG_DATA_HOME=" + h.dataHome(),
 	}
-	// The store is attempt-owned and opencode writes there even to
-	// answer a read (its startup log, sqlite's WAL side files), which
-	// the supervisor's group access cannot cover: files opencode
-	// creates 0644 never carried a group-write bit for the shim's
-	// umask to keep. So the exec runs as the attempt's own identity,
-	// with the minted home handed to it on the group axis.
+	// opencode writes to the attempt-owned store even to answer a read, with
+	// modes the supervisor's group access cannot cover -- so the exec runs
+	// as the attempt's own identity.
 	if gid != 0 {
 		if err := os.Chown(home, -1, int(gid)); err != nil {
 			return nil, fmt.Errorf("granting the capture home to the attempt group: %w", err)
@@ -185,23 +165,13 @@ func (h hostOpencode) exec(args ...string) ([]byte, error) {
 	return runToFile(cmd)
 }
 
-// captureHome mints the HOME one capture exec runs with: an empty,
-// supervisor-owned directory the attempt never had write access to.
-//
-// opencode auto-loads plugins from its config dir at startup, `session
-// list` and `export` included (verified against the pinned 1.18.3), and
-// that dir resolves under HOME when XDG_CONFIG_HOME is unset. Pointed at
-// the attempt's own home, the exec would execute whatever a
-// prompt-injected routine left there.
-//
-// The directory comes from TMPDIR, so it fails closed rather than trust
-// it: a TMPDIR inside the workspace would hand the attempt the very home
-// this exists to deny it.
-//
-// gid names the attempt identity the exec will run as (0 when there is
-// none): what opencode installs under the home then arrives attempt-owned
-// with modes the group cannot cover, so the cleanup removes the tree
-// through that identity's own help.
+// captureHome mints the HOME one capture exec runs with: empty and never
+// attempt-writable. opencode auto-loads plugins from its config dir at
+// startup, `session list` and `export` included (verified against 1.18.3) --
+// pointed at the attempt's own home, the exec would execute whatever a
+// prompt-injected routine left there. The directory comes from TMPDIR, so a
+// TMPDIR inside the workspace is refused. gid names the identity the exec
+// runs as; cleanup removes the tree through that identity's own help.
 func captureHome(workspace string, gid uint32) (string, func(), error) {
 	home, err := os.MkdirTemp("", "openroutines-capture-*")
 	if err != nil {
@@ -241,10 +211,8 @@ func underDir(dir, path string) (bool, error) {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)), nil
 }
 
-// attemptGroup reads back the identity the supervisor granted the attempt
-// home to at staging (gid equals uid by design), 0 when the home is grouped
-// to the supervisor itself: no identity scheme -- native mode, tests -- and
-// nothing to transition to.
+// attemptGroup reads back the identity the attempt home was granted to at
+// staging; 0 means no identity scheme (native mode, tests).
 func attemptGroup(attemptHome string) uint32 {
 	info, err := os.Stat(attemptHome)
 	if err != nil {
@@ -258,14 +226,10 @@ func attemptGroup(attemptHome string) uint32 {
 }
 
 // nativeOpencode is OPENROUTINES_NATIVE=1: the developer's own opencode,
-// an explicit, unconfined dev opt-in (local user runs are confined by the
-// run container instead). The developer's real HOME stays for both paths:
-// their opencode auth lives there -- which also means the session lands in
-// their own store, reached afterward by working directory (opencode scopes
-// `session list` to the directory a session ran in, and the workspace is
-// this attempt's alone). No capture-home hygiene either: the run already
-// executed unconfined with this same HOME, so there is nothing left to
-// deny it.
+// unconfined by explicit opt-in. Their real HOME stays (opencode auth lives
+// there); sessions are reached by working directory, which is this attempt's
+// alone. No capture-home hygiene -- the run already executed unconfined with
+// this same HOME.
 type nativeOpencode struct {
 	processGroup
 	workspace string
@@ -310,9 +274,7 @@ type containerOpencode struct {
 // line (argv is world-readable via ps for the duration of the run).
 func (c containerOpencode) run(ocArgs []string) *exec.Cmd {
 	// HOME is the disposable per-attempt directory inside the mounted
-	// workspace -- the same hygiene production applies, and what makes
-	// opencode's session storage readable after the container exits
-	// instead of vanishing with --rm.
+	// workspace, so session storage survives --rm.
 	args := []string{
 		"run", "--rm", "--init",
 		"--name", c.name,
@@ -349,32 +311,26 @@ func (c containerOpencode) reap(*exec.Cmd) {}
 // workspace.
 const captureHomeMount = "/capture-home"
 
-// captureOutName is where an in-container capture exec's stdout lands,
-// inside the mounted workspace. docker's own stdout is a pipe from the
-// container runtime to the client, so the file that defeats opencode's
-// lossy exit (see runToFile) has to sit on opencode's side of that
-// boundary.
+// captureOutName is where an in-container capture exec's stdout lands: the
+// file that defeats opencode's lossy exit (see runToFile) has to sit on
+// opencode's side of docker's stdout pipe.
 const captureOutName = ".capture-out"
 
 func (c containerOpencode) exec(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
 	defer cancel()
-	// The workspace is model-written, so clear the landing path first:
-	// a file the attempt planted there -- a symlink especially -- must
-	// not decide where the redirect writes or what the read returns.
+	// Clear the landing path first: a planted symlink must not decide where
+	// the redirect writes.
 	outPath := filepath.Join(c.workspace, captureOutName)
 	if err := os.Remove(outPath); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	// Mint the landing file here and hold the descriptor: the accepted
-	// local residual lets planted plugin code run inside the capture
-	// container, and a path re-resolved after the exec would let that code
-	// swap in an absolute symlink and walk the host filesystem with the
-	// supervisor's eyes. The container's shell opens the path once, before
-	// opencode (and any plugin) starts, so both ends write and read this
-	// one inode whatever the name points at later. World-writable for the
-	// same reason the attempt home is: the image's agent uid is not the
-	// host user's.
+	// Mint the landing file and hold the descriptor: planted plugin code can
+	// run inside the capture container, and a path re-resolved after the
+	// exec would let it swap in a symlink and walk the host filesystem with
+	// the supervisor's eyes. Both ends use this one inode whatever the name
+	// points at later. World-writable because the image's agent uid is not
+	// the host user's.
 	out, err := os.OpenFile(outPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return nil, err
@@ -387,11 +343,9 @@ func (c containerOpencode) exec(args ...string) ([]byte, error) {
 	dargs := []string{
 		"run", "--rm",
 		"-v", c.workspace + ":/work",
-		// The empty home is a tmpfs rather than a host directory: it is
-		// empty by construction, needs no world-writable host dir for the
-		// image's agent uid, and dies with the container. exec stays on so
-		// capture never breaks on something opencode installs under HOME --
-		// bookkeeping must not fail a run.
+		// A tmpfs: empty by construction, dies with the container. exec
+		// stays on so capture never breaks on something opencode installs
+		// under HOME.
 		"--tmpfs", captureHomeMount + ":mode=0777,exec",
 		"-w", "/work",
 		"-e", "HOME=" + captureHomeMount,
@@ -423,19 +377,11 @@ func (processGroup) reap(cmd *exec.Cmd) { reapGroup(cmd) }
 // not stall the supervisor's tick.
 const captureTimeout = 30 * time.Second
 
-// runToFile runs one capture exec with its stdout connected to a plain
-// file and returns what landed there. opencode's CLI calls process.exit()
-// as soon as its command handler returns, without draining the final
-// stdout write -- and stream writes to a pipe are asynchronous, so a large
-// `export` read through a pipe arrives cut at a 64 KiB boundary with exit
-// code 0. Writes to a file are synchronous: a file as fd 1 is what makes
-// the document arrive whole.
-//
-// The file comes from the supervisor's own TMPDIR like every supervisor
-// temp -- never runTmp, the attempt's space -- but needs none of
-// captureHome's discipline: nothing is loaded from it, the child inherits
-// only the open descriptor, and the readback goes through that same
-// descriptor, so no path the attempt could influence is ever resolved.
+// runToFile runs one capture exec with its stdout on a plain file. opencode
+// exits without draining its final stdout write, so a large export through a
+// pipe arrives cut at a 64 KiB boundary with exit code 0; file writes are
+// synchronous. The child inherits only the open descriptor and the readback
+// uses the same one, so no attempt-influenced path is ever resolved.
 func runToFile(cmd *exec.Cmd) ([]byte, error) {
 	out, err := os.CreateTemp("", "openroutines-capture-out-*")
 	if err != nil {
@@ -460,12 +406,9 @@ func runToFile(cmd *exec.Cmd) ([]byte, error) {
 	return io.ReadAll(out)
 }
 
-// tailBuffer keeps the last stderrTailCap bytes written through it. A
-// capture exec's stderr exists only to explain a failure, and the
-// explanation lands at the end of the stream -- while the stream itself is
-// untrusted output that code in the exec can feed for the whole capture
-// timeout, so keeping all of it would hand bookkeeping a memory
-// exhaustion lever.
+// tailBuffer keeps the last stderrTailCap bytes: the failure explanation
+// lands at the end of the stream, and keeping all of an untrusted stream
+// would hand bookkeeping a memory-exhaustion lever.
 type tailBuffer struct {
 	buf []byte
 }
@@ -482,8 +425,8 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 
 func (t *tailBuffer) String() string { return string(t.buf) }
 
-// execError keeps what a failed capture exec said on stderr: the log line
-// built from it is the only trace of why bookkeeping degraded.
+// execError keeps what a failed capture exec said on stderr -- the only
+// trace of why bookkeeping degraded.
 func execError(err error, stderr *tailBuffer) error {
 	if s := strings.TrimSpace(stderr.String()); s != "" {
 		return fmt.Errorf("%w: %s", err, s)

@@ -14,10 +14,9 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-// The PEM armor markers `credentials set` recognizes, for two behaviors: at
-// the hidden prompt a pasted key is read line by line until its END marker,
-// and a key that begins and never ends -- the truncated paste this command
-// used to store silently -- is refused.
+// PEM armor markers: a pasted key is read line by line at the hidden prompt
+// until its END marker, and a key that begins but never ends is refused
+// rather than stored truncated.
 const (
 	pemBegin = "-----BEGIN"
 	pemEnd   = "-----END"
@@ -147,10 +146,8 @@ func credentialsSet(args []string) int {
 			return fail(rerr)
 		}
 		value = string(raw)
-		// A pasted PEM arrives at the hidden prompt one line at a time --
-		// the first read returns only the BEGIN line. Keep reading until
-		// the END marker so the paste lands whole; a paste cut short is
-		// refused below rather than stored as a half key.
+		// A pasted PEM arrives one line at a time at the hidden prompt; the
+		// first read returns only the BEGIN line, so keep reading until END.
 		for strings.HasPrefix(value, pemBegin) && !strings.Contains(value, pemEnd) {
 			more, rerr := term.ReadPassword(int(os.Stdin.Fd()))
 			if rerr != nil {

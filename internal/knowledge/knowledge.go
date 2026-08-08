@@ -82,10 +82,8 @@ var supervisorOwned = map[string]bool{
 	"runs.jsonl": true,
 }
 
-// gitPassthrough is everything a git child inherits from this process. git
-// and ssh need these to work at all -- on a developer machine especially,
-// where authentication runs through the operator's own agent, keys, and
-// known_hosts.
+// gitPassthrough is everything a git child inherits from this process --
+// what git and ssh need to work at all.
 var gitPassthrough = []string{
 	"PATH",          // git's own subcommands, ssh, credential helpers
 	"HOME",          // ~/.ssh: known_hosts and the operator's keys and config
@@ -93,9 +91,8 @@ var gitPassthrough = []string{
 	"TMPDIR",
 	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
 	"http_proxy", "https_proxy", "no_proxy",
-	// A TLS-inspecting proxy needs its CA bundle alongside the proxy
-	// itself, and the environment is the only channel left: http.sslCAInfo
-	// would live in the global config this invocation sends to /dev/null.
+	// A TLS-inspecting proxy's CA bundle; the global config that could carry
+	// http.sslCAInfo is sent to /dev/null.
 	"GIT_SSL_CAINFO", "GIT_PROXY_SSL_CAINFO",
 }
 
@@ -106,12 +103,10 @@ type gitCmd struct {
 	cancel context.CancelFunc
 }
 
-// newGitCmd builds a git invocation with a hermetic environment: no system or
-// global config leaks in, and the environment is constructed rather than
-// inherited. Inheriting it put OPENROUTINES_MASTER_KEY in the child's
-// /proc/<pid>/environ under env-var key delivery -- readable by any same-UID
-// process, model processes included, because the supervisor's non-dumpable
-// flag does not survive execve.
+// newGitCmd builds a git invocation with a constructed environment and no
+// system or global config. Inheriting the environment would publish
+// OPENROUTINES_MASTER_KEY in the child's /proc/<pid>/environ -- non-dumpable
+// does not survive execve.
 func newGitCmd(dir string, args []string) *gitCmd {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(originRewrite), args...)...)
@@ -125,25 +120,18 @@ func newGitCmd(dir string, args []string) *gitCmd {
 	if sshCommand != "" {
 		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND="+sshCommand)
 	}
-	// git does the network through children (ssh, git-remote-https), so the
-	// deadline has to reach the whole group: killing git alone would leave the
-	// stalled transport holding the output pipe this call is reading.
+	// git does the network through children (ssh, git-remote-https); the
+	// deadline has to reach the whole group or a stalled transport keeps
+	// holding the output pipe.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return killGitGroup(cmd.Process.Pid) }
-	// The group is signaled and killed, but a descendant that left it may
-	// still hold the output pipe; stop reading it rather than waiting on EOF
-	// forever.
 	cmd.WaitDelay = gitDrainDeadline
 	return &gitCmd{Cmd: cmd, ctx: ctx, cancel: cancel}
 }
 
-// killGitGroup ends a timed-out invocation's whole process group: SIGTERM,
-// grace, SIGKILL -- the same escalation a run's group gets, and for a reason
-// specific to git. git removes the lock files it is holding (refs, the index,
-// packed-refs) when it takes SIGTERM and cannot when it takes SIGKILL, and a
-// lock left behind by a hard kill fails every later invocation until a human
-// or a fresh container clears it. Trading two seconds on a path that has
-// already spent the deadline is worth not wedging the repo.
+// killGitGroup ends a timed-out invocation's process group: SIGTERM, grace,
+// SIGKILL. The grace matters: git releases its lock files on SIGTERM but not
+// SIGKILL, and a stranded lock fails every later invocation.
 func killGitGroup(pid int) error {
 	pgid := -pid
 	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
@@ -159,23 +147,12 @@ func killGitGroup(pid int) error {
 	return nil
 }
 
-// fail wraps a failed invocation, naming the deadline when it was the cause.
-// Wait reports only the kill signal, and "signal: killed" on a fetch reads as
-// a bug in the supervisor rather than as an origin that went dark -- this
-// text reaches operators through sync reports, events, and tasks.
-//
-// An abandoned drain stays a failure even though git itself exited cleanly:
-// the output is truncated at an arbitrary byte, and callers parse it (a
-// half-written SHA out of rev-parse would be worse than an error). It is
-// named rather than reported as a generic failure so the operator looks for
-// the process holding the pipe instead of at the origin.
-//
-// Only the last case keeps the underlying error in the chain, and that is the
-// distinction gitExitCode reads: git exited with a status of its own, so the
-// status means something about the repository. Neither bound above did -- both
-// describe what this process gave up on -- and callers that treat an exit
-// status as an answer (see reachable, in delivery.go) must not read one out of
-// a deadline we imposed.
+// fail wraps a failed invocation, naming the deadline when it was the cause
+// ("signal: killed" on a fetch would read as a supervisor bug, not an origin
+// gone dark). An abandoned drain is a failure even though git exited cleanly:
+// the output is truncated and callers parse it. Only the last case keeps the
+// error in the chain -- gitExitCode must never read an exit status out of a
+// deadline we imposed.
 func (c *gitCmd) fail(args []string, err error, out []byte) error {
 	switch {
 	case c.ctx.Err() != nil:
@@ -186,17 +163,10 @@ func (c *gitCmd) fail(args []string, err error, out []byte) error {
 	return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 }
 
-// The bounds on a git invocation: the deadline itself, the grace the group
-// gets to exit cleanly once the deadline expires, and how long the output
-// pipes are drained after that. The drain has to outlast the grace, or the
-// pipes are abandoned while the group is still being asked to leave.
-//
-// gitTimeout sits above the transport's own bounds (a stalled transfer is
-// abandoned after ~60s of no progress) because those only fire once bytes are
-// moving: a blackholed origin -- packets dropped rather than refused -- never
-// gets that far, and the connect parks until the TCP stack gives up, which is
-// many minutes at best. A tick makes several network calls; none of them may
-// be unbounded. Variables, not constants, so tests can drive them.
+// The bounds on a git invocation; the drain has to outlast the grace.
+// gitTimeout sits above the transport's low-speed bounds because those only
+// fire once bytes move -- a blackholed connect parks for many minutes.
+// Variables so tests can drive them.
 var (
 	gitTimeout       = 2 * time.Minute
 	gitKillGrace     = 2 * time.Second
@@ -204,20 +174,14 @@ var (
 )
 
 // hermeticConfig is the -c configuration every git invocation carries: no
-// hooks, no file-protocol tricks, a fixed commit identity. No background
-// writers either: auto-gc detaches from the invoking command and keeps
-// writing .git/objects after it returns -- racing test TempDir cleanup (the
-// supervisor suite's flake) and, in production, container shutdown.
-// Repacking is origin's concern, not a run's. And no unbounded stalls: a
-// transfer that goes quiet is abandoned rather than parked forever, because
-// a hung push is time the single-instance lease spends going stale while
-// this instance is very much alive.
+// hooks, a fixed commit identity, no auto-gc (a detached gc keeps writing
+// .git/objects after the command returns), and low-speed bounds so a quiet
+// transfer is abandoned rather than parked forever.
 var hermeticConfig = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "protocol.file.allow=user",
-	// The delivery feed excludes retention trims with an anchored --grep;
-	// grep.patternType=fixed in the repo's own config would make the pattern
-	// match nothing and quietly put every trim back in the feed.
+	// A repo-config grep.patternType=fixed would break the delivery feed's
+	// anchored --grep and quietly put every retention trim back in it.
 	"-c", "grep.patternType=basic",
 	"-c", "user.name=openroutines",
 	"-c", "user.email=agent@openroutines.dev",
@@ -240,9 +204,7 @@ func git(dir string, args ...string) (string, error) {
 }
 
 // gitExitCode reports the status git exited with, or -1 when it never got to
-// exit at all (no git on PATH, a signal). The distinction is what separates
-// "git answered no" from "git could not answer": the first is a fact about
-// the repository, the second is an attempt worth repeating.
+// exit -- "git answered no" versus "git could not answer".
 func gitExitCode(err error) int {
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
@@ -267,26 +229,20 @@ func (m *Knowledge) Ensure() error {
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
 		return nil // already materialized
 	}
-	// A production image carries .git from build time, which may register a
-	// worktree whose directory was excluded from the image. Prune stale
-	// registrations or the add below fails on first boot.
+	// The image's .git may register a worktree whose directory was excluded
+	// from the image; prune or the add below fails on first boot.
 	_, _ = git(m.repoDir, "worktree", "prune")
 	if _, err := git(m.repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
-		// No local branch. A deployed container's .git never has one, but the
-		// agent's real knowledge usually exists on origin: adopt it rather than
-		// minting a new root (found live: every container generation was
-		// splicing a stray root commit into the lineage).
+		// No local branch: adopt origin's rather than minting a new root
+		// that splices into the lineage.
 		if m.HasOrigin() {
 			if _, lerr := git(m.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); lerr == nil {
 				if _, ferr := git(m.repoDir, "fetch", "--quiet", "origin", "+refs/heads/"+Branch+":refs/heads/"+Branch); ferr != nil {
 					return fmt.Errorf("adopting knowledge branch from origin: %w", ferr)
 				}
-				// Adoption is where a restart used to launder a rewritten
-				// history: a fresh container has no local baseline, so it
-				// would take origin's branch wholesale. The accepted ref is
-				// the baseline that survives container replacement -- refuse
-				// to adopt a tip that does not descend from it. Fail closed,
-				// like the sandbox probe: a human repairs and moves the ref.
+				// Adoption is where a restart could launder a rewritten
+				// history: refuse a tip that does not descend from the
+				// accepted baseline, which survives container replacement.
 				if accepted := m.AcceptedTip(); accepted != "" {
 					tip, terr := git(m.repoDir, "rev-parse", "refs/heads/"+Branch)
 					if terr == nil && tip != accepted && !isAncestor(m.repoDir, accepted, tip) {
@@ -301,9 +257,8 @@ func (m *Knowledge) Ensure() error {
 		}
 	}
 	if _, err := git(m.repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
-		// Truly first use: create the orphan branch from an empty tree via
-		// plumbing. (worktree add --orphan needs git >= 2.42; this works
-		// everywhere.)
+		// First use: orphan branch from an empty tree via plumbing
+		// (worktree add --orphan needs git >= 2.42).
 		tree, err := gitStdin(m.repoDir, "", "mktree")
 		if err != nil {
 			return fmt.Errorf("creating knowledge branch: %w", err)
@@ -377,9 +332,8 @@ func topSegment(rel string) string {
 	return strings.Split(rel, string(filepath.Separator))[0]
 }
 
-// CloneTree copies a snapshot tree verbatim: one Snapshot read of the
-// worktree becomes both the run's staged working copy and the import's
-// pristine base, so the two can never diverge.
+// CloneTree copies a snapshot tree verbatim, so the run's staged copy and the
+// import's base come from one worktree read.
 func CloneTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -400,11 +354,10 @@ func CloneTree(src, dst string) error {
 	})
 }
 
-// stagedPathPolicy rejects a staged path that may not enter the worktree
-// whatever it holds: git control files, supervisor-owned bookkeeping, absurd
-// depth. Validate applies it for an early, whole-tree failure; the import
-// copy applies it again because the tree can change under the walk that
-// validated it (see copyStaged).
+// stagedPathPolicy rejects paths that may never enter the worktree: git
+// control files, supervisor-owned bookkeeping, absurd depth. Applied by
+// Validate and again by the import copy -- the tree can change under the walk
+// that validated it.
 func stagedPathPolicy(rel string, isDir bool) error {
 	switch filepath.Base(rel) {
 	case ".git", ".gitattributes", ".gitmodules", ".gitignore":
@@ -448,9 +401,7 @@ func Validate(stagingDir string) error {
 			if info.Size() > maxFile {
 				return fmt.Errorf("staged knowledge file %q exceeds %d bytes -- rejected", rel, maxFile)
 			}
-			// A hard link is a regular file that aliases another inode --
-			// e.g. a file outside the staging tree, whose content would then
-			// travel into the import.
+			// A hard link can alias a file outside the staging tree.
 			if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
 				return fmt.Errorf("staged knowledge file %q is a hard link -- rejected", rel)
 			}
@@ -459,31 +410,25 @@ func Validate(stagingDir string) error {
 	})
 }
 
-// Import applies the staged tree to the worktree as a three-way merge
-// against the base snapshot the run started from. A file the run left
-// untouched imports nothing -- concurrent runs settle between a run's
-// snapshot and its import, and a stale copy must never regress what they
-// wrote. A file only the run changed copies in whole. When both sides retain
-// the complete base and append, both suffixes compose. Any other concurrent
-// edit preserves the current canonical file and quarantines the staged
-// competitor for human resolution. A deletion applies only where the
-// worktree still matches the base -- erasing lines another run just wrote is
-// worse than keeping a file its deleter no longer wants. Caller commits.
+// Import applies the staged tree to the worktree as a three-way merge against
+// the base snapshot: an untouched file imports nothing (a stale copy must
+// never regress concurrent settlements), a file only the run changed copies
+// whole, appends on both sides compose, and any other concurrent edit keeps
+// the canonical file and quarantines the staged competitor. Deletions apply
+// only where the worktree still matches the base. Caller commits.
 func (m *Knowledge) Import(stagingDir, baseDir string) (conflicted []Conflict, err error) {
 	if err := Validate(stagingDir); err != nil {
 		return nil, err
 	}
 	wt := m.Worktree()
-	// Refuse to import over uncommitted human curation: Import overwrites and
-	// deletes, and uncommitted edits have no reflog to recover from. Only the
-	// human-curated files gate -- supervisor-owned paths (state/, runs.jsonl)
-	// legitimately carry this attempt's own in-flight bookkeeping.
+	// Refuse to import over uncommitted human curation -- it has no reflog to
+	// recover from. Supervisor-owned paths legitimately carry this attempt's
+	// own in-flight bookkeeping.
 	if out, err := git(wt, "status", "--porcelain"); err == nil && out != "" {
 		for _, line := range strings.Split(out, "\n") {
-			// Field-based parse: git() trims the output, which eats the first
-			// line's leading status column. The path is the last field (a
-			// rename's "old -> new" resolves to new); a path containing
-			// spaces degrades toward refusal, never toward a silent import.
+			// git() trims the output, eating the first line's status column;
+			// a path containing spaces degrades toward refusal, never toward
+			// a silent import.
 			fields := strings.Fields(line)
 			if len(fields) < 2 {
 				continue
@@ -498,10 +443,8 @@ func (m *Knowledge) Import(stagingDir, baseDir string) (conflicted []Conflict, e
 	if err != nil {
 		return nil, err
 	}
-	// Remove worktree files the routine deleted in staging -- but only where
-	// the base agrees the file existed when the run saw it and the worktree
-	// hasn't moved since: a file another run created or changed in the
-	// meantime is theirs to keep.
+	// Apply staged deletions, but only where the worktree still matches the
+	// base -- a file another run created or changed is theirs to keep.
 	return conflicted, filepath.WalkDir(wt, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -538,20 +481,16 @@ func (m *Knowledge) Import(stagingDir, baseDir string) (conflicted []Conflict, e
 }
 
 // RestoreFile puts the base-snapshot copy of one knowledge file back into the
-// staged tree, undoing whatever the run staged there -- restored to base,
-// not to the live worktree, so the import's unchanged-versus-base rule then
-// skips the file entirely. The enforcement half of `teamwork: off` (design
-// decision "Knowledge records events, tasks, and context"): the instruction
-// tells the routine not to write the file, this makes sure. Reports whether
-// a staged change was discarded.
+// staged tree -- restored to base, not the live worktree, so the import's
+// unchanged-versus-base rule then skips it. The enforcement half of
+// `teamwork: off`. Reports whether a staged change was discarded.
 func RestoreFile(stagingDir, baseDir, name string) (bool, error) {
 	want, werr := os.ReadFile(filepath.Join(baseDir, name))
 	if werr != nil && !os.IsNotExist(werr) {
 		return false, werr
 	}
-	// This reads and writes staging after the run, so it is confined exactly
-	// as the import copy is: a path swapped for a symlink must not redirect
-	// the write out of the staging tree (see copyStaged).
+	// Confined like the import copy: a path swapped for a symlink must not
+	// redirect the write out of the staging tree.
 	root, err := os.OpenRoot(stagingDir)
 	if err != nil {
 		return false, err
@@ -597,11 +536,9 @@ func (m *Knowledge) Commit(message string) (string, error) {
 	return git(wt, "rev-parse", "--short", "HEAD")
 }
 
-// commitPaths commits only the named paths, leaving everything else in the
-// worktree as it found it. Commit sweeps the whole tree, which is right for a
-// run's settlement -- whatever the worktree carries is the intent -- and wrong
-// for maintenance: a commit written for one purpose must not carry work that
-// merely happened to be dirty when it fired. Missing paths are skipped.
+// commitPaths commits only the named paths: a maintenance commit must not
+// carry work that merely happened to be dirty when it fired. Missing paths
+// are skipped.
 func (m *Knowledge) commitPaths(message string, paths ...string) (string, error) {
 	wt := m.Worktree()
 	var present []string
@@ -613,9 +550,8 @@ func (m *Knowledge) commitPaths(message string, paths ...string) (string, error)
 	if len(present) == 0 {
 		return "", nil
 	}
-	// A pathspec commit takes the working-tree content of those paths, but
-	// only for paths git already tracks -- add first so a file written for
-	// the first time isn't a pathspec that matches nothing.
+	// A pathspec commit only covers tracked paths -- add first so a new file
+	// isn't a pathspec that matches nothing.
 	if _, err := git(wt, append([]string{"add", "--"}, present...)...); err != nil {
 		return "", err
 	}
@@ -628,19 +564,15 @@ func (m *Knowledge) commitPaths(message string, paths ...string) (string, error)
 	return git(wt, "rev-parse", "--short", "HEAD")
 }
 
-// flatten collapses any whitespace runs -- including the newlines raw git
-// and tool errors carry -- into single spaces, so supervisor-written entries
-// always honor the one-line-per-entry format of events.md and tasks.md.
+// flatten collapses whitespace runs to single spaces, honoring the
+// one-line-per-entry format of events.md and tasks.md.
 func flatten(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// scrubbed prepares supervisor-written text for a knowledge file: every secret
-// in the process scrub registry redacted, then flattened to one line.
-// Redaction lives at this seam rather than at the call sites that remember
-// to ask for it, because what lands here is committed and pushed -- a git
-// error quoting key material would be a durable, published record, not a
-// log line.
+// scrubbed prepares supervisor-written text for a knowledge file: redacted at
+// this seam, not at call sites that remember to ask -- what lands here is
+// committed and pushed.
 func (m *Knowledge) scrubbed(line string) string {
 	return flatten(scrub.Redacted(line))
 }
@@ -658,11 +590,9 @@ func (m *Knowledge) AppendEvent(line string) error {
 	return err
 }
 
-// AppendHumanTask records a supervisor-created human-owned task: the framework
-// giving up on something (abandoned run, tripped breaker, blocked sync) hands
-// it to a person. The entry lands at the end of the real "## Human-owned"
-// section (fenced format examples don't count), created if missing. Idempotent
-// by task id, so restart-prone callers can use deterministic ids.
+// AppendHumanTask records a supervisor-created human-owned task at the end of
+// the real "## Human-owned" section (fenced format examples don't count),
+// created if missing. Idempotent by task id.
 func (m *Knowledge) AppendHumanTask(taskID, description string) error {
 	p := filepath.Join(m.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
@@ -717,11 +647,9 @@ func (m *Knowledge) AppendHumanTask(taskID, description string) error {
 	return os.WriteFile(p, []byte(strings.Join(out, "\n")), 0o644)
 }
 
-// ResolveHumanTasks completes every open human-owned task whose id starts
-// with idPrefix -- the supervisor clearing its own stale blockers once the
-// condition they reported has recovered. Prefix matching (not an exact id)
-// makes recovery restart-proof: the supervisor need not remember which day's
-// blocker it raised. Reports whether anything changed.
+// ResolveHumanTasks completes every open task whose id starts with idPrefix.
+// Prefix matching makes recovery restart-proof: the supervisor need not
+// remember which day's blocker it raised. Reports whether anything changed.
 func (m *Knowledge) ResolveHumanTasks(idPrefix, resolution string) (bool, error) {
 	p := filepath.Join(m.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
@@ -753,9 +681,8 @@ func (m *Knowledge) ResolveHumanTasks(idPrefix, resolution string) (bool, error)
 	return true, os.WriteFile(p, []byte(strings.Join(lines, "\n")), 0o644)
 }
 
-// AppendRunRecord appends one JSONL run record to the supervisor-owned log.
-// Redacted at this seam like every append, but never flattened: the record
-// is already one line, and whitespace inside its JSON strings is content.
+// AppendRunRecord appends one JSONL run record. Redacted like every append
+// but never flattened: whitespace inside its JSON strings is content.
 func (m *Knowledge) AppendRunRecord(record string) error {
 	p := filepath.Join(m.Worktree(), "runs.jsonl")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -768,9 +695,7 @@ func (m *Knowledge) AppendRunRecord(record string) error {
 }
 
 // RemoveRoutineState deletes every per-routine state file for name: the
-// scheduling state at state/<name>.json plus the entry in every state
-// subdirectory (trigger baselines, consumer cursors -- and whatever subtree
-// comes next, without this function having to learn about it). Filenames are
+// scheduling state plus the entry in every state subdirectory. Filenames are
 // compared, never globbed, so name cannot alter the matching. Returns the
 // removed paths relative to the repository root; the caller commits.
 func (m *Knowledge) RemoveRoutineState(name string) ([]string, error) {
@@ -840,11 +765,8 @@ func (m *Knowledge) Status() WorktreeStatus {
 	if out, err := git(wt, "rev-list", "--count", "refs/remotes/origin/"+Branch+"..HEAD"); err == nil {
 		_, _ = fmt.Sscanf(out, "%d", &st.Unpushed)
 	}
-	// Behind is as of the last fetch: the remote-tracking ref is local, so
-	// this stays offline. A deployed agent writes knowledge that only reaches
-	// this checkout when someone pulls, and every command reading the
-	// worktree -- status, usage, ledgers -- silently reports the old state
-	// until then.
+	// As of the last fetch: the remote-tracking ref is local, so this stays
+	// offline.
 	if out, err := git(wt, "rev-list", "--count", "HEAD..refs/remotes/origin/"+Branch); err == nil {
 		_, _ = fmt.Sscanf(out, "%d", &st.Behind)
 	}
@@ -858,19 +780,13 @@ type Conflict struct {
 	Quarantine string
 }
 
-// copyStaged brings every staged file into the worktree. Validate has walked
-// the tree by now, but staging is not quiescent: a descendant of the model
-// process can outlive the run and rewrite what the walk approved. So the copy
-// decides for itself -- an os.Root confines every path component to the
-// staging tree, and every check (path policy, file type, count, size) is
-// re-applied here, on the descriptor being read rather than on a path that
-// can mean something else a moment later.
-//
-// Because those checks reject mid-walk, the copy lands in a scratch tree
-// beside the worktree and is promoted only once the whole staged tree has
-// passed. A rejection still fails the run, and Settle commits the failure
-// record -- so a half-copied worktree would commit part of a rejected run's
-// knowledge, which is the atomicity staging exists to provide.
+// copyStaged brings every staged file into the worktree. Staging is not
+// quiescent -- a descendant of the model process can outlive the run and
+// rewrite what Validate approved -- so an os.Root confines every path and
+// every check is re-applied on the descriptor being read. The copy lands in a
+// scratch tree and is promoted only once the whole staged tree has passed:
+// a mid-walk rejection must not leave a half-imported worktree for Settle to
+// commit.
 func copyStaged(stagingDir, baseDir, wt string) (conflicted []Conflict, err error) {
 	root, err := os.OpenRoot(stagingDir)
 	if err != nil {
@@ -915,14 +831,10 @@ func copyStaged(stagingDir, baseDir, wt string) (conflicted []Conflict, err erro
 			return nil, err
 		}
 	}
-	// The three-way decision, made on trusted bytes: the scratch copy is
-	// supervisor-owned by now, the base never entered the run's reach, and
-	// the worktree is ours. Every file's final bytes are resolved into the
-	// scratch tree first -- the merge can fail (git merge-file refuses
-	// NUL-bearing content), and a failure discovered mid-promotion would
-	// leave a half-imported worktree for the settlement to commit as the
-	// run's knowledge. The rename-only pass below is what keeps the promise
-	// above: promoted only once the whole staged tree has passed.
+	// The three-way decision, on trusted bytes: scratch copy, base, and
+	// worktree are all supervisor-owned by now. Every file's final bytes
+	// resolve into the scratch tree first; the rename-only pass below is
+	// what keeps promotion all-or-nothing.
 	var promote []string
 	var quarantines []string
 	for _, rel := range files {
@@ -942,8 +854,7 @@ func copyStaged(stagingDir, baseDir, wt string) (conflicted []Conflict, err erro
 			return nil, cerr
 		}
 		if !os.IsNotExist(cerr) && !bytes.Equal(cur, base) && !bytes.Equal(cur, staged) {
-			// The worktree moved while the run held its snapshot: a
-			// concurrently settled run changed the same file.
+			// A concurrently settled run changed the same file.
 			if merged, ok := appendMerge(cur, base, staged); ok {
 				if err := os.WriteFile(filepath.Join(scratch, rel), merged, 0o644); err != nil {
 					return nil, err
@@ -1020,10 +931,9 @@ func copyStagedFile(root *os.Root, rel, dest string) error {
 }
 
 // openStaged opens a path inside the staging tree and proves on the
-// descriptor itself that it is an ordinary unaliased file. Nothing an earlier
-// stat decided is trusted: a descendant of the model process can outlive the
-// run and swap the path for a symlink, a hard link, or a fifo. O_NONBLOCK so
-// a fifo cannot park the caller until someone opens its write end.
+// descriptor itself that it is an ordinary unaliased file -- nothing an
+// earlier stat decided is trusted. O_NONBLOCK so a fifo cannot park the
+// caller.
 func openStaged(root *os.Root, rel string) (*os.File, error) {
 	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {

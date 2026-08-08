@@ -1,14 +1,8 @@
 // Package supervisor is the long-running scheduler: the container entrypoint.
-//
-// Every tick it re-reads routine frontmatter, reconciles knowledge with origin,
-// and dispatches due routines into a bounded pool of concurrent runs --
-// implementing the durable two-phase run model: a logical run
-// exists durably (committed, pushed) before it is allowed to act; failed
-// attempts retry under the same run id with backoff; abandonment after a
-// bounded number of attempts records a human-owned task and advances the
-// watermark. Runs execute in parallel; every knowledge-worktree operation --
-// the tick's bookkeeping, each attempt's reservation and staging, each
-// settlement -- takes its turn behind one lock.
+// Every tick re-reads frontmatter, reconciles knowledge with origin, and
+// dispatches due routines into a bounded pool -- the durable two-phase run
+// model: a logical run exists durably before it acts, failed attempts retry
+// under the same run id, abandonment records a human-owned task.
 package supervisor
 
 import (
@@ -46,10 +40,8 @@ const (
 )
 
 // Schedulable reports whether a tick will act on a routine at all. Exported
-// because reporting has to agree with dispatch: the tick skips these before
-// it reads their state, so whatever a skipped routine's state still owes,
-// nothing is coming to advance it -- and a surface that says otherwise is
-// promising a retry that cannot happen.
+// because reporting has to agree with dispatch -- a surface that disagrees
+// promises a retry that cannot happen.
 func Schedulable(r *routine.Routine) bool {
 	return r.FM.IsActive() && (r.FM.Schedule != "" || r.FM.Trigger != nil)
 }
@@ -66,20 +58,15 @@ type Supervisor struct {
 	retention time.Duration
 	lastTrim  time.Time
 
-	// memMu serializes every knowledge-worktree critical section: the tick's
-	// bookkeeping (sync, trim, scheduling state, intent commit), each
-	// attempt's reserve-and-stage, and each attempt's settlement. Runs
-	// execute in parallel; the ledger they check out from and settle into
-	// takes one writer at a time. The lock is kernel-backed, so a manual
-	// `routines run` beside this process serializes through it too instead
-	// of becoming a second uncoordinated writer. Everything below through
-	// pollFailed is touched only under memMu or only by the tick goroutine.
+	// memMu serializes every knowledge-worktree critical section: tick
+	// bookkeeping, each attempt's reserve-and-stage, each settlement.
+	// Kernel-backed, so a manual `routines run` serializes through it too.
+	// Everything below through pollFailed is touched only under memMu or
+	// only by the tick goroutine.
 	memMu sync.Locker
 
-	// leaseMu guards the lease heartbeat state: in-flight runs heartbeat
-	// concurrently with each other and with the tick. Lease git operations
-	// deliberately do not take memMu -- they touch only the lease ref and
-	// the object store, never the worktree.
+	// leaseMu guards the lease heartbeat state. Lease git operations do not
+	// take memMu -- they touch only the lease ref, never the worktree.
 	leaseMu      sync.Mutex
 	leaseSHA     string        // CAS token: the lease blob we last wrote
 	leaseTTL     time.Duration // how long a lease survives without a heartbeat
@@ -102,11 +89,9 @@ type Supervisor struct {
 	syncWarned    bool // blocker already raised for the current sync problem
 	unreachWarned bool
 	originWarned  bool // origin unreachable: blocker already raised for this outage
-	// blockedTip is the knowledge tip this instance stranded on the blocked ref
-	// while sync was refused: what tells a later successful push that the
-	// stranded copy is redundant, and what keeps a repeat push idle. Only what
-	// this instance stranded: a ref left by a previous container is the only
-	// copy of its blocker and must outlive it.
+	// blockedTip is the knowledge tip this instance stranded on the blocked
+	// ref -- only this instance's: a ref left by a previous container is the
+	// only copy of its blocker and must outlive it.
 	blockedTip   string
 	commitWarned bool              // intent commit failing: dispatch is halted, someone must look
 	loadFailed   map[string]string // routine name -> the load failure already recorded
@@ -169,9 +154,8 @@ func (s *Supervisor) stateDir() string { return s.mem.StateDir() }
 // Run is the supervise loop: startup, then one Tick per minute until ctx is
 // canceled, then shutdown (final commit and push, lease release).
 func (s *Supervisor) Run(ctx context.Context) error {
-	// The supervisor's environment may carry the master and deploy keys.
 	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
-	// same-UID model processes -- set before any child ever exists.
+	// same-UID model processes -- set before any child exists.
 	if err := sandbox.ProtectProcess(); err != nil {
 		slog.Warn("could not mark the supervisor non-dumpable", "error", err)
 	}
@@ -184,9 +168,8 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		slog.Info("deploy key configured for knowledge sync")
 	}
-	// Under memMu like every other worktree operation: first-boot
-	// materialization racing a manual run's own locked Ensure would have
-	// two processes creating the branch, worktree, and seed commit at once.
+	// Under memMu: first-boot materialization must not race a manual run's
+	// own locked Ensure.
 	if err := func() error {
 		s.memMu.Lock()
 		defer s.memMu.Unlock()
@@ -215,10 +198,8 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		s.Tick(runCtx, time.Now())
 		select {
 		case <-ctx.Done():
-			// Cancellation has reached every in-flight run; wait for their
-			// settlements (Canceled, attempts handed back) before the final
-			// commit, or the shutdown push races the very records it exists
-			// to carry.
+			// Wait for in-flight settlements before the final commit, or the
+			// shutdown push races the records it exists to carry.
 			s.runs.Wait()
 			s.shutdown()
 			return nil
@@ -243,11 +224,8 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		return
 	}
 
-	// Dispatch in due order. Each worker reserves its own attempt just
-	// before it starts (see execute), so a lost container costs a retry only
-	// for the runs that were actually running. A full pool skips, never
-	// queues: the pending record is the queue, and the next tick offers the
-	// run again -- the same shape as every other deferred dispatch.
+	// Dispatch in due order. A full pool skips, never queues: the pending
+	// record is the queue, and the next tick offers the run again.
 	sort.Slice(due, func(i, j int) bool {
 		return due[i].st.Pending.ScheduledFor.Before(due[j].st.Pending.ScheduledFor)
 	})
@@ -256,9 +234,8 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			slog.Debug("skipped", "reason", "shutting down")
 			return // shutting down: stop launching, nothing is reserved yet
 		}
-		// One attempt per routine at a time (design decision "Overlap"): the
-		// holder may be this supervisor's own earlier run still settling, or
-		// a `routines run` someone started in a terminal.
+		// One attempt per routine at a time; the holder may be an earlier run
+		// still settling, or a manual `routines run`.
 		release, lockErr := lock.Take(s.Dir, d.r.Name)
 		if lockErr != nil {
 			if errors.Is(lockErr, lock.ErrLocked) {
@@ -273,9 +250,8 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		case attemptUID = <-s.slots:
 		default:
 			release()
-			// warn, not info: an agent whose due work is parked behind a
-			// full pool looks idle from outside, and an operator running at
-			// warn level deserves to know why nothing is happening.
+			// warn, not info: due work parked behind a full pool looks idle
+			// from outside.
 			if !s.waitLogged[d.r.Name] {
 				s.waitLogged[d.r.Name] = true
 				d.r.Log().Warn("all run slots busy -- waiting for a free one",
@@ -332,27 +308,23 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 	s.memMu.Lock()
 	defer s.memMu.Unlock()
 
-	// Reconcile knowledge with origin, defensively; renew the single-instance
-	// lease and pause dispatch entirely if we no longer hold it.
 	if !s.noOrigin {
 		s.syncOnce()
-		// Heartbeat before the sync verdict, not after: an instance that is
-		// blocked is still alive, and a lease that lapses while its holder
-		// runs would invite a replacement to start writing beside it.
+		// Heartbeat before the sync verdict: a blocked instance is still
+		// alive, and a lapsed lease invites a replacement writer.
 		if !s.renewLease() {
 			return nil, false
 		}
 		if s.syncBlocked {
-			// Rewritten history or a conflict needs a human. Dispatching
-			// anyway would take external actions under identities that exist
-			// only in this container -- lost on replacement, then re-run as
-			// duplicates. Same rule as an unreachable origin: hold.
+			// Rewritten history or a conflict needs a human; dispatching
+			// anyway would re-run external actions as duplicates after
+			// container replacement.
 			return nil, false
 		}
 	}
 
-	// Once a day, trim the record streams to the retention window. Git
-	// history keeps everything; the working files stay lean.
+	// Daily retention trim: git history keeps everything, the working files
+	// stay lean.
 	if now.Sub(s.lastTrim) >= 24*time.Hour {
 		s.lastTrim = now
 		if changed, err := s.mem.Trim(s.retention, now); err != nil {
@@ -382,10 +354,7 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 			continue
 		}
 		if s.isRunning(r.Name) {
-			// An attempt from an earlier tick is still executing. Its
-			// settlement owns this routine's state -- reading it here could
-			// only mis-mint, and abandoning it mid-flight would fight the
-			// settlement over the same record.
+			// The executing attempt's settlement owns this routine's state.
 			log.Debug("skipped", "reason", "in flight")
 			continue
 		}
@@ -421,9 +390,8 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 		}
 		if st.Pending == nil {
 			if st.CoolingDown(now) {
-				// An agent whose breaker has tripped looks idle from outside
-				// for up to 24h, the same blind spot waitLogged solves for a
-				// full run pool -- announce once, not every tick.
+				// A tripped breaker looks idle from outside for up to 24h --
+				// announce once, not every tick.
 				if !s.cooldownWarned[r.Name] {
 					s.cooldownWarned[r.Name] = true
 					log.Warn("circuit breaker cooling down -- no new runs",
@@ -446,9 +414,8 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 					if n > 1 {
 						log.Info("missed firings collapse into one run", "firings", n, "run_id", st.Pending.RunID)
 					}
-					// The scheduled run will pull whatever the trigger would
-					// have announced; refresh the baseline so the same news
-					// doesn't double-fire right after it.
+					// Refresh the baseline so the same news doesn't
+					// double-fire right after the scheduled run.
 					if r.FM.Trigger != nil {
 						s.refreshTriggerBaseline(r, now)
 					}
@@ -476,10 +443,8 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 			}
 		}
 		if st.Pending.Attempts >= MaxAttempts {
-			// Every attempt in the budget was started and none of them
-			// settled: the supervisor did not survive them. Settlement is
-			// where a run is normally abandoned, but a run that kills its
-			// container never gets there.
+			// Settlement is where a run is normally abandoned, but a run
+			// that kills its container never gets there.
 			s.abandon(r, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), "", now)
 			if err := st.Save(s.stateDir()); err != nil {
 				log.Error("saving scheduling state failed", "error", err)
@@ -520,17 +485,14 @@ func (s *Supervisor) setRunning(name string, v bool) {
 	}
 }
 
-// commitIntent makes the knowledge worktree durable before anything acts on it,
-// and reports whether it got there. Persist-before-act rests on the data, not
-// on control flow: a tick that wrote state and then failed to commit it leaves
-// the record on disk and nowhere else, and no later tick would mint anything
-// to notice. So whatever the worktree carries is the intent -- Commit no-ops
-// on a clean tree, and the normal path costs nothing.
+// commitIntent makes the knowledge worktree durable before anything acts on
+// it. Whatever the worktree carries is the intent: Commit no-ops on a clean
+// tree, so the normal path costs nothing.
 func (s *Supervisor) commitIntent(message string) bool {
 	sha, err := s.mem.Commit(message)
 	if err != nil {
-		// Dispatch halts until this clears, and only a person can clear it:
-		// a supervisor that cannot record what it is about to do must not do it.
+		// A supervisor that cannot record what it is about to do must not
+		// do it.
 		s.blockOnce("commit", "intent commit failed -- runs held", err, &s.commitWarned)
 		return false
 	}
@@ -539,8 +501,7 @@ func (s *Supervisor) commitIntent(message string) bool {
 		return true
 	}
 	if err := s.mem.Push(); err != nil {
-		// An identity that isn't durable is how duplicates happen: without
-		// a pushed intent, no new logical run starts.
+		// An identity that isn't durable is how duplicates happen.
 		s.blockOnce("push", "intent push failed -- runs held until origin is reachable", err, &s.unreachWarned)
 		return false
 	}
@@ -560,12 +521,9 @@ func reserve(p *schedule.Pending, now time.Time) (giveBack func()) {
 	}
 }
 
-// abandon gives up on a pending run: the work becomes a human-owned task (a
-// run that falls over never gets to explain itself, and only a person can
-// act), the watermark advances so the schedule moves on, and the breaker
-// counts the abandonment. The caller saves the state and commits it, and
-// passes the last attempt's exported sessions when there are any -- the
-// attempt that gives up on a run is the one an operator reads first.
+// abandon gives up on a pending run: the work becomes a human-owned task, the
+// watermark advances, and the breaker counts the abandonment. The caller
+// saves and commits the state.
 func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, sessionsDir string, now time.Time) {
 	p := st.Pending
 	date := now.UTC().Format("2006-01-02")
@@ -589,10 +547,8 @@ func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, ses
 
 // execute runs one attempt of a pending logical run and settles the outcome.
 func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) (cleanupErr error) {
-	// Every line this attempt emits carries the routine and the logical run
-	// it belongs to: attempts execute concurrently and interleave on one
-	// stdout, so the identity has to travel with the logger rather than be
-	// repeated by each call site.
+	// Attempts interleave on one stdout, so the identity travels with the
+	// logger.
 	log := r.Log().With("run_id", st.Pending.RunID)
 
 	agent, err := config.Load(s.Dir)
@@ -601,11 +557,9 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		return
 	}
 
-	// Reserve the attempt before spawning anything, and make the reservation
-	// durable in its own right: no model process starts unless the attempt
-	// that spawned it is committed and pushed. A container lost mid-attempt is
-	// replaced by one that reads this record, so the budget drains as it
-	// should instead of retrying forever at attempts: 0.
+	// The reservation is durable before anything spawns: a container lost
+	// mid-attempt is replaced by one that reads this record, so the budget
+	// drains instead of retrying forever at attempts: 0.
 	p := st.Pending
 	s.memMu.Lock()
 	giveBack := reserve(p, now)
@@ -625,9 +579,8 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	s.memMu.Unlock()
 
 	// Stage takes the knowledge lock itself, only around its worktree reads:
-	// credential resolution can spend seconds on the network, and holding
-	// memMu through it would park every other attempt's settlement behind
-	// this one's HTTPS round trips.
+	// holding memMu through credential resolution would park every other
+	// settlement behind this one's HTTPS round trips.
 	meta := runner.Meta{
 		RunID:          p.RunID,
 		AttemptID:      fmt.Sprintf("attempt_%02d", p.Attempts),
@@ -638,8 +591,8 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	if !s.noOrigin {
-		// Ownership proof begins once the reservation is durable and remains
-		// live through staging, execution, settlement, and push.
+		// Ownership proof stays live through staging, execution, settlement,
+		// and push.
 		stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun, log)
 		defer stopHeartbeat()
 	}
@@ -673,9 +626,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	detail := ""
 	fatal := false
 	if err != nil {
-		// The runner classifies; the supervisor only asks. A start failure
-		// nothing can repeat past is abandoned on the spot rather than
-		// retried to the budget's end for the same error five times.
+		// The runner classifies; the supervisor only asks.
 		fatal = errors.Is(err, runner.ErrFatal)
 		log.Error("attempt failed to start", "error", err)
 		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
@@ -684,9 +635,8 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		defer func() { cleanupErr = errors.Join(cleanupErr, staging.Cleanup()) }()
 	}
 
-	// Settlement is the other knowledge critical section: import, run record,
-	// scheduling consequences, push -- serialized against other attempts'
-	// reservations and settlements and the tick's own bookkeeping.
+	// Settlement is the other knowledge critical section: import, run
+	// record, scheduling consequences, push.
 	s.memMu.Lock()
 	defer s.memMu.Unlock()
 	if !s.noOrigin && !s.renewLease() {
@@ -699,10 +649,8 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 
 	// The settlement commit carries this attempt's scheduling consequences:
-	// success clears pending and advances the watermark; the final failed
-	// attempt abandons the run -- a human-owned task (someone must act)
-	// alongside the advanced watermark; shutdown returns the reserved attempt
-	// so an interrupted attempt doesn't count toward abandonment and the same
+	// success clears pending and advances the watermark, the final failure
+	// abandons the run, shutdown returns the reserved attempt so the same
 	// logical run retries on next boot.
 	abandoned := false
 	settlement, serr := runner.Settle(s.Dir, r, staging, res, meta, detail, func(fin *runner.Settlement) {
@@ -766,8 +714,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	return
 }
 
-// withSessions completes an outcome record's attributes, naming the
-// attempt's exported sessions only when there are some.
+// withSessions names the attempt's exported sessions only when there are some.
 func withSessions(sessionsDir string, args ...any) []any {
 	if sessionsDir != "" {
 		args = append(args, "sessions", sessionsDir)
@@ -787,16 +734,12 @@ func (s *Supervisor) syncOnce() {
 		s.blockOnce("sync", "knowledge sync conflict -- sync stopped, running on local state", errors.New(rep.Detail), &s.syncWarned)
 		s.strandBlocked()
 	case rep.Unreachable:
-		// Recorded locally, published when origin returns. The tick gives up
-		// a few lines below this one -- the lease heartbeat needs the same
-		// origin -- so nothing downstream will record it, and an outage whose
-		// only trace is a log line in a container that gets replaced is no
-		// trace at all.
+		// Recorded locally, published when origin returns -- an outage whose
+		// only trace is a log line in a replaced container is no trace.
 		s.blockOnce("origin", "origin unreachable -- knowledge is not durable and no new runs start until it returns", errors.New(rep.Detail), &s.originWarned)
 	case rep.Detail != "":
-		// A flagless report with a Detail means Sync could not even read the
-		// local worktree -- it never proved knowledge is healthy, so an open
-		// blocker must not be resolved on the strength of it.
+		// Sync could not even read the local worktree; an open blocker must
+		// not be resolved on the strength of it.
 		slog.Warn("knowledge sync did not run", "detail", rep.Detail)
 	default:
 		s.syncBlocked = false
@@ -811,28 +754,21 @@ func (s *Supervisor) syncOnce() {
 	}
 }
 
-// reportLoadFailures records in knowledge that a routine has stopped loading --
-// and, later, that it loads again. The tick schedules around a broken file
-// (design decision "A broken routine is one broken routine"), so without this
-// the only trace of a routine that quietly stopped running is a log line
-// nobody is tailing. The transitions are events rather than human-owned tasks:
-// a broken file heals by being edited and the next tick notices, so there is
-// nothing for a person to close. Unattributed failures -- a directory that
-// would not read -- are left out: they fail every attempt, and abandonment
-// already files a task for each.
+// reportLoadFailures records in knowledge that a routine stopped loading and,
+// later, that it loads again. Events rather than tasks: a broken file heals
+// by being edited, so there is nothing for a person to close. Unattributed
+// failures are left out -- abandonment already files a task for each.
 func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	failing := map[string]string{}
 	for _, e := range errs {
 		var re *routine.Error
 		if !errors.As(e, &re) {
-			// Not about one routine -- a directory that would not read. There
-			// is no stable per-routine identity to dedupe this by, so unlike
-			// the attributed case below it logs on every tick it persists.
+			// No per-routine identity to dedupe by, so this logs every tick
+			// it persists.
 			slog.Warn("routine load error", "error", e)
 			continue
 		}
-		// The path is absolute in the container; the event is read in the
-		// repository, where the file is routines/<name>.md.
+		// The event is read in the repository, where the path is relative.
 		failing[re.Name] = strings.TrimPrefix(e.Error(), s.Dir+string(filepath.Separator))
 	}
 
@@ -868,24 +804,17 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	s.pushBestEffort()
 }
 
-// blockOnce records a blocking condition when it first appears -- as a
-// human-owned task only, because only a person can clear it and the task's
-// creation is itself an observable change: a companion event would
-// double-record the same fact. The task id is date-scoped so a supervisor
-// restart doesn't re-record it -- AppendHumanTask skips ids already present.
-// The BLOCKED line is gated on the same warned flag: a blocker that lasts
-// many ticks announces its onset once, like every sibling "persisting
-// condition" mechanism in this file, instead of repeating the same line
-// every minute for its whole duration.
+// blockOnce records a blocking condition when it first appears, as a
+// human-owned task -- only a person can clear it. The task id is date-scoped
+// so a restart doesn't re-record it, and the BLOCKED line announces the onset
+// once rather than every tick.
 func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 	if *warned {
 		return
 	}
 	*warned = true
-	// err can wrap a raw git error carrying a tokened origin URL; the log
-	// writer and the knowledge-append seam both redact from the scrub registry.
-	// BLOCKED and RECOVERED stay literal, greppable markers: the level says
-	// how bad it is, but only these say that dispatch itself is held.
+	// BLOCKED and RECOVERED are literal, greppable markers: only these say
+	// that dispatch itself is held.
 	slog.Error("BLOCKED", "kind", kind, "reason", reason, "error", err)
 	msg := reason
 	if err != nil {
@@ -909,10 +838,8 @@ func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 }
 
 // recover clears a blocker whose condition has healed: any open task-<kind>-*
-// the supervisor previously recorded is completed in place -- the transition
-// is the record, no companion event. It runs on every healthy tick and
-// matches by id prefix, so it also heals blockers raised before a restart --
-// a blocker that outlives its outage is noise a person has to chase.
+// is completed in place. Runs every healthy tick and matches by id prefix, so
+// it also heals blockers raised before a restart.
 func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	*warned = false
 	changed, err := s.mem.ResolveHumanTasks("task-"+kind+"-",
@@ -931,11 +858,8 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 }
 
 // pushBestEffort publishes what the knowledge worktree carries. While sync is
-// blocked the knowledge branch is the thing being refused, so the record goes to
-// the supervisor-owned blocked ref instead -- otherwise the blocker that
-// reports a broken datastore would live only on a container that is about to
-// be replaced. Once the branch carries the same state, the stranded copy is
-// dropped.
+// blocked the record goes to the supervisor-owned blocked ref instead; once
+// the branch carries the same state, the stranded copy is dropped.
 func (s *Supervisor) pushBestEffort() {
 	if s.noOrigin {
 		return
@@ -954,11 +878,9 @@ func (s *Supervisor) pushBestEffort() {
 	}
 }
 
-// strandBlocked publishes knowledge to the blocked ref, and is called on every
-// blocked tick rather than only when the blocker is first raised: the record
-// is the whole point of stranding it, so an attempt that fails has to be
-// retried by the next tick instead of dying with the log line that announced
-// it. Keyed on the knowledge tip, so a tick that changed nothing pushes nothing.
+// strandBlocked publishes knowledge to the blocked ref on every blocked tick,
+// so a failed attempt is retried rather than dying with the log line that
+// announced it. Keyed on the tip: a tick that changed nothing pushes nothing.
 func (s *Supervisor) strandBlocked() {
 	tip, err := s.mem.Head()
 	if err != nil {
@@ -976,14 +898,10 @@ func (s *Supervisor) strandBlocked() {
 	slog.Error("knowledge: stranded until sync is repaired", "ref", knowledge.BlockedRef)
 }
 
-// warnKeyDelivery says out loud, once at boot, that the master key value is
-// sitting in this process's environment -- the weaker of the two production
-// deliveries. Both work; only the file keeps the value out of the
-// environment, and a deployment that picked the env var years ago has no
-// other moment where anyone is told. It fires on a leftover variable too: a
-// deployment that moved to file delivery without unsetting the old one still
-// publishes the value. Log-only: the platform that forced env delivery cannot
-// be argued with at boot.
+// warnKeyDelivery says once at boot that the master key value is in this
+// process's environment -- the weaker delivery, and boot is the only moment
+// anyone is told. Fires on a leftover variable too: unset, it still publishes
+// the value.
 func (s *Supervisor) warnKeyDelivery() {
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") != "1" || !creds.KeyValueInEnv() {
 		return
@@ -1002,20 +920,14 @@ func verifyAttemptGroups(groups []int, slots int) error {
 	return nil
 }
 
-// verifySandbox enforces the fail-closed policy at boot, not mid-run. Only
-// production (inside the agent image) spawns model processes natively behind
-// the Landlock shim; everywhere else they run in the per-run container, or
-// the operator has explicitly opted into unconfined dev mode.
+// verifySandbox enforces the fail-closed policy at boot, not mid-run.
 func (s *Supervisor) verifySandbox() error {
 	switch {
 	case os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
-		// Attempt tree access is granted by group: staging chgrps each run's
-		// trees to the attempt's group, unprivileged only because the agent
-		// user belongs to every attempt group. Join the groups first --
-		// whether the image's membership reached this process depends on the
-		// init that booted the container -- then verify: an image without the
-		// identities at all would fail every attempt at staging, so refuse
-		// at boot instead.
+		// Join the attempt groups first -- whether the image's membership
+		// reached this process depends on the init that booted the container
+		// -- then verify, refusing at boot rather than failing every attempt
+		// at staging.
 		if err := sandbox.EnsureAttemptGroups(config.MaxConcurrency + 1); err != nil {
 			return err
 		}
@@ -1026,9 +938,8 @@ func (s *Supervisor) verifySandbox() error {
 		if err := verifyAttemptGroups(groups, cap(s.slots)); err != nil {
 			return err
 		}
-		// Constructed, like every other child: an inherited environment
-		// would republish the supervisor's keys in the probe's own
-		// /proc/<pid>/environ. TMPDIR is the scratch scope it confines.
+		// Constructed environment, like every other child; TMPDIR is the
+		// scratch scope it confines.
 		probe := exec.Command(sandbox.HelperPath, "sandbox-probe")
 		probe.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{
 			Uid: attemptUIDBase,
@@ -1066,10 +977,8 @@ func (s *Supervisor) verifySandbox() error {
 			return nil
 		}
 		// The probe tolerates Landlock absence, so failure here means the
-		// identity transition itself is broken -- the gating guarantee, which
-		// no override may waive (design: "The required boundary is a
-		// per-attempt UID"). The unsafe override disables only Landlock, in
-		// the shim.
+		// identity transition itself is broken -- the gating guarantee no
+		// override may waive.
 		var exitErr *exec.ExitError
 		if errors.As(probeErr, &exitErr) && len(exitErr.Stderr) > 0 {
 			return fmt.Errorf("attempt identity probe: %w: %s", probeErr, strings.TrimSpace(string(exitErr.Stderr)))
@@ -1094,9 +1003,8 @@ func (s *Supervisor) shutdown() {
 }
 
 // acquireLease enforces "exactly one instance": a fresh foreign lease means
-// another supervisor is alive (rolling deploy overlap, accidental replica),
-// so this one waits rather than corrupting knowledge. The write is atomic
-// (compare-and-swap on the lease ref): two instances racing cannot both win.
+// another supervisor is alive, so this one waits. The write is a
+// compare-and-swap on the lease ref -- two racing instances cannot both win.
 func (s *Supervisor) acquireLease(ctx context.Context) error {
 	for {
 		lease, err := s.mem.ReadLease()
@@ -1131,10 +1039,9 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 	}
 }
 
-// renewLease heartbeats atomically against the lease we last wrote. Returns
-// false -- pause all dispatch -- when another live instance holds it. The
-// heartbeat carries wall-clock time, not the tick's time: liveness is about
-// this process still breathing, and staleness is judged against a real clock.
+// renewLease heartbeats atomically against the lease we last wrote; false
+// means another live instance holds it and dispatch pauses. Wall-clock time,
+// not the tick's: staleness is judged against a real clock.
 func (s *Supervisor) renewLease() bool {
 	s.leaseMu.Lock()
 	defer s.leaseMu.Unlock()
@@ -1142,10 +1049,8 @@ func (s *Supervisor) renewLease() bool {
 }
 
 // tryRenewLease renews unless the last heartbeat is younger than a quarter
-// TTL. Every in-flight run heartbeats independently; the freshness gate
-// collapses them into one push per cadence, and it is what keeps worst-case
-// staleness at half a TTL: a quarter of age tolerated here plus a quarter
-// until the next heartbeat lands.
+// TTL: in-flight runs heartbeat independently, and the freshness gate
+// collapses them into one push per cadence (worst-case staleness: half a TTL).
 func (s *Supervisor) tryRenewLease() bool {
 	s.leaseMu.Lock()
 	defer s.leaseMu.Unlock()
@@ -1185,19 +1090,11 @@ func (s *Supervisor) renewLeaseLocked() bool {
 	return s.leaseLost("lease renewal failed -- pausing dispatch until origin accepts a heartbeat")
 }
 
-// keepLeaseAlive heartbeats the lease every quarter TTL while an attempt
-// executes, from a goroutine that runs only for as long as the attempt does:
-// the returned stop joins it before the attempt settles. Lease reads and
-// writes touch only the lease ref and the object store, never the worktree,
-// so heartbeats run without the knowledge lock and concurrent attempts'
-// heartbeats coexist -- the freshness gate in tryRenewLease means whoever
-// ticks first renews for everyone. A renewal that fails inside the TTL of
-// the last accepted heartbeat is tolerated -- origin blips pass, and until
-// the TTL expires this instance is still provably the only writer. Past the
-// TTL, or the moment a live foreign lease appears, the run is canceled: an
-// instance that cannot prove it is the only writer must not let a model
-// process keep acting under identities that a replacement is about to
-// re-run.
+// keepLeaseAlive heartbeats every quarter TTL while an attempt executes; the
+// returned stop joins the goroutine before the attempt settles. A renewal
+// failure inside the TTL is tolerated -- origin blips pass. Past the TTL, or
+// on a live foreign lease, the run is canceled: an instance that cannot prove
+// it is the only writer must not let a model process keep acting.
 func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.CancelFunc, log *slog.Logger) (stop func()) {
 	quit := make(chan struct{})
 	done := make(chan struct{})
@@ -1229,17 +1126,15 @@ func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.Cance
 	}
 }
 
-// foreignLeaseLive reports whether origin currently carries someone else's
-// unexpired lease -- the one condition that means another instance may
-// already be dispatching.
+// foreignLeaseLive reports whether origin carries someone else's unexpired
+// lease -- another instance may already be dispatching.
 func (s *Supervisor) foreignLeaseLive() bool {
 	lease, err := s.mem.ReadLease()
 	return err == nil && lease != nil && lease.Holder != s.InstanceID && time.Since(lease.At) <= s.leaseTTL
 }
 
-// holdLease records a successful heartbeat, announcing the recovery when the
-// previous one failed through the same RECOVERED/reason shape as recover(),
-// so grepping msg="RECOVERED" finds every healed blocker, lease included.
+// holdLease records a successful heartbeat, announcing recovery in the same
+// RECOVERED shape as recover() so one grep finds every healed blocker.
 func (s *Supervisor) holdLease(sha string, at time.Time) {
 	if s.leaseWarned {
 		s.leaseWarned = false
@@ -1249,10 +1144,9 @@ func (s *Supervisor) holdLease(sha string, at time.Time) {
 	s.leaseRenewed = at
 }
 
-// leaseLost pauses dispatch and says why the first time. A rolling deploy's
-// overlap persists for many ticks; one line each would bury the transition
-// that matters. Unlike blockOnce this records nothing in knowledge -- an
-// instance that cannot prove it is the writer must not write.
+// leaseLost pauses dispatch and says why, once. Unlike blockOnce it records
+// nothing in knowledge -- an instance that cannot prove it is the writer must
+// not write.
 func (s *Supervisor) leaseLost(msg string) bool {
 	if !s.leaseWarned {
 		s.leaseWarned = true

@@ -23,16 +23,15 @@ import (
 
 // The github_app derived type: the stored value is a GitHub App private key,
 // and the run receives a one-hour installation token in its place. The
-// installation is the source of truth for access -- the token is minted
-// unscoped and inherits the installation's repository selection and
-// permissions, managed on GitHub's installation page like a person's own
-// access. Nothing here narrows per routine; access bounds are per-agent.
+// token is minted unscoped, inheriting the installation's full repository
+// selection and permissions -- access bounds are per-agent, set on GitHub's
+// installation page, not narrowed per routine.
 const (
 	githubAPIBase    = "https://api.github.com"
 	githubAPIVersion = "2026-03-10"
 )
 
-// githubHTTP never follows redirects: a redirect would carry the App JWT or
+// Never follows redirects: a redirect would carry the App JWT or
 // installation token toward a location the framework did not choose.
 var githubHTTP = &http.Client{
 	Timeout: 30 * time.Second,
@@ -86,9 +85,8 @@ func deriveGitHubApp(name string, s Spec, stored, apiBase string) (*Derived, err
 				"credential", name, "type", "github_app", "error", err)
 		}
 	}
-	// Live means registered: the bot lookup and a failed revocation's
-	// warning both run before Derive registers the returned bearer, and a
-	// GitHub error can quote what was sent to it.
+	// Register before the bot lookup so a GitHub error quoting the token,
+	// or the revocation warning above, still gets redacted.
 	release := scrub.RegisterEphemeral("github_app bearer ("+name+")", token.Token)
 
 	var bot struct {
@@ -107,8 +105,7 @@ func deriveGitHubApp(name string, s Spec, stored, apiBase string) (*Derived, err
 	}
 	botEmail := fmt.Sprintf("%d+%s@users.noreply.github.com", bot.ID, botName)
 
-	// Derive registers the returned bearer as the canonical entry; this one
-	// only had to cover the window between minting and returning.
+	// Derive registers the returned bearer as the canonical entry.
 	release()
 	return &Derived{
 		Env: map[string]string{
@@ -125,9 +122,9 @@ func deriveGitHubApp(name string, s Spec, stored, apiBase string) (*Derived, err
 	}, nil
 }
 
-// parseAppKey decodes the stored App private key. The stored value may carry
-// real PEM newlines or escaped \n sequences (the one-line form keeps the
-// encrypted value scrubbable as an exact string).
+// Decodes the stored App private key. The stored value may carry real PEM
+// newlines or escaped \n sequences (the one-line form keeps the encrypted
+// value scrubbable as an exact string).
 func parseAppKey(stored string) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode([]byte(strings.ReplaceAll(stored, `\n`, "\n")))
 	if block == nil {
@@ -146,7 +143,7 @@ func parseAppKey(stored string) (*rsa.PrivateKey, error) {
 	return nil, fmt.Errorf("github_app: cannot parse the stored private key")
 }
 
-// githubAppJWT signs the 9-minute RS256 App JWT.
+// Signs the 9-minute RS256 App JWT.
 func githubAppJWT(appID, stored string) (string, error) {
 	key, err := parseAppKey(stored)
 	if err != nil {

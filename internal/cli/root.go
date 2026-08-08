@@ -34,11 +34,9 @@ Usage:
 Run any command from inside an agent repository (except scaffold).
 `
 
-// commands are recognized CLI subcommands, mapped to their handler.
-// scaffold, sandbox-exec, and sandbox-probe are exempt from the agent-repo
-// check below: scaffold creates the repository, and the sandbox commands
-// are internal re-exec shims that run in the sandboxed workspace, not the
-// agent checkout.
+// scaffold and the sandbox-* commands are exempt from the agent-repo check
+// below: scaffold creates the repository, and sandbox commands are internal
+// re-exec shims that run in the sandboxed workspace, not the agent checkout.
 var commands = map[string]func([]string) int{
 	"scaffold":            cmdScaffold,
 	"configure":           cmdConfigure,
@@ -95,19 +93,15 @@ func Run(args []string) int {
 		return 2
 	}
 
-	// Every command but the ones above expects to run from inside an agent
-	// repository. Asserting that here, before any command-specific logic
-	// runs, means a wrong-directory mistake fails with an obvious message
-	// instead of surfacing as whatever the first thing that command reads
-	// happens to complain about -- e.g. credentials reporting "no master
-	// key" when the key was never the problem (#64).
+	// Asserting the agent-repo check here, before command-specific logic runs,
+	// turns a wrong-directory mistake into an obvious message instead of a
+	// confusing failure deep in whatever that command reads first (#64).
 	if !repoOptional[cmd] {
 		if _, err := os.Stat(config.Path(".")); err != nil {
 			return fail(fmt.Errorf("not an agent repository (no %s found)", config.FileName))
 		}
 		setupLogging(".")
-		// check names the mismatch itself, as its first problem -- the
-		// dispatch warning on top of that is the same message twice.
+		// check already names the mismatch itself; avoid printing it twice.
 		if cmd != "check" {
 			warnOnPinMismatch(".")
 		}
@@ -116,12 +110,10 @@ func Run(args []string) int {
 	return handler(rest)
 }
 
-// warnOnPinMismatch names a binary that doesn't match the agent's pinned
-// framework version before any command output: a mismatched binary reads
-// the repo through the wrong schema, and without this line every
-// divergence surfaces as a confusing field-level error somewhere in a
-// command's own report. Source builds are exempt -- development runs
-// against pinned agents on purpose.
+// Flags a binary that doesn't match the agent's pinned framework version --
+// otherwise a schema mismatch surfaces as a confusing field-level error
+// buried in a command's own output. Source builds are exempt: development
+// runs against pinned agents on purpose.
 func warnOnPinMismatch(dir string) {
 	pin, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version"))
 	if err != nil {
@@ -132,12 +124,10 @@ func warnOnPinMismatch(dir string) {
 	}
 }
 
-// setupLogging assigns the process logger's level and timezone from the
-// agent's configuration before any command runs -- the handler itself is
-// installed at the logging package's load and reads the knobs live, so
-// commands and the packages under them never configure logging themselves.
-// Best effort: a broken config or timezone keeps the load-time defaults so
-// `check` can still run and name the problem itself.
+// Assigns the process logger's level and timezone from the agent's
+// configuration before any command runs. Best effort: a broken config or
+// timezone keeps the load-time defaults so `check` can still run and name
+// the problem itself.
 func setupLogging(dir string) {
 	agent, err := config.Load(dir)
 	if err != nil {

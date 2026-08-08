@@ -1,14 +1,9 @@
-// Package scrub redacts secret values from text and byte streams before
-// they leave the process. Defense in depth: exact-value matching only (see
-// design decision "Credentials", rule 3) -- the primary protection is that
-// undeclared secrets are never in the process at all.
-//
-// There is one process-wide registry. Code that materializes a secret --
-// loading a key, decrypting the store, minting a token -- calls Register;
-// every consumer (the log writer, the run output stream, knowledge appends)
-// redacts from the same set. Nothing downstream decides whether its text
-// needs scrubbing, because a value can only leak from a process that
-// materialized it, and materializing is what registers it.
+// Package scrub redacts secret values from text and byte streams before they
+// leave the process. Defense in depth: exact-value matching only (design
+// decision "Credentials", rule 3) -- the primary protection is that
+// undeclared secrets never enter the process. One process-wide registry:
+// code that materializes a secret calls Register, and every consumer (log
+// writer, run output stream, knowledge appends) redacts from the same set.
 package scrub
 
 import (
@@ -20,18 +15,18 @@ import (
 	"sync/atomic"
 )
 
-// entry is one registered secret: the marker name is not the map key, so
-// several live entries may share a name (see RegisterEphemeral).
+// One registered secret: the marker name is not the map key, so several
+// live entries may share a name (see RegisterEphemeral).
 type entry struct {
 	name  string
 	value string
 }
 
-// process is the registry: a concurrency-safe map where readers snapshot
-// the current state through an atomic pointer while writers swap in a
-// rebuilt copy. Trigger polls register bearer material mid-flight while run
-// goroutines redact through writers that hold the set -- mutating a plain
-// map under those readers is a fatal runtime error, not just a race.
+// The registry: a concurrency-safe map where readers snapshot the current
+// state through an atomic pointer while writers swap in a rebuilt copy.
+// Trigger polls register bearer material mid-flight while run goroutines
+// redact through writers that hold the set -- mutating a plain map under
+// those readers is a fatal runtime error, not just a race.
 var process atomic.Pointer[map[string]entry]
 
 func init() {

@@ -21,8 +21,7 @@ import (
 
 // NamePattern constrains routine names: the filename is the routine's
 // identity, and names become filesystem paths (routines/<name>.md, lock
-// files, ledgers) -- so the grammar is closed under path construction:
-// no separators, no dots, no way to spell an escape.
+// files, ledgers), so no separators, no dots, no way to spell an escape.
 var NamePattern = regexp.MustCompile(`^[a-z0-9]+([_-][a-z0-9]+)*$`)
 
 // DefaultURL is the canonical link supplied to routines that do not declare
@@ -48,19 +47,16 @@ type Frontmatter struct {
 	Websearch   bool          `yaml:"websearch,omitempty"` // grants the websearch tool (and enables its search backend)
 	MCP         []string      `yaml:"mcp,omitempty"`       // grants a configured MCP server's tools; third-party tool text is an injection vector, so none by default
 
-	// Events and Consumes are retired, replaced by Teamwork and Reports. They
-	// are parsed only so Parse can reject them with the migration mapping:
-	// strict decoding alone would call them unknown fields, which reads as a
-	// typo rather than a rename.
+	// Events and Consumes are retired, replaced by Teamwork and Reports.
+	// Parsed only so Parse can reject them with a migration message instead
+	// of a generic "unknown field" error.
 	Events   *bool  `yaml:"events,omitempty"`
 	Consumes string `yaml:"consumes,omitempty"`
 }
 
 // The teamwork ladder: each value names the highest tier of teamwork
-// participation. Strictly ordered -- a routine whose
-// fires fill the schedule's tables must record what its runs do -- so of
-// the underlying states only these three are legal, and the contradiction
-// is unrepresentable.
+// participation, strictly ordered so a routine can't fill the schedule's
+// tables without also recording its runs as events.
 const (
 	TeamworkFull   = "full"   // default: runs recorded as events, fires fill the schedule's tables
 	TeamworkEvents = "events" // runs recorded as events; fires appear as fact lines only
@@ -79,9 +75,8 @@ func (f Frontmatter) RecordsEvents() bool { return f.teamwork() != TeamworkOff }
 // rather than its fact lines.
 func (f Frontmatter) FullTeamwork() bool { return f.teamwork() == TeamworkFull }
 
-// teamwork resolves the ladder's default. A reporting routine defaults to
-// off -- reporting is definitionally not work -- and everything else to
-// full; an explicit teamwork value overrides either default.
+// Resolves the ladder's default: off for a reporting routine
+// (reporting is not work), full otherwise; an explicit value overrides.
 func (f Frontmatter) teamwork() string {
 	switch {
 	case f.Teamwork != "":
@@ -110,18 +105,16 @@ type Routine struct {
 	Body string // the prompt
 }
 
-// Log returns the process logger with this routine's identity bound: runs
-// execute concurrently and share one stdout, so routine= is the field an
-// operator filters on.
+// Log returns the process logger with this routine's identity bound, so an
+// operator can filter one routine's output from concurrent runs sharing stdout.
 func (r *Routine) Log() *slog.Logger {
 	return slog.With("routine", r.Name)
 }
 
 // Parse reads one routine file. The file must begin with a "---" frontmatter
 // block; everything after the closing "---" is the prompt body. Errors name
-// the failure, not the file: the caller passed the path and knows how to
-// spell it for its reader (Error does, relative to nothing; a plugin
-// validator does, relative to the payload).
+// the failure, not the file -- the caller already has the path and knows how
+// to attribute it for its own reader.
 func Parse(path string) (*Routine, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -175,8 +168,8 @@ func Parse(path string) (*Routine, error) {
 }
 
 // SetActive rewrites the `active:` frontmatter field in place, preserving the
-// rest of the file byte for byte. Both directions are explicit: activation
-// and deactivation should each be a visible diff.
+// rest of the file byte for byte -- both directions are explicit so each is
+// a visible diff.
 func SetActive(path string, active bool) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -189,9 +182,9 @@ func SetActive(path string, active bool) error {
 	return os.WriteFile(path, out, 0o644)
 }
 
-// WithActive returns routine markdown with an explicit active field, preserving
-// every other byte. Installers use it before a routine becomes visible so an
-// active-by-default source can never race a live supervisor.
+// WithActive returns routine markdown with an explicit active field,
+// preserving every other byte. Installers use it before a routine becomes
+// visible so an active-by-default source can never race a live supervisor.
 func WithActive(raw []byte, active bool) ([]byte, error) {
 	text := string(raw)
 	if !strings.HasPrefix(text, "---\n") {
@@ -218,12 +211,9 @@ func WithActive(raw []byte, active bool) ([]byte, error) {
 }
 
 // Error is a load failure attributed to the routine it concerns: the file
-// that would not parse, or the name two files collide on. Attribution is what
-// keeps one broken file from being everyone's problem -- a run of a healthy
-// routine can tell that the error belongs to someone else. Path names the
-// file when the failure is about one, since a name alone does not say which
-// of routines/ and .openroutines/plugins/*/routines/ the failure is in -- and two plugins
-// shipping the same broken filename would otherwise be indistinguishable.
+// that would not parse, or the name two files collide on. Attribution keeps
+// one broken file from being everyone's problem -- a healthy routine's run
+// can tell the error belongs to someone else.
 type Error struct {
 	Name string // the routine the failure is about
 	Path string // the file it is about; "" when the failure is about two (a collision)
@@ -241,10 +231,10 @@ func (e *Error) Unwrap() error { return e.Err }
 
 // Concerns reports whether one LoadAgent error stands between the caller and
 // routine name. An error attributed to another routine does not; an
-// unattributed one (an unreadable plugins directory, which could be hiding
-// this very routine) concerns everyone -- fail closed. Pass a single error,
-// never an errors.Join: attribution would match whichever error joined first,
-// whatever name it is about.
+// unattributed one (e.g. an unreadable plugins directory, which could be
+// hiding this routine) concerns everyone -- fail closed. Pass a single
+// error, never an errors.Join, which would match whichever joined error came
+// first regardless of the name it's about.
 func Concerns(err error, name string) bool {
 	if err == nil {
 		return false
@@ -275,8 +265,6 @@ func LoadDir(dir string) ([]*Routine, []error) {
 		path := filepath.Join(dir, e.Name())
 		r, err := Parse(path)
 		if err != nil {
-			// The filename is the identity, so a file that will not parse
-			// still says which routine it is about.
 			errs = append(errs, &Error{Name: strings.TrimSuffix(e.Name(), ".md"), Path: path, Err: err})
 			continue
 		}
@@ -287,12 +275,11 @@ func LoadDir(dir string) ([]*Routine, []error) {
 }
 
 // LoadPlugins reads every installed plugin's routines. Names are global
-// identities across plugins, so duplicates are errors.
-//
-// The returned list contains every parseable claim, including duplicate
-// names. LoadAgent applies precedence and drops broken identities; plugin
-// installation uses the unfiltered claims to prevent two plugins from sharing
-// a name even when an agent-owned routine shadows both.
+// identities across plugins, so duplicates are errors. The returned list
+// includes every parseable claim, including duplicates: LoadAgent applies
+// precedence and drops broken identities, while plugin installation uses the
+// unfiltered claims to catch two plugins sharing a name even when an
+// agent-owned routine shadows both.
 func LoadPlugins(root string) ([]*Routine, []error) {
 	var routines []*Routine
 	var errs []error
@@ -322,11 +309,10 @@ func LoadPlugins(root string) ([]*Routine, []error) {
 
 // LoadAgent reads agent-owned routines plus every installed plugin's
 // routines. An agent-owned filename shadows the same filename from plugins;
-// duplicate names across plugins remain errors.
-//
-// Every routine it returns is one a caller may run: a name any attributed
-// error is about is dropped from the list. An invalid agent-owned file still
-// claims its name, so a plugin routine cannot silently take over for it.
+// duplicate names across plugins remain errors. Every routine it returns is
+// one a caller may run: a name any attributed error is about is dropped, and
+// an invalid agent-owned file still claims its name so a plugin routine
+// can't silently take over for it.
 func LoadAgent(root string) ([]*Routine, []error) {
 	routines, errs := LoadDir(filepath.Join(root, "routines"))
 	claimed := map[string]bool{}
@@ -373,16 +359,16 @@ func LoadAgent(root string) ([]*Routine, []error) {
 }
 
 // ErrNotFound is the one Find failure that means the name is free. Every
-// other one means the name is spoken for by something the agent could not
-// read -- which a caller about to write the file needs to tell apart.
+// other error means the name is spoken for by something the agent couldn't
+// read.
 var ErrNotFound = errors.New("no routine")
 
 // Find returns one globally named routine from an agent repository.
 func Find(root, name string) (*Routine, error) {
 	routines, errs := LoadAgent(root)
-	// A routine that failed to load is missing from the list; reporting it as
-	// "no routine" would send the reader looking for a file that is right
-	// there. Report why it is not loadable instead.
+	// A routine that failed to load is missing from the list; report why
+	// instead of "no routine", which would send the reader looking for a
+	// file that's right there.
 	for _, err := range errs {
 		if Concerns(err, name) {
 			return nil, err

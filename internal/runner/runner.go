@@ -1,12 +1,8 @@
 // Package runner executes one routine attempt: the per-run pipeline shared by
-// `openroutines routines run` and the supervisor.
-//
-// The pipeline (design decision "Appendix: one run, end to end"): assemble a
-// disposable run workspace (repo files plus a staged copy of knowledge, no git
-// metadata anywhere), generate the opencode agent definition granting only
-// declared skills, construct a clean environment holding only declared
-// credentials, spawn headless opencode in its own process group with a
-// timeout, then let the caller validate-and-import knowledge or discard it.
+// `openroutines routines run` and the supervisor. Stage assembles a disposable
+// workspace and a clean environment, Run spawns headless opencode, Settle
+// imports or discards staged knowledge (design decision "Appendix: one run,
+// end to end").
 package runner
 
 import (
@@ -79,19 +75,13 @@ type ExecResult struct {
 }
 
 // authFailurePattern matches provider authentication errors in the session
-// record's failure text. A bad or missing API key otherwise reports as a
-// bare "crashed" -- and in production burns five attempts and trips the
-// circuit breaker before a human learns the cause was configuration. The
-// `error:` forms cover a provider's bare status text passed through
-// verbatim ("... ended on an error: Unauthorized"), which carries no
-// key-shaped phrase to match on.
+// record's failure text, so a bad key reads as configuration instead of an
+// opaque crash. The `error:` forms cover bare status text passed through
+// verbatim ("... ended on an error: Unauthorized").
 var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key|error:\s*unauthorized|invalid bearer token`)
 
-// authHint names what the framework knows about an authentication failure
-// and the provider's own message does not say: the provider it resolved,
-// the endpoint when opencode.json declares one, and the credential the run
-// injected -- or that none was. Without these, a bare "Unauthorized" sends
-// the investigation outside the framework entirely.
+// authHint adds what the provider's own message does not say: the resolved
+// provider, the declared endpoint, and whether a credential was injected.
 func authHint(dir, model string, injected bool) string {
 	provider := strings.SplitN(model, "/", 2)[0]
 	keyName := creds.ProviderKeyName(provider)
@@ -107,11 +97,9 @@ func authHint(dir, model string, injected bool) string {
 	return fmt.Sprintf("provider authentication failed -- %s rejected the request and no %s credential is stored (openroutines credentials set %s)", endpoint, keyName, keyName)
 }
 
-// ErrFatal marks a start failure that no retry can fix: the next attempt
-// would fail identically, so a caller spending a retry budget should give up
-// now and let a person read the error. Classification lives here because the
-// runner is what assembles the run and knows why it could not; the supervisor
-// only asks whether the failure it was handed is one of these.
+// ErrFatal marks a start failure no retry can fix; a caller spending a retry
+// budget should give up now. The runner classifies because it assembled the
+// run; the supervisor only asks.
 var ErrFatal = errors.New("not retryable")
 
 // ErrAttemptCleanup marks a workspace that was not proven discarded. The
@@ -122,10 +110,9 @@ var ErrAttemptCleanup = errors.New("attempt workspace cleanup failed")
 // Staging is the attempt's staged knowledge, awaiting import or discard.
 type Staging struct {
 	KnowledgeDir string
-	// BaseDir is the pristine copy of the snapshot the run started from --
-	// supervisor-owned, outside the workspace the run can reach. The import
-	// diffs staged knowledge against it, so concurrent runs' settlements
-	// compose instead of clobbering each other.
+	// BaseDir is the pristine snapshot the run started from, outside the
+	// run's reach; the import diffs staged knowledge against it so
+	// concurrent settlements compose.
 	BaseDir   string
 	workspace string
 	// attemptUID is set when the workspace was prepared for an attempt
@@ -143,18 +130,13 @@ type Staging struct {
 	ConsumerFirstRun bool
 }
 
-// Cleanup discards the whole run workspace, staging and base included. The
-// shim's umask keeps model-created files group-accessible, but umask only
-// removes bits: a model process can still chmod its own files 0600 or 0700,
-// which the capability-less supervisor cannot delete. When that happens the
-// attempt identity itself is asked to reopen its tree, so a leftover cannot
-// outlive the run and be read by the identity's next assignee.
+// Cleanup discards the whole run workspace, staging and base included. A
+// model process can chmod its own files away from the group, so removal may
+// need the attempt identity's own help (see removeAttemptTree).
 func (s *Staging) Cleanup() error {
 	if s.attemptUID != 0 {
-		// Kill anything still carrying the identity before touching the
-		// tree: an escaped descendant could otherwise race the removal,
-		// re-closing or recreating paths behind it. The slot owner reaps
-		// again before reuse; this pass makes the removal itself trustworthy.
+		// Kill anything still carrying the identity first: an escaped
+		// descendant could otherwise race the removal.
 		if err := sandbox.ReapIdentity(s.attemptUID); err != nil {
 			return fmt.Errorf("%w: reap uid %d before removal: %w", ErrAttemptCleanup, s.attemptUID, err)
 		}
@@ -170,11 +152,9 @@ func (s *Staging) Cleanup() error {
 	return nil
 }
 
-// Consumed reports whether the routine created the consume marker: its
-// explicit claim to have covered the whole injected change set. The canonical
-// location is the staged knowledge directory -- the one workspace path the
-// filesystem sandbox leaves writable; the workspace root is still accepted
-// for unsandboxed runs.
+// Consumed reports whether the routine created the consume marker. The staged
+// knowledge directory is canonical (the one sandbox-writable workspace path);
+// the workspace root is still accepted for unsandboxed runs.
 func (s *Staging) Consumed() bool {
 	if _, err := os.Stat(filepath.Join(s.KnowledgeDir, knowledge.ConsumeMarker)); err == nil {
 		return true
@@ -220,11 +200,9 @@ func EffectiveModel(agent *config.Agent, r *routine.Routine) (string, error) {
 	return model, nil
 }
 
-// EffectiveTimeout is what an attempt actually gets: the declared timeout
-// under the agent-wide ceiling (max_timeout in openroutines.yml). The cap is
-// applied here rather than left to `check`, because the ceiling is the
-// agent's guard against a runaway run burning tokens for a day -- a spend
-// property cannot rest on a command the operator may never run.
+// EffectiveTimeout is the declared timeout capped by the agent's max_timeout
+// ceiling -- applied here, not in `check`: a spend guard cannot rest on a
+// command the operator may never run.
 func EffectiveTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 	return min(DeclaredTimeout(agent, r), agent.MaxRunTimeout())
 }
@@ -236,10 +214,8 @@ func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 	return timeout
 }
 
-// declaredTimeout is DeclaredTimeout plus the raw value that failed to
-// parse, if any -- "" when every declared value parsed clean. Split out so
-// Stage can warn about the value it silently dropped without duplicating
-// the resolution order.
+// declaredTimeout also reports the raw value that failed to parse, "" when
+// every declared value parsed clean, so Stage can warn about what it dropped.
 func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Duration, badValue string) {
 	timeout = 5 * time.Minute
 	for _, t := range []string{agent.Defaults.Timeout, r.FM.Timeout} {
@@ -255,13 +231,10 @@ func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Dura
 	return timeout, badValue
 }
 
-// StagedRun is a fully prepared attempt: credentials resolved, workspace
-// built, knowledge snapshotted, changes and schedule written -- everything that
-// reads the knowledge worktree or supervisor-owned state is done by the time
-// Stage returns. Run spawns the model process and waits, touching neither
-// again, which is what lets attempts execute in parallel while staging and
-// settlement stay serialized behind the supervisor's knowledge lock (design
-// decision "Overlap").
+// StagedRun is a fully prepared attempt: everything that reads the knowledge
+// worktree or supervisor-owned state happens in Stage, and Run touches
+// neither -- which is what lets attempts execute in parallel while staging
+// and settlement serialize behind the knowledge lock.
 type StagedRun struct {
 	dir       string
 	r         *routine.Routine
@@ -276,9 +249,7 @@ type StagedRun struct {
 	ocArgs    []string
 
 	// echo, when set, receives the run's scrubbed stdout live -- the manual
-	// `routines run` terminal. The supervisor never sets it: run output is
-	// never log lines (design decision "Run history: opencode's log passed
-	// through, sessions exported").
+	// `routines run` terminal. The supervisor never sets it.
 	echo io.Writer
 }
 
@@ -290,17 +261,14 @@ func (sr *StagedRun) Discard() error {
 }
 
 // attemptHomeName is the disposable per-attempt home inside the run
-// workspace. Production created it for sandbox hygiene (alpha.22); local
-// container runs point HOME here too, which is what keeps the attempt's
-// session data readable after the container exits.
+// workspace: sandbox hygiene in production, and what keeps session data
+// readable after a local run's container exits.
 const attemptHomeName = ".home"
 
 // Stage prepares one attempt without spawning anything. mu is the caller's
-// knowledge lock, held only around the section that reads the knowledge worktree
-// and supervisor-owned state -- credential resolution can spend seconds on
-// the network (a github_app derivation is two HTTPS round trips) and must
-// not hold up every other attempt's settlement. On error, everything Stage
-// acquired -- derived credentials, the workspace -- is already released.
+// knowledge lock, held only around the worktree reads -- credential
+// resolution can spend seconds on the network. On error, everything Stage
+// acquired is already released.
 func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (stagedRun *StagedRun, err error) {
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && meta.AttemptUID == 0 {
 		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
@@ -317,10 +285,8 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	if timeout != declared {
 		r.Log().Warn("declared timeout capped by max_timeout", "run_id", meta.RunID, "declared", declared, "effective", timeout)
 	}
-	// The harness config is parsed from the agent repository, not the
-	// workspace copy buildWorkspace makes later: MCP permission rules must
-	// never depend on pipeline ordering to see the server list. A file
-	// opencode could not parse fails the attempt here, before anything runs.
+	// Parsed from the agent repository, not the workspace copy made later:
+	// MCP permission rules must not depend on pipeline ordering.
 	oc, err := config.LoadOpenCode(dir)
 	if err != nil {
 		return nil, err
@@ -361,11 +327,9 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	if err := applyDeclaredMCP(workspace, r.FM.MCP); err != nil {
 		return nil, err
 	}
-	// The worktree-reading section, under the caller's knowledge lock: the
-	// snapshot and cursor an attempt starts from must never be a
-	// settlement-in-progress halfway through writing. One read of the
-	// worktree becomes both the run's working copy and the import's
-	// pristine base: snapshot into the base, clone the base into staging.
+	// Under the knowledge lock: one worktree read becomes both the run's
+	// working copy and the import's pristine base, never a
+	// settlement-in-progress halfway through writing.
 	if err := func() error {
 		mu.Lock()
 		defer mu.Unlock()
@@ -427,10 +391,9 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor)
 	}
 	if r.FM.Websearch {
-		// The websearch tool only registers when a search backend is enabled;
-		// the permission rule in the generated definition is the actual gate.
-		// Exa works keyless; a granted exa_api_key credential lands as
-		// EXA_API_KEY, which the backend picks up for keyed use.
+		// Registers the search backend; the permission rule in the generated
+		// definition is the actual gate. Exa works keyless, and a granted
+		// exa_api_key lands as EXA_API_KEY for keyed use.
 		env = append(env, "OPENCODE_ENABLE_EXA=1")
 	}
 	if meta.CoveredThrough != "" {
@@ -448,10 +411,8 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		env = append(env, strings.ToUpper(k)+"="+agent.Variables[k])
 	}
 
-	// The opencode invocation is identical across spawn paths. opencode
-	// keeps its own diagnostic log at the level this process already runs
-	// at and prints it to stderr, where Run passes it into the log stream.
-	// Its --log-level flag takes the same four names slog renders.
+	// Identical across spawn paths. opencode's --log-level takes the same
+	// four names slog renders.
 	ocArgs := []string{
 		"--print-logs", "--log-level=" + logging.Level.Level().String(),
 		"run", "--agent", "routine", "-m", model,
@@ -503,9 +464,8 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		}
 	}()
 
-	// An unattended run is asked for JSON events (see the stderr comment
-	// below); a manual run keeps opencode's default rendering for the
-	// human watching it.
+	// Unattended runs get JSON events; a manual run keeps opencode's default
+	// rendering for the human watching it.
 	if sr.echo == nil {
 		ocArgs = append(slices.Clip(ocArgs), "--format", "json")
 	}
@@ -515,16 +475,10 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 		return nil, nil, err
 	}
 	cmd := oc.run(ocArgs)
-	// stderr carries opencode's diagnostic log (--print-logs): each line
-	// passes through to the log stream with the attempt's identity
-	// appended, scrubbed first -- and with it every failure's diagnostics,
-	// so a failed attempt is never invisible. stderr also carries the run's
-	// rendered progress -- banner, tool traces, echoed tool output -- unless
-	// the run is asked for JSON events instead, so an unattended run asks:
-	// run output must not masquerade as log lines, and its record is the
-	// session, not the stream (design decision "Run history: opencode's log
-	// passed through, sessions exported"). A watched manual run keeps the
-	// rendering -- that is the one place run output reaches a person.
+	// stderr carries opencode's diagnostic log, passed through scrubbed with
+	// the attempt's identity appended -- a failed attempt is never
+	// invisible. It also carries rendered run progress unless JSON events
+	// were asked for; run output must not masquerade as log lines.
 	oclog := logging.NewPassthrough(slog.String("routine", r.Name), slog.String("run_id", meta.RunID))
 	errOut := scrub.NewWriter(oclog)
 	cmd.Stderr = errOut
@@ -560,11 +514,9 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 				res.ExitCode = -1
 			}
 		}
-		// The model process is gone, but a descendant it detached from its
-		// stdio is not: it outlives the attempt in the supervisor's own
-		// container and keeps writing to staged knowledge while the pipeline
-		// validates and imports it. The attempt ends with everything it
-		// spawned whichever way it ended.
+		// A detached descendant could outlive the attempt and keep writing
+		// to staged knowledge while the pipeline imports it -- the attempt
+		// ends with everything it spawned.
 		oc.reap(cmd)
 	case <-time.After(timeout):
 		res.Outcome = Timeout
@@ -581,10 +533,8 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	oclog.Flush()
 	res.Model = model
 	res.Effort = r.FM.Effort
-	// Exit code alone is too weak a success signal for an agentic runtime:
-	// opencode exits 0 on a session whose agent loop died mid-turn. The
-	// session record is what says whether the run actually finished (design
-	// decision "A run is completed only when its session ended cleanly").
+	// opencode exits 0 even when its agent loop died mid-turn; the session
+	// record decides whether the run actually finished.
 	sessions, fetchErr := fetchSessions(oc.exec, attemptLog)
 	capture := captureSessions(sessions, fetchErr, attemptLog)
 	res.Usage = capture.Usage
@@ -602,9 +552,8 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	return res, staging, nil
 }
 
-// RehearsalFileName is the fixture document injected into a rehearsal
-// run's workspace; rehearsalPreamble frames it, prepended to the routine's
-// own prompt so the rules stay the routine's and only the world is swapped.
+// RehearsalFileName is the fixture document injected into a rehearsal run's
+// workspace.
 const RehearsalFileName = "rehearsal.md"
 
 const fixturePreamble = `REHEARSAL RUN, fixture world. The fixtures in ./rehearsal.md replace
@@ -617,10 +566,9 @@ below exactly, against the fixtures.
 
 `
 
-// livePreamble governs a rehearsal with no fixtures: the real world,
-// read-only by instruction. The routine keeps its grants so its reads
-// work; the restraint is asked of the model, not enforced -- the enforced
-// part is that nothing settles.
+// livePreamble governs a rehearsal with no fixtures: grants stay so reads
+// work, the read-only restraint is asked of the model rather than enforced --
+// the enforced part is that nothing settles.
 const livePreamble = `REHEARSAL RUN, live world. Read anything this routine normally reads --
 your credentials and tools are present -- but treat every external
 action as read-only and idempotent: write nothing, post nothing, change
@@ -631,14 +579,11 @@ Follow the routine below exactly, under these restraints.
 
 `
 
-// Run executes routine `name` manually. skipKnowledge discards staged knowledge
-// writes and the run record after the otherwise ordinary run completes.
-// rehearse runs the routine as a rehearsal: with fixture (a path), every
-// grant is stripped and the fixture is the world; without one, grants stay
-// and the world is real, read-only by instruction. Either way knowledge is
-// always discarded.
-// Inside the production container a manual run reserves the manual attempt
-// identity first, so it can never share a uid with a supervisor slot.
+// Run executes routine `name` manually. skipKnowledge discards staged writes
+// and the run record; rehearse runs against the fixture (grants stripped) or
+// the live world (read-only by instruction), always discarding knowledge.
+// In the production container a manual run reserves the manual attempt
+// identity, so it can never share a uid with a supervisor slot.
 func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result *Result, err error) {
 	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01", Rehearsal: fixture}
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
@@ -660,10 +605,8 @@ func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result
 	if rehearse {
 		rr := *r
 		if fixture != "" {
-			// The routine keeps its rules; the fixture swaps its world.
 			// Grants are stripped at the source so the existing pipeline
-			// enforces the absence: no credentials resolve, no MCP servers
-			// mount, the generated definition denies skills and web access.
+			// enforces the absence.
 			rr.FM.Credentials = nil
 			rr.FM.MCP = nil
 			rr.FM.Skills = nil
@@ -671,17 +614,14 @@ func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result
 			rr.FM.Websearch = false
 			rr.Body = fixturePreamble + r.Body
 		} else {
-			// Live rehearsal: the real world, read-only by instruction.
 			rr.Body = livePreamble + r.Body
 		}
 		r = &rr
 		skipKnowledge = true
 	}
-	// One attempt per routine at a time (design decision "Overlap"), held for
-	// the whole lifecycle -- snapshot through import and settlement. The
-	// supervisor takes this same lock, which is exactly what it is for: a
-	// manual run colliding with the supervisor's own run of the same routine
-	// would double external actions and race the import.
+	// One attempt per routine at a time, held snapshot through settlement --
+	// the same lock the supervisor takes, so a manual run cannot double the
+	// supervisor's own run of this routine.
 	release, err := lock.Take(dir, name)
 	if errors.Is(err, lock.ErrLocked) {
 		return nil, fmt.Errorf("routine %s already has an attempt in flight (the supervisor or another terminal holds its lock) -- skipped", name)
@@ -690,11 +630,8 @@ func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result
 		return nil, err
 	}
 	defer release()
-	// A supervisor may be settling runs into the same knowledge worktree
-	// beside this process -- in the production container always, on a host
-	// whenever `supervise` runs locally. Staging snapshots and settlement each
-	// take their turn behind the same lock the supervisor's own critical
-	// sections hold.
+	// A supervisor may be settling runs into the same worktree beside this
+	// process; snapshot and settlement take turns behind its lock.
 	memLock, err := lock.Locker(dir, "knowledge")
 	if err != nil {
 		return nil, err
@@ -703,8 +640,7 @@ func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result
 	if err != nil {
 		return nil, err
 	}
-	// The interactive path: the run's scrubbed output echoes to the terminal
-	// as it streams; the supervisor's staged runs stay silent.
+	// Echo the run's scrubbed output to the terminal as it streams.
 	sr.echo = os.Stdout
 	exec, staging, err := sr.Run(context.Background())
 	if err != nil {
@@ -732,24 +668,17 @@ type Settlement struct {
 	Detail    string  // the failure description recorded; "" for clean completions
 	Discarded bool    // staged events.md change discarded (teamwork: off)
 	Commit    string  // settlement commit hash, "" when nothing changed
-	// Conflicted names files where this run and a concurrently settled run
-	// edited the same lines: the import kept both sides (union merge), and
-	// somebody should be able to see that it happened.
+	// Conflicted names files a concurrently settled run also edited; the
+	// staged competitor was quarantined for a person to resolve.
 	Conflicted []knowledge.Conflict
 }
 
-// Settle makes one attempt's end durable in knowledge -- the single settlement
-// path for manual and scheduled runs. A completed attempt's staged knowledge is
-// imported under routine policy and its consumer cursor advanced; a rejected
-// import downgrades the outcome to Crashed. Any failure is recorded as an
-// event, every attempt as a run record, and the whole settlement commits as
-// one knowledge commit. stage, when set, runs before that commit so caller
-// bookkeeping (scheduling state, abandonment tasks) rides the same commit.
-// detail overrides the derived failure description -- for attempts that
-// failed before producing a result; raw error text is fine, the append seam
-// redacts what it records. A Canceled attempt
-// gets only its run record: nothing settled -- the same logical run retries
-// -- and no commit of its own (the shutdown commit carries the record).
+// Settle makes one attempt's end durable in knowledge -- the single
+// settlement path for manual and scheduled runs. A rejected import downgrades
+// the outcome to Crashed. stage, when set, runs before the settlement commit
+// so caller bookkeeping rides the same commit. detail overrides the derived
+// failure description. A Canceled attempt gets only its run record and no
+// commit of its own -- the same logical run retries.
 func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, meta Meta, detail string, stage func(*Settlement)) (*Settlement, error) {
 	mem := knowledge.At(dir)
 	s := &Settlement{Outcome: res.Outcome, Detail: detail}
@@ -799,10 +728,9 @@ func parseAttempt(attemptID string) int {
 	return n
 }
 
-// importKnowledge applies routine-level knowledge policy, then imports the staged
-// tree. A routine with teamwork: off cannot record events: a staged change
-// to events.md is discarded -- the worktree copy wins, the rest of the tree
-// imports normally. Reports whether such a change was discarded.
+// importKnowledge applies routine-level policy, then imports the staged tree:
+// teamwork: off discards a staged events.md change, the rest imports
+// normally. Reports whether such a change was discarded.
 func importKnowledge(dir string, r *routine.Routine, staging *Staging) (discarded bool, conflicted []knowledge.Conflict, err error) {
 	mem := knowledge.At(dir)
 	if !r.FM.RecordsEvents() {
@@ -814,11 +742,9 @@ func importKnowledge(dir string, r *routine.Routine, staging *Staging) (discarde
 	return discarded, conflicted, err
 }
 
-// prepareChanges fixes the delivery boundary at the knowledge branch's current
-// commit, renders every change since the routine's cursor into changes.md in
-// the workspace, and returns the fixed `through` commit. A reporting routine
-// with no cursor starts at the current state: nothing to replay, first
-// consume initializes the cursor.
+// prepareChanges fixes the delivery boundary at the knowledge branch's
+// current commit and renders the change set since the routine's cursor into
+// the workspace. No cursor means first run: nothing to replay.
 func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
 	mem := knowledge.At(dir)
 	through, err := mem.Head()
@@ -845,12 +771,10 @@ func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
 	return through, firstRun, os.WriteFile(filepath.Join(workspace, knowledge.ChangesFileName), []byte(rendered), 0o644)
 }
 
-// advanceConsumer moves a reporting routine's cursor through the change set
-// it just consumed. Runs after a successful import, before the completion
-// commit, so consumption and results land in the same commit. The one
-// exception to the marker rule is a successful first run: its change set is
-// empty by construction, so completion establishes the starting cursor and
-// prevents every later run from being mistaken for another first run.
+// advanceConsumer moves a reporting routine's cursor after a successful
+// import, before the completion commit, so consumption and results land
+// together. Exception to the marker rule: a successful first run's change set
+// is empty by construction, so completion establishes the starting cursor.
 func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID string) {
 	if !r.FM.Reports || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
 		return
@@ -886,8 +810,7 @@ func recordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, man
 	if res.Effort != "" {
 		fields["effort"] = res.Effort
 	}
-	// Why a failed attempt failed belongs in the machine-readable log too,
-	// not only in the event: `status` and the check-in routine read this.
+	// `status` and the check-in routine read the hint from here.
 	if res.Hint != "" {
 		fields["hint"] = res.Hint
 	}
@@ -899,11 +822,9 @@ func recordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, man
 	return string(record)
 }
 
-// runSecrets is a run's resolved secret material: the exact environment to
-// inject, and cleanup for derived credentials (token revocation at attempt
-// end). Redaction needs no bookkeeping here -- resolving a credential
-// registers its value with the scrub registry at the point it is
-// materialized.
+// runSecrets is a run's resolved secret material: the environment to inject,
+// and cleanup for derived credentials. Redaction registers where values
+// materialize, not here.
 type runSecrets struct {
 	env     map[string]string
 	cleanup []func()
@@ -926,13 +847,10 @@ func (s *runSecrets) release() {
 }
 
 // resolveCredentials builds the routine's secret set: declared credentials
-// plus the auto-injected provider key for its model. A raw credential
-// injects verbatim under its uppercase name; a typed credential (see
-// design decision "Credentials have types") is derived by the trusted runner and
-// injects its type's surface -- the stored root secret never enters the run.
-// A resolve that fails releases whatever it already derived: the run it was
-// building never starts, so its material is dead the moment resolution is,
-// and no error path may be the one that forgets.
+// plus the provider key for its model. Raw credentials inject verbatim under
+// their uppercase name; typed ones inject their derived surface -- the stored
+// root secret never enters the run. A failed resolve releases whatever it
+// already derived.
 func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (_ *runSecrets, err error) {
 	provider := strings.SplitN(model, "/", 2)[0]
 	providerKey := creds.ProviderKeyName(provider)
@@ -986,15 +904,11 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 	return out, nil
 }
 
-// buildWorkspace assembles the run workspace by allow-list: exactly what a
-// run needs -- the configuration file, opencode.json, and routines/. Everything else a
-// run sees is staged deliberately by the pipeline: declared skills, the
-// knowledge snapshot, the delivery change set, the generated definition. A file not
-// on the list -- the encrypted credential store, a stray key, dev rules like
-// AGENTS.md -- does not exist in a run. (This replaced a deny-list that
-// missed exactly one entry, .openroutines/credentials.yml.enc; allow-lists don't have
-// that failure mode.) name is the routine being run -- whose errors are the
-// only ones that can fail assembly.
+// buildWorkspace assembles the run workspace by allow-list: the configuration
+// file, opencode.json, and routines/ -- everything else a run sees is staged
+// deliberately by the pipeline. (A deny-list once missed exactly one entry,
+// the encrypted credential store.) name is the routine being run, whose
+// errors are the only ones that can fail assembly.
 func buildWorkspace(dir, workspace, name string) error {
 	for _, file := range []string{filepath.Base(config.Path(dir)), config.OpenCodeFileName} {
 		raw, err := os.ReadFile(filepath.Join(dir, file))
@@ -1008,13 +922,8 @@ func buildWorkspace(dir, workspace, name string) error {
 			return err
 		}
 	}
-	// A file another routine owns is not this run's problem: an unparseable
-	// sibling is simply absent from the workspace, the same posture the
-	// supervisor's tick takes when it schedules around one. Only an error
-	// about this routine -- its own frontmatter, a name it collides on, or an
-	// unattributed one that could be hiding it -- fails the attempt. The tick
-	// never dispatches the first two (LoadAgent drops those names), so in
-	// practice this catches a manual run and the read failures nobody owns.
+	// An unparseable sibling is simply absent from the workspace; only an
+	// error concerning this routine fails the attempt.
 	routines, errs := routine.LoadAgent(dir)
 	for _, err := range errs {
 		if routine.Concerns(err, name) {
@@ -1048,8 +957,8 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 		}
 		found, err := skill.Find(dir, name)
 		if err != nil {
-			// Pass the real cause through: a duplicate global name reported
-			// as "not found" sends the reader to the wrong directory.
+			// Pass the real cause through -- a duplicate name is not "not
+			// found".
 			return fmt.Errorf("declared skill unavailable: %w", err)
 		}
 		src := found.Dir
@@ -1083,15 +992,9 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 }
 
 // applyDeclaredMCP rewrites the workspace's opencode.json so its mcp block
-// holds only the servers the routine declared. Enforcement is unchanged -- the
-// generated definition's deny rules and the withheld credentials close an
-// ungranted server's surface either way; removing the entry keeps the run's
-// opencode from contacting the server at all, so an ungranted run neither
-// probes a remote endpoint it holds no credential for nor logs that
-// endpoint's needs_auth refusal. A config without an mcp block, or a run
-// granted every configured server, travels byte-for-byte as written. Raw JSON
-// values keep unrelated configuration from passing through interface{} and
-// losing its original scalar representation while the block is filtered.
+// holds only the declared servers. The deny rules already close ungranted
+// surfaces; removing the entry keeps the run's opencode from contacting the
+// server at all. Raw JSON values keep unrelated configuration byte-exact.
 func applyDeclaredMCP(workspace string, granted []string) error {
 	path := filepath.Join(workspace, config.OpenCodeFileName)
 	raw, err := os.ReadFile(path)
@@ -1140,10 +1043,8 @@ func applyDeclaredMCP(workspace string, granted []string) error {
 	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
-// The standing instruction lives in instruction.md -- editable prose,
-// compiled into the binary. Dynamic values and the conditional blocks
-// (event recording, delivery changes) render through text/template;
-// the permission frontmatter stays code-generated because rule order is
+// The standing instruction: editable prose compiled into the binary. The
+// permission frontmatter stays code-generated because rule order is
 // load-bearing.
 //
 //go:embed instruction.md
@@ -1177,11 +1078,10 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 	return os.WriteFile(filepath.Join(dir, "routine.md"), []byte(def), 0o644)
 }
 
-// renderDefinition generates the opencode agent for this run: default-deny
-// skills with the routine's declared skills allowed, an explicit rule per
-// configured MCP server (servers is the agent's opencode.json server list --
-// passed in, so rule generation can never silently see an empty config), and
-// the standing instruction that frames knowledge as records, never instructions.
+// renderDefinition generates the run's opencode agent: default-deny skills,
+// an explicit rule per configured MCP server (servers is passed in so rule
+// generation can never silently see an empty config), and the standing
+// instruction.
 func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string, meta Meta) (string, error) {
 	var b strings.Builder
 	b.WriteString("---\n")
@@ -1189,9 +1089,7 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	b.WriteString("mode: primary\n")
 	b.WriteString("permission:\n")
 	// Web access is a grant, not a default: opencode allows webfetch out of
-	// the box, and fetched content is model context -- a prompt-injection
-	// vector. Both web tools get an explicit rule every run, deny unless the
-	// routine's frontmatter opts in.
+	// the box, and fetched content is a prompt-injection vector.
 	for _, w := range []struct {
 		tool    string
 		granted bool
@@ -1202,10 +1100,8 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 		}
 		fmt.Fprintf(&b, "  %s: %s\n", w.tool, action)
 	}
-	// MCP servers are grants too: a configured server's tools reach a run
-	// only when the routine's frontmatter names the server. opencode
-	// registers MCP tools as <server>_<tool>, so one glob per configured
-	// server closes or opens its whole surface.
+	// opencode registers MCP tools as <server>_<tool>, so one glob per
+	// configured server closes or opens its whole surface.
 	for _, server := range servers {
 		action := "deny"
 		if slices.Contains(r.FM.MCP, server) {
@@ -1236,17 +1132,14 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	return b.String(), nil
 }
 
-// RenderDefinition generates a routine's opencode agent definition exactly
-// as a run would, without running anything. check uses it to validate
-// routine wiring -- frontmatter through generated definition, MCP rules
-// included -- offline, with no provider key and no Docker.
+// RenderDefinition generates a routine's agent definition exactly as a run
+// would, without running anything -- check validates wiring with it offline.
 func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string) (string, error) {
 	return renderDefinition(agent, r, servers, Meta{RunID: "run_check", AttemptID: "attempt_00"})
 }
 
-// variablesLine renders the agent's variable names for the standing
-// instruction ("$PRODUCT_REPO, $DOCS_URL"), so the model knows they exist
-// without probing the environment.
+// variablesLine renders the agent's variable names ("$PRODUCT_REPO,
+// $DOCS_URL") for the standing instruction.
 func variablesLine(agent *config.Agent) string {
 	names := slices.Sorted(maps.Keys(agent.Variables))
 	for i, n := range names {
@@ -1256,29 +1149,18 @@ func variablesLine(agent *config.Agent) string {
 }
 
 // pipeDrainDeadline bounds how long waiting on the run's output pipes may
-// outlast the process itself. A grandchild that left the process group --
-// a tool that daemonized into its own session -- keeps the inherited pipe
-// open after the run is signaled and killed, and the wait for EOF would
-// otherwise never end: the supervisor would hang on a run it had already
-// terminated. On expiry the pipes are closed and what can be reaped is
-// reaped; the orphan lives on, but it no longer holds the tick loop.
+// outlast the process: a daemonized grandchild keeps the inherited pipe open
+// forever, and the wait for EOF must not hold the tick loop.
 const pipeDrainDeadline = 5 * time.Second
 
 // containerExitGrace is how long `docker run` gets to notice that its
 // container is gone before the client itself is killed.
 const containerExitGrace = 5 * time.Second
 
-// killClient ends a container run: `docker stop` has already been asked to
-// take the container down, so the client should follow it out. When it does
-// not -- an unresponsive daemon, a stop that timed out -- the client is
-// killed, because the alternative is the tick waiting on a docker CLI that
-// may never return. The container can outlive the run; a stuck daemon is the
-// operator's problem, but it must not become the supervisor's.
-//
-// Waiting for Wait to return is not optional: the caller flushes the stream
-// writers the output goroutines write to, so returning before Wait would
-// race them. The bound comes from making the process exit, not from walking
-// away.
+// killClient ends a container run after `docker stop` was asked to take the
+// container down: a client that does not follow it out is killed rather than
+// waited on forever. Waiting for Wait to return is not optional -- the caller
+// flushes the stream writers, and returning before Wait would race them.
 func killClient(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Logger) {
 	select {
 	case <-done:
@@ -1289,10 +1171,9 @@ func killClient(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.L
 	}
 }
 
-// signalTarget is the run's own process group, or the process alone when the
-// spawn path did not make it a group leader. Every spawn path that gets
-// signaled sets Setpgid today; the guard is there because signaling -pid
-// without it reaches the supervisor's own group and kills the supervisor.
+// signalTarget is the run's process group when it leads one. The guard
+// matters: signaling -pid without Setpgid would reach the supervisor's own
+// group.
 func signalTarget(cmd *exec.Cmd) int {
 	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
 		return -cmd.Process.Pid
@@ -1315,20 +1196,15 @@ func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Lo
 	}
 }
 
-// reapGroup kills what the model process left running after exiting on its
-// own. No grace period: the run is over, nothing left in the group has an
-// output anyone reads, and the pipeline is about to treat staging as final.
-// Unlike killGroup this runs after the leader has been waited on, so an
-// already-empty group's id could in principle have been recycled by then --
-// an accepted race: the alternative is leaving the descendant writing to
-// knowledge the supervisor is about to commit. The import re-checks staging at
-// open time and does not depend on this having worked (see knowledge.copyStaged).
+// reapGroup kills what the model process left running after exiting. It runs
+// after the leader was waited on, so the group id could in principle have
+// been recycled -- an accepted race; the import re-checks staging at open
+// time and does not depend on this having worked.
 func reapGroup(cmd *exec.Cmd) {
 	_ = syscall.Kill(signalTarget(cmd), syscall.SIGKILL)
 }
 
 func timestamp() string { return time.Now().UTC().Format(time.RFC3339) }
 
-// datestamp is the YYYY-MM-DD prefix event entries carry (see the events.md
-// seed); precise times live in runs.jsonl.
+// datestamp is the YYYY-MM-DD prefix event entries carry.
 func datestamp() string { return time.Now().UTC().Format("2006-01-02") }

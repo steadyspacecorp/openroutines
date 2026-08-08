@@ -30,9 +30,8 @@ const FileName = "openroutines.yml"
 // agents migrate on their own schedule; check nudges the rename.
 var LegacyFileNames = []string{"openroutines.yaml", "agent.yaml"}
 
-// Path returns the configuration file dir actually has: FileName when
-// present, the first legacy name that exists otherwise, FileName as the
-// fallback (the name a fresh write should create).
+// Path returns the configuration file dir actually has, falling back to
+// the first legacy name found, then FileName.
 func Path(dir string) string {
 	preferred := filepath.Join(dir, FileName)
 	if _, err := os.Stat(preferred); err == nil {
@@ -59,16 +58,17 @@ type Defaults struct {
 	Timeout string `yaml:"timeout"`
 }
 
-// DefaultMaxTimeout is the run-length ceiling when max_timeout is not set:
-// long enough for real work, short enough that a runaway run cannot burn
-// tokens for a day before anyone notices.
+// DefaultMaxTimeout is the run-length ceiling when max_timeout is not
+// set: long enough for real work, short enough that a runaway run cannot
+// burn tokens for a day before anyone notices.
 const DefaultMaxTimeout = 6 * time.Hour
 
 // ScaffoldConcurrency is the run-slot count the scaffold template writes
 // into new agents' openroutines.yml. Deliberately not a fallback the code
 // applies to agents that never wrote the key: every concurrent run is a
-// container plus live model spend, and an upgrade must not silently double
-// either -- an existing agent stays serial until its operator opts in.
+// container plus live model spend, and an upgrade must not silently
+// double either -- an existing agent stays serial until its operator
+// opts in.
 const ScaffoldConcurrency = 2
 
 // Knowledge holds knowledge-behavior settings; see design decision
@@ -78,12 +78,12 @@ type Knowledge struct {
 	Retention string `yaml:"retention,omitempty"`
 }
 
-// Agent is the parsed configuration file. Description is the agent's job description.
-// Variables are non-secret configuration values, injected into every run's
+// Agent is the parsed configuration file. Description is the agent's job
+// description. Variables are non-secret values injected into every run's
 // environment (product_repo -> PRODUCT_REPO); secrets belong in credentials.
-// Credentials is optional per-credential metadata: an entry gives a stored
-// credential a derived type (see design decision "Credentials have types"); a
-// credential without an entry is raw, injected verbatim.
+// Credentials is optional per-credential metadata giving a stored credential
+// a derived type (design decision "Credentials have types"); an entry-less
+// credential is raw, injected verbatim.
 type Agent struct {
 	Name        string                `yaml:"name"`
 	Description string                `yaml:"description"`
@@ -96,16 +96,16 @@ type Agent struct {
 	Variables   map[string]string     `yaml:"variables,omitempty"`
 	Credentials map[string]creds.Spec `yaml:"credentials,omitempty"`
 
-	// Memory is retired, replaced by Knowledge. It is parsed only so Load
-	// can reject it with the rename: strict decoding alone would call it
-	// an unknown field, which reads as a typo rather than the rename.
+	// Retired, replaced by Knowledge. Parsed only so Load can reject it
+	// with the rename: strict decoding alone would call it an unknown
+	// field, which reads as a typo rather than the rename.
 	Memory *Knowledge `yaml:"memory,omitempty"`
 }
 
 // MaxRunTimeout is the agent-wide ceiling on a single attempt's effective
-// timeout: max_timeout in the configuration file, DefaultMaxTimeout when
-// unset. An unparseable value falls back to the default -- Problems reports
-// it; execution must not fail open to unlimited.
+// timeout. An unparseable max_timeout falls back to DefaultMaxTimeout
+// rather than failing open to unlimited; Problems reports the bad value
+// separately.
 func (a *Agent) MaxRunTimeout() time.Duration {
 	if d, err := time.ParseDuration(a.MaxTimeout); err == nil && d > 0 {
 		return d
@@ -113,12 +113,9 @@ func (a *Agent) MaxRunTimeout() time.Duration {
 	return DefaultMaxTimeout
 }
 
-// RunSlots is how many routines may execute at once: concurrency in the
-// configuration file. Unset and 0 both mean serial -- parallelism is an
-// opt-in an agent writes down, and the scaffold template opts new agents in
-// at ScaffoldConcurrency. Problems flags a negative value; New refuses to
-// boot on any problem, so the fallback here is for surfaces that read a
-// broken config anyway (status, check).
+// RunSlots is how many routines may execute at once. Unset and 0 both
+// mean serial -- parallelism is an opt-in an agent writes down (the
+// scaffold template opts new agents in at ScaffoldConcurrency).
 func (a *Agent) RunSlots() int {
 	if a.Concurrency >= 1 {
 		return a.Concurrency
@@ -139,9 +136,9 @@ func (a *Agent) Retention() string {
 	return a.Knowledge.Retention
 }
 
-// Load reads the configuration file from dir (FileName, or a LegacyFileNames
-// fallback). Decoding is strict: a misspelled key is an error, not
-// silently ignored configuration.
+// Load reads the configuration file from dir (FileName, or a
+// LegacyFileNames fallback). Decoding is strict: a misspelled key is an
+// error, not silently ignored configuration.
 func Load(dir string) (*Agent, error) {
 	path := Path(dir)
 	raw, err := os.ReadFile(path)
@@ -161,11 +158,9 @@ func Load(dir string) (*Agent, error) {
 }
 
 // Save writes the configuration back to the file dir actually has -- a
-// legacy-named agent keeps its name until its operator renames it.
-// Two-space indentation, matching the scaffold template and routine
-// frontmatter: this is hand-edited, reviewed config, and a tool that
-// reformats it on every run undercuts that (#65) -- yaml.v3's default
-// is 4.
+// legacy-named agent keeps its name until its operator renames it. Uses
+// two-space indentation to match the scaffold template (yaml.v3 defaults
+// to 4, which would reformat this hand-edited file on every write, #65).
 func (a *Agent) Save(dir string) error {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
@@ -179,7 +174,7 @@ func (a *Agent) Save(dir string) error {
 	return os.WriteFile(Path(dir), buf.Bytes(), 0o644)
 }
 
-// isPlaceholder reports whether a value is still a {{SCAFFOLD}} placeholder.
+// Reports whether a value is still a {{SCAFFOLD}} placeholder.
 func isPlaceholder(s string) bool {
 	return strings.Contains(s, "{{")
 }

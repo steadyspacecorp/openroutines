@@ -15,8 +15,8 @@ import (
 
 const configureUsage = "usage: openroutines configure [--yes]"
 
-// cmdConfigure interactively fills in openroutines.yml, generates the master key,
-// and seeds encrypted credentials. Idempotent: existing values are defaults.
+// Interactively fills in openroutines.yml, generates the master key, and
+// seeds encrypted credentials. Idempotent: existing values are defaults.
 func cmdConfigure(args []string) int {
 	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--yes": {}})
 	if err != nil {
@@ -40,13 +40,11 @@ func cmdConfigure(args []string) int {
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
 	in := bufio.NewReader(os.Stdin)
 	// eofHit tracks whether stdin ran out mid-prompt: a script piping a
-	// complete set of answers (bin/smoke does exactly this) reads a real
-	// newline for every field and never sets it. An unfamiliar invocation
-	// with nothing on stdin -- the reflex against configure --help before
-	// --help was recognized (issue #67) -- hits EOF on the very first
-	// prompt, and every prompt after it would silently take its default:
-	// exactly the failure mode that generated a master key and wrote
-	// .openroutines/credentials.yml.enc unattended.
+	// complete set of answers reads a real newline for every field and never
+	// sets it. An invocation with nothing on stdin hits EOF on the first
+	// prompt, and every prompt after would silently take its default --
+	// exactly the failure mode that generated a key and wrote credentials
+	// unattended (issue #67).
 	eofHit := false
 	prompt := func(label, current string) string {
 		def := current
@@ -86,7 +84,7 @@ func cmdConfigure(args []string) int {
 	}
 	fmt.Printf("Wrote %s\n", config.FileName)
 
-	// Master key: generate once, never overwrite.
+	// Generate the master key once, never overwrite.
 	keyPath := filepath.Join(dir, creds.KeyFileName)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		if err := os.WriteFile(keyPath, []byte(creds.GenerateKey()+"\n"), 0o600); err != nil {
@@ -106,13 +104,12 @@ func cmdConfigure(args []string) int {
 		return fail(err)
 	}
 
-	// Offer to store the provider key for the default model.
 	provider := strings.SplitN(agent.Defaults.Model, "/", 2)[0]
 	providerKey := creds.ProviderKeyName(provider)
 	if _, ok := store[providerKey]; !ok {
-		// Hidden input: a pasted key must not land on screen or in
-		// terminal scrollback. Piped stdin still reads a line, so scripted
-		// configure keeps working.
+		// Hidden input: a pasted key must not land on screen or in terminal
+		// scrollback. Piped stdin still reads a line, so scripted configure
+		// keeps working.
 		var val string
 		if term.IsTerminal(int(os.Stdin.Fd())) {
 			fmt.Printf("%s API key (hidden; enter to skip): ", provider)
@@ -135,10 +132,10 @@ func cmdConfigure(args []string) int {
 	}
 	fmt.Printf("Wrote %s (%d credential(s))\n", creds.FileName, len(store))
 
-	// Report what's still missing rather than failing -- and never call the
-	// agent configured while its model has no way to authenticate: the
-	// first-run failure that causes is opaque (an opencode server error),
-	// and in production it burns retry attempts before anyone learns why.
+	// Report what's still missing rather than failing -- but never call the
+	// agent configured while its model has no way to authenticate: that
+	// failure surfaces later as an opaque opencode server error and burns
+	// retry attempts before anyone learns why.
 	problems := agent.Problems()
 	if _, ok := store[providerKey]; !ok {
 		problems = append(problems, fmt.Sprintf("provider authentication: the default model needs %s (openroutines credentials set %s)", providerKey, providerKey))

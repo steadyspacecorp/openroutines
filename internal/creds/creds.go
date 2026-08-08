@@ -26,22 +26,20 @@ const (
 	FileName         = ".openroutines/credentials.yml.enc"
 	EnvMasterKey     = "OPENROUTINES_MASTER_KEY"
 	EnvMasterKeyFile = "OPENROUTINES_MASTER_KEY_FILE"
-	header           = "ORV1:" // versioned format header
+	header           = "ORV1:"
 )
 
 // NamePattern constrains credential names: lowercase snake_case, so the
 // env-var mapping (slack_webhook -> SLACK_WEBHOOK) is always well-formed.
 var NamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// ReservedPrefix is never a valid credential name prefix: OPENROUTINES_* env
-// vars are framework metadata, never secrets.
+// ReservedPrefix is never a valid credential name prefix: OPENROUTINES_*
+// env vars are framework metadata, never secrets.
 const ReservedPrefix = "openroutines"
 
-// ReservedEnvName reports whether a credential or variable name would shadow
-// an environment variable the framework itself constructs for a run (TZ,
-// PATH, HOME, TMPDIR, XDG_*) or the dynamic-linker LD_* family -- a
-// credential named `ld_preload` would otherwise become LD_PRELOAD in the
-// model process.
+// ReservedEnvName reports whether a name would shadow an env var the
+// framework constructs for a run (TZ, PATH, HOME, TMPDIR, XDG_*) or the
+// dynamic-linker LD_* family -- e.g. `ld_preload` becoming LD_PRELOAD.
 func ReservedEnvName(name string) bool {
 	switch name {
 	case "tz", "path", "home", "tmpdir":
@@ -102,13 +100,11 @@ func LoadKey(dir string) ([]byte, error) {
 }
 
 // KeyValueInEnv reports whether the master key *value* is present in this
-// process's environment, which is the exposure worth naming: an environment
-// value is visible wherever the process environment is (platform
-// introspection, crash dumps, anything running as root), while a path leads
-// to a file outside the model sandbox. Deliberately not "which delivery did
-// LoadKey resolve" -- a deployment that moved to file delivery and left the
-// old variable set still publishes the value, so the variable being set at
-// all is the condition.
+// process's environment (visible to platform introspection, crash dumps,
+// anything running as root) rather than only reachable via a file path.
+// Checks the variable directly rather than which delivery LoadKey resolved,
+// since a deployment that switched to file delivery but left the old
+// variable set still exposes the value.
 func KeyValueInEnv() bool {
 	return os.Getenv(EnvMasterKey) != ""
 }
@@ -156,8 +152,8 @@ func open(key []byte, encoded string) ([]byte, error) {
 	return plaintext, nil
 }
 
-// Read decrypts and parses the credentials file. A missing file is an empty
-// store, not an error.
+// Read decrypts and parses the credentials file. A missing file is an
+// empty store, not an error.
 func Read(dir string, key []byte) (map[string]string, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, FileName))
 	if err != nil {
@@ -174,9 +170,8 @@ func Read(dir string, key []byte) (map[string]string, error) {
 	if err := yaml.Unmarshal(plaintext, &out); err != nil {
 		return nil, fmt.Errorf("credentials content: %w", err)
 	}
-	// The whole store is in knowledge the moment it is decrypted, so the whole
-	// store registers -- prefixed so an agent credential name can never
-	// collide with the master or deploy key entries.
+	// Prefixed so an agent credential name can never collide with the master
+	// or deploy key scrub entries.
 	values := make(map[string]string, len(out))
 	for name, v := range out {
 		values["credential "+name] = v
@@ -202,9 +197,9 @@ func Write(dir string, key []byte, values map[string]string) error {
 	return os.WriteFile(path, []byte(encoded+"\n"), 0o644)
 }
 
-// ProviderKeyName returns the reserved credential name for a model provider,
-// e.g. "anthropic" -> "anthropic_api_key". These are auto-injected per the
-// routine's declared model provider.
+// ProviderKeyName returns the reserved credential name for a model
+// provider, e.g. "anthropic" -> "anthropic_api_key". These are
+// auto-injected per the routine's declared model provider.
 func ProviderKeyName(provider string) string {
 	return provider + "_api_key"
 }

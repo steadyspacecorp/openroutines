@@ -16,7 +16,7 @@ const templateRoot = "template"
 
 const scaffoldUsage = "usage: openroutines scaffold <path>"
 
-// cmdScaffold stamps out a new agent repository from the embedded template.
+// Stamps out a new agent repository from the embedded template.
 func cmdScaffold(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {
@@ -69,13 +69,12 @@ func cmdScaffold(args []string) int {
 	}
 
 	// Claude Code reads CLAUDE.md, not AGENTS.md; a symlink keeps one source
-	// of truth, so update's AGENTS.md rewrites flow through it. Created here
-	// because go:embed refuses symlinks, so it cannot live in template/.
+	// of truth so update's AGENTS.md rewrites flow through it. Created here
+	// (not in template/) because go:embed refuses symlinks.
 	if err := os.Symlink("AGENTS.md", filepath.Join(target, "CLAUDE.md")); err != nil {
 		return fail(err)
 	}
 
-	// The version pin: this binary's version is what the agent runs against.
 	frameworkDir := filepath.Join(target, ".openroutines")
 	if err := os.MkdirAll(frameworkDir, 0o755); err != nil {
 		return fail(err)
@@ -84,9 +83,8 @@ func cmdScaffold(args []string) int {
 		return fail(err)
 	}
 
-	// A fresh agent is a fresh git repository, with the scaffold as its
-	// initial commit -- so configure's changes land as a reviewable diff
-	// and git log works from minute one.
+	// A fresh agent is a fresh git repo with the scaffold as its initial
+	// commit, so later changes land as a reviewable diff.
 	if out, err := exec.Command("git", "init", "--quiet", "--initial-branch=main", target).CombinedOutput(); err != nil {
 		return fail(fmt.Errorf("git init: %w: %s", err, out))
 	}

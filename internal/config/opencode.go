@@ -14,23 +14,22 @@ import (
 const OpenCodeFileName = "opencode.json"
 
 // OpenCode is the framework's read of opencode.json. The file is harness
-// config -- the permission policy, provider endpoint definitions, MCP server
-// definitions with transports and auth headers -- interpreted by opencode
-// alone. The framework never acts on those blocks; it reads names and shapes
-// only, to enforce per-routine grants and to flag configuration drift. The
-// zero value is the view of an agent with no opencode.json.
+// config -- permission policy, provider endpoints, MCP server definitions --
+// interpreted by opencode alone; the framework only reads names and shapes,
+// to enforce per-routine grants and flag configuration drift. The zero value
+// is the view of an agent with no opencode.json.
 type OpenCode struct {
 	cfg map[string]any
 
-	// Missing distinguishes an absent file from an empty one: absent means
-	// the scaffolded baseline policy is gone, which check warns about.
+	// Distinguishes an absent file from an empty one: absent means the
+	// scaffolded baseline policy is gone, which check warns about.
 	Missing bool
 }
 
 // LoadOpenCode parses dir's opencode.json. A missing file is an agent
-// without harness config -- an empty view, no error. An unparseable file is
-// an error: opencode itself could not load it, so every run would fail.
-// The returned view is always usable, empty on error.
+// without harness config -- an empty view, no error. An unparseable file
+// is an error: opencode itself could not load it, so every run would
+// fail. The returned view is always usable, empty on error.
 func LoadOpenCode(dir string) (*OpenCode, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, OpenCodeFileName))
 	if os.IsNotExist(err) {
@@ -46,10 +45,9 @@ func LoadOpenCode(dir string) (*OpenCode, error) {
 	return &OpenCode{cfg: cfg}, nil
 }
 
-// ProviderBaseURL returns the baseURL a provider block declares, or "" when
-// none does. Quoted in run diagnostics when that endpoint rejects a run's
-// credentials; quoting is not interpreting -- the endpoint definition stays
-// opencode's alone, and the framework never requests against it.
+// ProviderBaseURL returns the baseURL a provider block declares, or ""
+// when none does. Quoted in run diagnostics only -- the framework never
+// requests against it.
 func (o *OpenCode) ProviderBaseURL(id string) string {
 	providers, _ := o.cfg["provider"].(map[string]any)
 	entry, _ := providers[id].(map[string]any)
@@ -59,22 +57,19 @@ func (o *OpenCode) ProviderBaseURL(id string) string {
 }
 
 // MCPServers returns the names defined in the `mcp` block, sorted. The
-// entries themselves stay opaque -- the names are what grants reference and
-// what permission rules close over.
+// entries themselves stay opaque -- the names are what grants reference
+// and what permission rules close over.
 func (o *OpenCode) MCPServers() []string {
 	mcp, _ := o.cfg["mcp"].(map[string]any)
 	return slices.Sorted(maps.Keys(mcp))
 }
 
-// Drift returns warnings about framework concerns that have crept into the
-// harness's file. Model *choice* is framework config (the framework
-// interprets it for per-routine resolution and provider-key injection), so a
-// harness-side default model or anything else beyond the known blocks is
-// drift worth flagging (it has arrived via coding-agent sessions before) --
-// including a model pinned inside an agent override. Defined providers are
-// cross-checked against modelPrefixes, the providers referenced by
-// openroutines.yml defaults and routine frontmatter: an unreferenced id
-// usually means a typo on one side.
+// Drift returns warnings about framework concerns that have crept into
+// the harness's file. Model *choice* belongs to openroutines.yml and frontmatter,
+// so a harness-side default model (including one pinned inside an agent
+// override) or any block beyond the known set is drift worth flagging.
+// Defined providers are cross-checked against modelPrefixes, the providers
+// actually referenced by config: an unreferenced id usually means a typo.
 func (o *OpenCode) Drift(modelPrefixes []string) []string {
 	var warnings []string
 	for _, key := range slices.Sorted(maps.Keys(o.cfg)) {
@@ -101,9 +96,9 @@ func (o *OpenCode) Drift(modelPrefixes []string) []string {
 	return warnings
 }
 
-// mcpEntry renders a declared server as the opencode.json entry a person
-// consents to. Always remote (the framework's only supported transport); a
-// named credential becomes the standard bearer header referencing the
+// Renders a declared server as the opencode.json entry a person consents
+// to. Always remote (the framework's only supported transport); a named
+// credential becomes the standard bearer header referencing the
 // credential's run-environment name.
 func mcpEntry(url, credential string) map[string]any {
 	entry := map[string]any{"type": "remote", "url": url}
@@ -114,20 +109,19 @@ func mcpEntry(url, credential string) map[string]any {
 }
 
 // MCPSnippet is a declared server's entry as the exact JSON shown at the
-// consent prompt and in the paste step -- what you read is what AddMCPServer
-// lands.
+// consent prompt and in the paste step -- what you read is what
+// AddMCPServer lands.
 func MCPSnippet(name, url, credential string) string {
 	entry, _ := json.Marshal(mcpEntry(url, credential))
 	return fmt.Sprintf("%q: %s", name, entry)
 }
 
-// AddMCPServer inserts one declared server into opencode.json's mcp block.
-// Refuses to overwrite: an existing entry is the person's. The caller is
-// responsible for the consent gate -- this writes an endpoint definition
-// into harness config, which is why plugins may only ever declare servers
-// and a person confirms each insertion interactively. Rewrites the file
-// with two-space indentation; encoding/json sorts object keys, so hand
-// ordering is not preserved.
+// AddMCPServer inserts one declared server into opencode.json's mcp
+// block. Refuses to overwrite an existing entry. The caller is
+// responsible for the
+// consent gate -- plugins may only ever declare servers, and a person
+// confirms each insertion interactively. encoding/json sorts object keys, so
+// hand ordering in the file is not preserved.
 func AddMCPServer(dir, name, url, credential string) error {
 	path := filepath.Join(dir, OpenCodeFileName)
 	raw, err := os.ReadFile(path)

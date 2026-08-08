@@ -19,9 +19,9 @@ import (
 // attempt identity, the supervisor keeps owner access for import and
 // cleanup, and other attempts have no bits at all.
 
-// prepareWorkspaceAccess makes the staged workspace readable by exactly one
-// attempt identity: every path joins the attempt's group with read-only
-// group bits and zero world bits.
+// Makes the staged workspace readable by exactly one attempt identity:
+// every path joins the attempt's group with read-only group bits and zero
+// world bits.
 func prepareWorkspaceAccess(gid uint32, workspace string) error {
 	return filepath.WalkDir(workspace, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -45,16 +45,12 @@ func prepareWorkspaceAccess(gid uint32, workspace string) error {
 	})
 }
 
-// removeAttemptTree removes a tree an attempt identity may have written
-// into -- the run workspace, a capture home. The supervisor's own access
-// rides the group axis, and processes running as the attempt can leave
-// paths the group cannot cover: explicitly requested modes (opencode's
-// 0644, a chmod 0700), which umask can only have narrowed, never widened.
-// The supervisor holds no CAP_DAC_OVERRIDE by design, but every attempt
-// identity is one it minted and can execute as -- authority enough over
-// everything attempt-owned -- so a denied removal is retried after the
-// attempt identity itself reopens its paths. uid 0 means no attempt
-// identity was involved and removal must succeed on its own.
+// Removes a tree an attempt identity may have written into. The supervisor
+// holds no CAP_DAC_OVERRIDE, and a process running as the attempt can leave
+// paths the group axis can't cover (explicit modes like opencode's 0644, a
+// chmod 0700) -- so a denied removal is retried after the attempt identity
+// itself reopens its own paths. uid 0 means no attempt identity was
+// involved, so removal must succeed outright.
 func removeAttemptTree(uid uint32, path string) error {
 	err := os.RemoveAll(path)
 	if err == nil || uid == 0 {
@@ -67,9 +63,9 @@ func removeAttemptTree(uid uint32, path string) error {
 	return nil
 }
 
-// reclaimAttemptTrees spawns the capless helper as the attempt identity to
-// restore group bits on paths that identity owns. removeAttemptTree retries
-// removal either way and includes this error if the retry also fails.
+// Spawns the capless helper as the attempt identity to restore group bits
+// on paths that identity owns. removeAttemptTree retries removal either way
+// and includes this error if the retry also fails.
 func reclaimAttemptTrees(uid uint32, root string) error {
 	cmd := exec.Command(sandbox.HelperPath, "sandbox-reclaim", root)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
@@ -77,11 +73,11 @@ func reclaimAttemptTrees(uid uint32, root string) error {
 	return cmd.Run()
 }
 
-// prepareAttemptTrees makes the trees the attempt may mutate -- staged
-// knowledge, the run tmp, the attempt home -- group-writable for it. Files the
-// model process creates inside arrive owned by the attempt uid with its own
-// gid, and the sandbox shim's umask keeps them group-rw, so the supervisor
-// can still import and remove them afterwards.
+// Makes the trees the attempt may mutate -- staged knowledge, the run tmp,
+// the attempt home -- group-writable for it. Files the model process
+// creates inside arrive owned by the attempt uid with its own gid, and the
+// sandbox shim's umask keeps them group-rw, so the supervisor can still
+// import and remove them afterwards.
 func prepareAttemptTrees(gid uint32, roots ...string) error {
 	for _, root := range roots {
 		if err := os.MkdirAll(root, 0o770); err != nil {

@@ -10,10 +10,10 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// Spec declares how a stored credential is materialized into a run (see
-// design decision "Credentials have types"). A credential with no Spec is raw --
+// Spec declares how a stored credential is materialized into a run
+// (design decision "Credentials have types"). A credential with no Spec is raw --
 // injected verbatim under its uppercase name. A typed credential is
-// transformed by the trusted runner at spawn: the routine receives the
+// transformed by the trusted runner at spawn; the routine receives the
 // derived surface, never the stored root secret.
 type Spec struct {
 	Type  string `yaml:"type"`
@@ -25,12 +25,11 @@ type Spec struct {
 }
 
 // Derived is short-lived material minted from a stored root secret: the
-// exact environment to inject into a run, the bearer value (when the type
-// produces one) available to trusted supervisor callers, and cleanup that
-// disposes of anything revocable. Derive registers the bearer with the
-// scrub registry and Cleanup releases that registration; neither providers
-// nor callers handle redaction. Cleanup is best-effort and safe to call
-// once after the material's use.
+// environment to inject into a run, the bearer value (when the type
+// produces one), and cleanup that disposes of anything revocable. Derive
+// registers the bearer with the scrub registry and Cleanup releases that
+// registration -- neither providers nor callers handle redaction directly.
+// Cleanup is best-effort and safe to call once after the material's use.
 type Derived struct {
 	Env     map[string]string
 	Bearer  string
@@ -39,10 +38,9 @@ type Derived struct {
 
 var appIDPattern = regexp.MustCompile(`^[0-9]+$`)
 
-// DerivedTypes are the derived credential types the framework implements,
-// in the order they shipped. Every validator that names the set consults
-// this list -- two hardcoded copies drifted once already (the plugin
-// validator missed oauth2_client).
+// DerivedTypes are the derived credential types the framework implements.
+// Every validator that names the set consults this list -- two hardcoded
+// copies drifted once already (the plugin validator missed oauth2_client).
 var DerivedTypes = []string{"github_app", "oauth2_client"}
 
 // KnownType reports whether t is an implemented derived credential type.
@@ -50,8 +48,8 @@ func KnownType(t string) bool {
 	return slices.Contains(DerivedTypes, t)
 }
 
-// SpecProblems returns human-readable validation failures for one credential
-// metadata entry, empty when valid. Fields another type owns are rejected,
+// SpecProblems returns human-readable validation failures for one
+// credential metadata entry, empty when valid. Fields another type owns are rejected,
 // not ignored -- silently dead configuration is what strict decoding exists
 // to prevent.
 func SpecProblems(name string, s Spec) []string {
@@ -94,11 +92,10 @@ func SpecProblems(name string, s Spec) []string {
 }
 
 // InjectionDescription explains what a run actually receives when it
-// declares this credential -- the credential's own uppercase name for a raw
-// credential, or the derived surface for a typed one. Credential CLI output
-// must describe the actual injection, not assume every credential is raw
-// (issue #66): a github_app or oauth2_client entry never puts its stored
-// value in the run environment.
+// declares this credential -- the credential's own uppercase name for a raw credential, or the
+// derived surface for a typed one. CLI output must not assume every
+// credential is raw (issue #66): a github_app or oauth2_client entry
+// never puts its stored value in the run environment.
 func InjectionDescription(name string, s Spec) string {
 	switch s.Type {
 	case "github_app":
@@ -126,8 +123,8 @@ func ValidateStored(s Spec, stored string) error {
 // Derive materializes one typed credential. Providers are built into the
 // framework -- agent repositories cannot supply derivation code, which would
 // otherwise be a privileged plugin boundary on the trusted side. The minted
-// bearer registers with the scrub registry here, at the one door every
-// provider's material leaves through -- a provider cannot forget to.
+// bearer registers with the scrub registry here, the one door every
+// provider's material leaves through, so no provider can forget to.
 func Derive(name string, s Spec, stored string) (*Derived, error) {
 	var d *Derived
 	var err error

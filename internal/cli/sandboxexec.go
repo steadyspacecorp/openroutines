@@ -15,14 +15,12 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
-// cmdSandboxExec is the internal re-exec shim: apply the Landlock rules from
-// the environment to this process, then exec the model process (opencode).
-// Rules bind to the caller and its children, which is exactly what exec
-// preserves. Not part of the public command surface.
+// The internal re-exec shim: apply Landlock rules from the environment to
+// this process, then exec the model process, so the rules bind to it and
+// its children. Not part of the public command surface.
 //
-// Fail-closed policy: on Linux, no confinement means no run -- unless the
-// deliberately ugly OPENROUTINES_UNSAFE_NO_SANDBOX=1 is set. Off Linux
-// (native mode is an explicit dev opt-in there), it warns and proceeds.
+// Fail-closed on Linux: no confinement means no run, unless
+// OPENROUTINES_UNSAFE_NO_SANDBOX=1 is set. Off Linux it warns and proceeds.
 func cmdSandboxExec(args []string) int {
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
@@ -33,8 +31,7 @@ func cmdSandboxExec(args []string) int {
 	ro := filepath.SplitList(os.Getenv(sandbox.EnvRO))
 	rw := filepath.SplitList(os.Getenv(sandbox.EnvRW))
 	// Write-granted paths must exist before rules apply: Landlock can't
-	// grant what it can't resolve, and once confined nothing can create
-	// them (found live: opencode's first mkdir of ~/.local was denied).
+	// grant what it can't resolve, and once confined nothing can create them.
 	for _, p := range rw {
 		if p == "" {
 			continue
@@ -68,9 +65,7 @@ func cmdSandboxExec(args []string) int {
 	}
 
 	// Everything the model process creates must stay reachable by the
-	// supervisor, which imports staged knowledge, reads the session record,
-	// and removes the run workspace -- via the attempt's group, which the
-	// agent user belongs to. Keep group bits, drop world.
+	// supervisor via the attempt's group. Keep group bits, drop world.
 	syscall.Umask(0o007)
 
 	bin, err := exec.LookPath(args[0])
@@ -84,15 +79,11 @@ func cmdSandboxExec(args []string) int {
 	return 0 // unreachable
 }
 
-// cmdSandboxReclaim restores group access on what a model process hid from
-// the supervisor. umask only removes permission bits, so an attempt can still
-// chmod its own files 0600 or 0700 -- and the supervisor, holding no
-// CAP_DAC_OVERRIDE, then cannot delete the run workspace. The runner spawns
-// this capless helper as the attempt identity when cleanup fails; it walks
-// the tree re-opening group bits on paths the identity owns, and skips
-// everything else (supervisor-owned paths were never the problem, and run
-// as an unprivileged identity it cannot touch anything the attempt could
-// not already chmod itself).
+// Restores group access on files a model process chmod'd to exclude the
+// group (e.g. 0600), which the supervisor -- holding no CAP_DAC_OVERRIDE --
+// can't otherwise delete. The runner spawns this as the attempt identity
+// when cleanup fails; running unprivileged, it can only touch what that
+// identity already owned.
 func cmdSandboxReclaim(args []string) int {
 	if len(args) != 1 {
 		return fail(fmt.Errorf("sandbox-reclaim: exactly one root expected"))
@@ -113,8 +104,8 @@ func cmdSandboxReclaim(args []string) int {
 	return 0
 }
 
-// cmdSandboxProbe applies a throwaway ruleset to a child-less scratch scope
-// and reports whether confinement is available. Used by supervise at boot
+// Applies a throwaway ruleset to a child-less scratch scope and reports
+// whether confinement is available. Used by supervise at boot
 // (fail closed before the first run, not during it).
 func cmdSandboxProbe(_ []string) int {
 	uid64, err := strconv.ParseUint(os.Getenv(sandbox.EnvAttemptUID), 10, 32)

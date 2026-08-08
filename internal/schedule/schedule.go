@@ -15,15 +15,12 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// Spec is a cron expression bound to the agent's timezone. Every scan
-// normalizes its inputs into that zone before asking cron for a firing, and
-// so returns fire times as wall-clock in it. Binding matters because the
-// times fed in are persisted ones: a watermark that round-trips through the
-// state file comes back in a fabricated fixed-offset zone (Go's
-// time.Time.UnmarshalJSON does that whenever the offset isn't time.Local's),
-// and cron evaluates an unbound spec in whatever zone its argument carries --
-// which would freeze the agent's schedule at last season's UTC offset and
-// drift it an hour at every DST transition.
+// Spec is a cron expression bound to the agent's timezone. Binding matters
+// because a watermark round-tripped through the state file comes back in a
+// fabricated fixed-offset zone (time.Time.UnmarshalJSON does that whenever
+// the offset isn't time.Local's), and cron evaluates an unbound spec in
+// whatever zone its argument carries -- which would freeze the schedule at
+// last season's UTC offset and drift it an hour at every DST transition.
 type Spec struct {
 	sched cron.Schedule
 	loc   *time.Location
@@ -172,11 +169,10 @@ func NextFires(spec *Spec, after, until time.Time, n int) []time.Time {
 	return fires
 }
 
-// WindowEnd returns the spec's first firing on its next fire-day -- the
-// first calendar day after `after`'s (in the spec's location) with any
-// firing. Later same-day firings (retry slots) are skipped: a routine's
-// window closes when it next runs fresh, not when it retries. Zero when no
-// such firing lands by `until`.
+// WindowEnd returns the spec's first firing on its next fire-day (in the
+// spec's location). Later same-day firings (retry slots) are skipped: a
+// routine's window closes when it next runs fresh, not when it retries.
+// Zero when no such firing lands by `until`.
 func WindowEnd(spec *Spec, after, until time.Time) time.Time {
 	after = after.In(spec.loc)
 	y0, d0 := after.Year(), after.YearDay()

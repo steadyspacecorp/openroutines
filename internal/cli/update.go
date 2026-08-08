@@ -14,13 +14,11 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
-// frameworkOwned are the template files update may rewrite. Everything else
-// in an agent repo -- routines, skills, knowledge, openroutines.yml, credentials --
-// belongs to the agent and is never touched. opencode.json stays off this
-// list deliberately: it is the user's harness config (the permission policy
-// and provider endpoint definitions; design decision "One binary"), and an update
-// that rewrote it would clobber both -- bin/smoke asserts it survives an
-// update byte for byte.
+// The template files update may rewrite. Everything else in an agent repo --
+// routines, skills, knowledge, openroutines.yml, credentials -- belongs to
+// the agent and is never touched. opencode.json stays off this list
+// deliberately: it's the user's harness config (design decision "One binary"),
+// and bin/smoke asserts it survives an update byte for byte.
 var frameworkOwned = []string{
 	"Dockerfile",
 	".dockerignore",
@@ -30,9 +28,9 @@ var frameworkOwned = []string{
 
 const updateUsage = "usage: openroutines update"
 
-// cmdUpdate brings the agent up to the version of the running binary: bumps
-// the pin and offers each framework-owned file's changes interactively
-// (rails app:update style). It stages nothing -- review, commit, push.
+// Brings the agent up to the version of the running binary: bumps the pin
+// and offers each framework-owned file's changes interactively, rails
+// app:update style. Stages nothing -- review, commit, push.
 func cmdUpdate(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {
@@ -83,16 +81,14 @@ func cmdUpdate(args []string) int {
 		want := renderer.Replace(string(tmpl))
 		gotRaw, err := os.ReadFile(filepath.Join(dir, name))
 		if err == nil && string(gotRaw) == want {
-			// Say so: silence here reads as "this file isn't managed".
 			fmt.Printf("%s: already current\n", name)
 			continue
 		}
 		fmt.Printf("--- %s differs from the %s template ---\n", name, target)
 		printDiff(string(gotRaw), want)
 		apply := true
-		// The Dockerfile's version ARG and .openroutines/version are one pin.
-		// Letting a user skip one while advancing the other produces an agent
-		// whose local/CI framework version differs from production.
+		// The Dockerfile's version ARG and .openroutines/version are one pin;
+		// skipping one while advancing the other splits local/CI from production.
 		if interactive && name != "Dockerfile" {
 			fmt.Printf("Apply update to %s? [Y/n] ", name)
 			line, _ := in.ReadString('\n')
@@ -138,8 +134,7 @@ func dockerfileUsesVersion(raw []byte, version string) bool {
 	return false
 }
 
-// printDiff shows a compact line diff: removed lines from ours, added lines
-// from the template. Good enough to review; git diff gives the full view.
+// Shows a compact line diff; git diff gives the full view.
 func printDiff(got, want string) {
 	gotLines := map[string]bool{}
 	for _, l := range strings.Split(got, "\n") {

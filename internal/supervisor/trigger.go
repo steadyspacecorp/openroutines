@@ -12,16 +12,12 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/trigger"
 )
 
-// evaluateTrigger performs one change-detection poll for a routine with no
-// cron firing due, and reports whether the routine should fire. A newly
-// observed value is saved to durable trigger state, which the tick's intent
-// commit carries -- persisted before the run it fired acts.
-//
-// One interval governs everything: polls happen at most once per interval,
-// and since a poll is the only fire opportunity, the same knob bounds fire
-// rate and reply latency alike. The last-poll clock is in-memory only --
-// persisting it would dirty the knowledge worktree on every poll; a restart
-// costs one early poll.
+// Runs one change-detection poll for a routine with no cron firing due, and
+// reports whether it should fire. A newly observed value is saved to
+// durable trigger state, persisted before the run it fires acts. Polls
+// happen at most once per interval; the last-poll clock is in-memory only
+// (persisting it would dirty the knowledge worktree on every poll), so a
+// restart costs one early poll.
 func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 	spec := *r.FM.Trigger
 	interval, _ := spec.IntervalDuration() // validated by the caller
@@ -61,9 +57,9 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 	return true
 }
 
-// refreshTriggerBaseline re-observes the endpoint without firing, called when
-// a scheduled run is minted for a routine that also declares a trigger. Best
-// effort: a failed refresh costs at most one redundant run later.
+// Re-observes the endpoint without firing, called when a scheduled run is
+// minted for a routine that also declares a trigger. Best effort: a failed
+// refresh costs at most one redundant run later.
 func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 	prior, err := trigger.Load(s.stateDir(), r.Name)
 	if err != nil {
@@ -79,7 +75,7 @@ func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 	}
 }
 
-// poll performs the HTTP observation, resolving the declared credential and
+// Performs the HTTP observation, resolving the declared credential and
 // deduplicating error logs (log on transition, not every tick).
 func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.State, now time.Time) (trigger.Result, bool) {
 	s.lastPolled[r.Name] = now
@@ -124,11 +120,11 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 	return res, true
 }
 
-// triggerCredential materializes one credential for a trigger poll. Raw
-// credentials retain their verbatim bearer behavior. Typed credentials are
-// derived by the trusted supervisor, and only the type's explicit bearer
-// surface leaves this function -- never its stored root secret. The caller
-// must run Cleanup immediately after the poll.
+// Materializes one credential for a trigger poll. Raw credentials retain
+// their verbatim bearer behavior. Typed credentials are derived by the
+// trusted supervisor, and only the type's explicit bearer surface leaves
+// this function -- never its stored root secret. The caller must run
+// Cleanup immediately after the poll.
 func (s *Supervisor) triggerCredential(name string) (*creds.Derived, error) {
 	agent, err := config.Load(s.Dir)
 	if err != nil {
