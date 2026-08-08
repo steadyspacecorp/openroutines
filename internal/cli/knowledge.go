@@ -79,8 +79,8 @@ func printKnowledgeOverview(mem *knowledge.Store, snap *knowledge.OriginSnapshot
 	if err != nil {
 		return fail(err)
 	}
-	fmt.Printf("%s knowledge at origin/%s\n", agent.Name, knowledge.Branch)
-	fmt.Printf("updated %s (%s) · %s · %d files · history since %s\n", relativeTime(stats.LastWrite), formatTime(stats.LastWrite), formatBytes(stats.SizeBytes), stats.Files, stats.FirstWrite.Format("Jan 2, 2006"))
+	fmt.Println(bold(fmt.Sprintf("%s knowledge at origin/%s", agent.Name, knowledge.Branch)))
+	fmt.Println(dim(fmt.Sprintf("updated %s (%s) · %s · %d files · history since %s", relativeTime(stats.LastWrite), formatTime(stats.LastWrite), formatBytes(stats.SizeBytes), stats.Files, stats.FirstWrite.Format("Jan 2, 2006"))))
 	printSnapshotRelation(os.Stdout, snap.Relation(mem))
 	return 0
 }
@@ -88,16 +88,16 @@ func printKnowledgeOverview(mem *knowledge.Store, snap *knowledge.OriginSnapshot
 func printSnapshotRelation(out io.Writer, r knowledge.SnapshotRelation) {
 	switch {
 	case !r.Materialized:
-		_, _ = fmt.Fprintln(out, "warning: knowledge/ is not materialized locally; showing origin")
+		_, _ = fmt.Fprintf(out, "%s knowledge/ is not materialized locally; showing origin\n", warnMark)
 	case r.Diverged:
-		_, _ = fmt.Fprintln(out, "warning: local knowledge/ and the origin snapshot have diverged; showing origin")
+		_, _ = fmt.Fprintf(out, "%s local knowledge/ and the origin snapshot have diverged; showing origin\n", warnMark)
 	case r.Behind > 0:
-		_, _ = fmt.Fprintf(out, "warning: local knowledge/ is %d commit(s) behind; showing origin\n", r.Behind)
+		_, _ = fmt.Fprintf(out, "%s local knowledge/ is %d commit(s) behind; showing origin\n", warnMark, r.Behind)
 	case r.Ahead > 0:
-		_, _ = fmt.Fprintf(out, "warning: local knowledge/ has %d commit(s) not on origin; showing origin\n", r.Ahead)
+		_, _ = fmt.Fprintf(out, "%s local knowledge/ has %d commit(s) not on origin; showing origin\n", warnMark, r.Ahead)
 	}
 	if r.Uncommitted > 0 {
-		_, _ = fmt.Fprintf(out, "warning: local knowledge/ has %d file(s) with uncommitted changes; showing origin\n", r.Uncommitted)
+		_, _ = fmt.Fprintf(out, "%s local knowledge/ has %d file(s) with uncommitted changes; showing origin\n", warnMark, r.Uncommitted)
 	}
 }
 
@@ -107,7 +107,7 @@ func knowledgeInteractive(mem *knowledge.Store, snap *knowledge.OriginSnapshot) 
 	}
 	in := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Print("\nWhat would you like to do?\n  1. Summarize\n  2. Browse files\n  3. View stats\n  4. Exit\n> ")
+		fmt.Print("\n" + bold("What would you like to do?") + "\n  1. Summarize\n  2. Browse files\n  3. View stats\n  4. Exit\n> ")
 		choice, err := in.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
@@ -249,7 +249,7 @@ func knowledgeBrowse(snap *knowledge.OriginSnapshot, in *bufio.Reader) int {
 			fmt.Println("choose a listed file number or b")
 			continue
 		}
-		fmt.Printf("\n--- %s ---\n", files[n-1].Path)
+		fmt.Printf("\n--- %s ---\n", bold(files[n-1].Path))
 		if code := knowledgeShow(snap, []string{files[n-1].Path}); code != 0 {
 			return code
 		}
@@ -305,7 +305,7 @@ func knowledgeSummarizeWithReader(snap *knowledge.OriginSnapshot, window time.Du
 	if err != nil {
 		return fail(err)
 	}
-	fmt.Printf("\n%s · snapshot %s\n", runner.FormatUsage(res.Usage), shortCommit(snap.Commit))
+	fmt.Println("\n" + dim(fmt.Sprintf("%s · snapshot %s", runner.FormatUsage(res.Usage), shortCommit(snap.Commit))))
 	if res.Outcome != runner.Completed {
 		if res.Hint != "" {
 			fmt.Println(res.Hint)
