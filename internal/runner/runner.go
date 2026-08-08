@@ -37,7 +37,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/lock"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
-	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
@@ -60,7 +59,6 @@ type Meta struct {
 	AttemptID      string
 	ScheduledFor   string // RFC3339, empty for manual runs
 	CoveredThrough string // RFC3339, empty for manual runs
-	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
 }
 
 // ExecResult is one attempt's outcome. Hint, when set, classifies a common
@@ -113,9 +111,7 @@ func authHint(dir, model string, injected bool) string {
 // only asks whether the failure it was handed is one of these.
 var ErrFatal = errors.New("not retryable")
 
-// ErrAttemptCleanup marks a workspace that was not proven discarded. The
-// supervisor must poison the attempt identity instead of returning it to the
-// pool, or its next assignee could read the leftover tree.
+// ErrAttemptCleanup marks a workspace that was not proven discarded.
 var ErrAttemptCleanup = errors.New("attempt workspace cleanup failed")
 
 // Staging is the attempt's staged knowledge, awaiting import or discard.
@@ -127,10 +123,6 @@ type Staging struct {
 	// compose instead of clobbering each other.
 	BaseDir   string
 	workspace string
-	// attemptUID is set when the workspace was prepared for an attempt
-	// identity: Cleanup may then need that identity's help to reclaim
-	// paths the model process chmodded away from the group.
-	attemptUID uint32
 
 	// ConsumerThrough is the knowledge commit the delivery change set was
 	// prepared against -- set only for reporting routines, fixed before the
@@ -142,38 +134,49 @@ type Staging struct {
 	ConsumerFirstRun bool
 }
 
-// Cleanup discards the whole run workspace, staging and base included. The
-// shim's umask keeps model-created files group-accessible, but umask only
-// removes bits: a model process can still chmod its own files 0600 or 0700,
-// which the capability-less supervisor cannot delete. When that happens the
-// attempt identity itself is asked to reopen its tree, so a leftover cannot
-// outlive the run and be read by the identity's next assignee.
+// Cleanup discards the whole run workspace, staging and base included.
+// Everything the model process created is owned by this process: a run keeps
+// the supervisor's own uid and is confined by its sandbox instead, so there
+// is no identity to negotiate with and no mode a run can set that the
+// supervisor cannot set back.
 func (s *Staging) Cleanup() error {
-	if s.attemptUID != 0 {
-		// Kill anything still carrying the identity before touching the
-		// tree: an escaped descendant could otherwise race the removal,
-		// re-closing or recreating paths behind it. The slot owner reaps
-		// again before reuse; this pass makes the removal itself trustworthy.
-		if err := sandbox.ReapIdentity(s.attemptUID); err != nil {
-			return fmt.Errorf("%w: reap uid %d before removal: %w", ErrAttemptCleanup, s.attemptUID, err)
-		}
-	}
-	if err := removeAttemptTree(s.attemptUID, s.workspace); err != nil {
+	if err := removeTree(s.workspace); err != nil {
 		return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.workspace, err)
 	}
 	if s.BaseDir != "" {
-		if err := os.RemoveAll(s.BaseDir); err != nil {
+		if err := removeTree(s.BaseDir); err != nil {
 			slog.Warn("could not remove the attempt's knowledge base snapshot", "path", s.BaseDir, "error", err)
 		}
 	}
 	return nil
 }
 
+// removeTree deletes a tree a run may have chmodded shut behind itself.
+// Owning every file in it means the supervisor is *allowed* to restore the
+// modes it needs, not that os.RemoveAll does: a 0000 directory stops the
+// walk with EACCES, which would let a run leave its workspace on disk and
+// repeat that every attempt. So the retry restores owner access on the way
+// down -- WalkDir visits a directory before it reads it, which is what makes
+// one pass enough -- and removes what it could not before. The first attempt
+// is unconditional because the honest case is every case: nothing in the
+// pipeline asks a run to close a directory.
+func removeTree(path string) error {
+	if err := os.RemoveAll(path); err == nil {
+		return nil
+	}
+	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(path)
+}
+
 // Consumed reports whether the routine created the consume marker: its
 // explicit claim to have covered the whole injected change set. The canonical
-// location is the staged knowledge directory -- the one workspace path the
-// filesystem sandbox leaves writable; the workspace root is still accepted
-// for unsandboxed runs.
+// location is the staged knowledge directory -- writable to the run in every
+// isolation shape; the workspace root is still accepted for unconfined runs.
 func (s *Staging) Consumed() bool {
 	if _, err := os.Stat(filepath.Join(s.KnowledgeDir, knowledge.ConsumeMarker)); err == nil {
 		return true
@@ -301,9 +304,6 @@ const attemptHomeName = ".home"
 // not hold up every other attempt's settlement. On error, everything Stage
 // acquired -- derived credentials, the workspace -- is already released.
 func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (stagedRun *StagedRun, err error) {
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && meta.AttemptUID == 0 {
-		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
-	}
 	model, err := EffectiveModel(agent, r)
 	if err != nil {
 		return nil, err
@@ -400,15 +400,8 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		return nil, err
 	}
 	attemptHome := filepath.Join(workspace, attemptHomeName)
-	if meta.AttemptUID != 0 && os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-		// An attempt identity's gid equals its uid (template Dockerfile).
-		if err := prepareWorkspaceAccess(meta.AttemptUID, workspace); err != nil {
-			return nil, fmt.Errorf("preparing read-only attempt workspace: %w", err)
-		}
-		if err := prepareAttemptTrees(meta.AttemptUID, staging.KnowledgeDir, runTmp, attemptHome); err != nil {
-			return nil, fmt.Errorf("preparing attempt uid %d trees: %w", meta.AttemptUID, err)
-		}
-		staging.attemptUID = meta.AttemptUID
+	if err := os.MkdirAll(attemptHome, 0o755); err != nil {
+		return nil, err
 	}
 
 	// Clean environment: constructed, never inherited.
@@ -504,7 +497,10 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	if err != nil {
 		return nil, nil, err
 	}
-	cmd := oc.run(ocArgs)
+	cmd, err := oc.run(ocArgs)
+	if err != nil {
+		return nil, nil, err
+	}
 	// stderr carries opencode's diagnostic log (--print-logs): each line
 	// passes through to the log stream with the attempt's identity
 	// appended, scrubbed first -- and with it every failure's diagnostics,
@@ -593,19 +589,11 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 }
 
 // Run executes routine `name` manually. skipKnowledge discards staged knowledge
-// writes and the run record after the otherwise ordinary run completes.
-// Inside the production container a manual run reserves the manual attempt
-// identity first, so it can never share a uid with a supervisor slot.
+// writes and the run record after the otherwise ordinary run completes. A
+// manual run inside the production container needs no reservation of its
+// own: its sandbox is built from its own workspace, like every other run's.
 func Run(dir, name string, skipKnowledge bool) (result *Result, err error) {
 	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01"}
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-		uid, releaseIdentity, err := reserveManualIdentity(dir)
-		if err != nil {
-			return nil, err
-		}
-		defer releaseIdentity()
-		meta.AttemptUID = uid
-	}
 	agent, err := config.Load(dir)
 	if err != nil {
 		return nil, fmt.Errorf("not an agent repository: %w", err)
@@ -1227,11 +1215,12 @@ func killClient(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.L
 }
 
 // signalTarget is the run's own process group, or the process alone when the
-// spawn path did not make it a group leader. Every spawn path that gets
-// signaled sets Setpgid today; the guard is there because signaling -pid
-// without it reaches the supervisor's own group and kills the supervisor.
+// spawn path did not make it a group leader. Setsid counts: a session leader
+// leads a fresh process group too, and the sandboxed spawn path uses it
+// (hostOpencode.run's TIOCSTI note). The guard is there because signaling -pid
+// without either reaches the supervisor's own group and kills the supervisor.
 func signalTarget(cmd *exec.Cmd) int {
-	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
+	if attr := cmd.SysProcAttr; attr != nil && (attr.Setpgid || attr.Setsid) {
 		return -cmd.Process.Pid
 	}
 	return cmd.Process.Pid

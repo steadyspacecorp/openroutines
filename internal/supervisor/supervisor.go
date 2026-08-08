@@ -18,14 +18,11 @@ import (
 	"log/slog"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
@@ -40,9 +37,8 @@ import (
 
 // Scheduling constants: the tick cadence and the per-run attempt cap.
 const (
-	TickInterval   = time.Minute
-	MaxAttempts    = 5
-	attemptUIDBase = sandbox.AttemptUIDBase
+	TickInterval = time.Minute
+	MaxAttempts  = 5
 )
 
 // Schedulable reports whether a tick will act on a routine at all. Exported
@@ -89,14 +85,13 @@ type Supervisor struct {
 	// Bounded parallelism: slots caps concurrent attempts, inFlight keeps a
 	// routine's next dispatch off state its executing attempt still owns,
 	// runs lets shutdown wait for every settlement.
-	slots          chan uint32
+	slots          chan struct{}
 	runs           sync.WaitGroup
 	inFlightMu     sync.Mutex
 	inFlight       map[string]bool
 	waitLogged     map[string]bool // pool-full wait already announced (tick only)
 	cooldownWarned map[string]bool // circuit-breaker cool-down already announced (tick only)
 	fatal          chan error      // fail-closed production invariant violation
-	reap           func(uint32) error
 
 	syncBlocked   bool // rewritten-history or conflict: stop adopting/pushing
 	syncWarned    bool // blocker already raised for the current sync problem
@@ -140,9 +135,9 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	slots := make(chan uint32, agent.RunSlots())
-	for i := range agent.RunSlots() {
-		slots <- uint32(attemptUIDBase + i)
+	slots := make(chan struct{}, agent.RunSlots())
+	for range agent.RunSlots() {
+		slots <- struct{}{}
 	}
 	return &Supervisor{
 		Dir:            dir,
@@ -158,7 +153,6 @@ func New(dir string) (*Supervisor, error) {
 		waitLogged:     map[string]bool{},
 		cooldownWarned: map[string]bool{},
 		fatal:          make(chan error, 1),
-		reap:           sandbox.ReapIdentity,
 		lastPolled:     map[string]time.Time{},
 		pollFailed:     map[string]bool{},
 	}, nil
@@ -172,10 +166,15 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	// The supervisor's environment may carry the master and deploy keys.
 	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
 	// same-UID model processes -- set before any child ever exists.
-	if err := sandbox.ProtectProcess(); err != nil {
+	if err := protectSelf(); err != nil {
 		slog.Warn("could not mark the supervisor non-dumpable", "error", err)
 	}
-	s.warnKeyDelivery()
+	// Before the deploy key is materialized, the lease is taken, or anything
+	// touches git: a key the runs could read is worth failing on while the
+	// deployment has changed nothing yet.
+	if err := VerifyKeyDelivery(); err != nil {
+		return err
+	}
 	if configured, err := knowledge.ConfigureDeployKey(); err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	} else if configured {
@@ -203,7 +202,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		defer func() { s.mem.ReleaseLease(s.leaseSHA) }()
 	}
 	slog.Info("supervising", "dir", s.Dir, "instance", s.InstanceID, "tick", TickInterval)
-	if err := s.verifySandbox(); err != nil {
+	if err := s.verifyIsolation(); err != nil {
 		return err
 	}
 
@@ -268,9 +267,8 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 			}
 			continue
 		}
-		var attemptUID uint32
 		select {
-		case attemptUID = <-s.slots:
+		case <-s.slots:
 		default:
 			release()
 			// warn, not info: an agent whose due work is parked behind a
@@ -286,34 +284,19 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		delete(s.waitLogged, d.r.Name)
 		s.setRunning(d.r.Name, true)
 		s.runs.Add(1)
-		go func(d dispatch, uid uint32, release func()) {
+		go func(d dispatch, release func()) {
 			defer s.runs.Done()
 			defer release()
 			defer s.setRunning(d.r.Name, false)
-			cleanupErr := s.execute(ctx, d.r, d.st, now, uid)
-			if !s.releaseIdentity(uid, cleanupErr) {
-				return
+			// A failed workspace cleanup is an operator-visible fault rather
+			// than a fatal one: the next attempt gets a fresh workspace and a
+			// fresh sandbox, and nothing of this run's is reused.
+			if err := s.execute(ctx, d.r, d.st, now); err != nil {
+				d.r.Log().Error("attempt workspace cleanup failed -- a stale run directory was left behind", "error", err)
 			}
-		}(d, attemptUID, release)
+			s.slots <- struct{}{}
+		}(d, release)
 	}
-}
-
-func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
-	err := cleanupErr
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
-		err = errors.Join(err, s.reap(uid))
-	}
-	if err != nil {
-		fatal := fmt.Errorf("attempt uid %d cleanup failed -- refusing to reuse identity: %w", uid, err)
-		slog.Error("attempt uid cleanup failed -- refusing to reuse identity", "uid", uid, "error", err)
-		select {
-		case s.fatal <- fatal:
-		default:
-		}
-		return false // poisoned: never return this identity to the pool
-	}
-	s.slots <- uid
-	return true
 }
 
 // dispatch is one due routine and the scheduling state its attempt owns
@@ -588,7 +571,7 @@ func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, ses
 }
 
 // execute runs one attempt of a pending logical run and settles the outcome.
-func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) (cleanupErr error) {
+func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time) (cleanupErr error) {
 	// Every line this attempt emits carries the routine and the logical run
 	// it belongs to: attempts execute concurrently and interleave on one
 	// stdout, so the identity has to travel with the logger rather than be
@@ -633,7 +616,6 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		AttemptID:      fmt.Sprintf("attempt_%02d", p.Attempts),
 		ScheduledFor:   p.ScheduledFor.Format(time.RFC3339),
 		CoveredThrough: p.CoveredThrough.Format(time.RFC3339),
-		AttemptUID:     attemptUID,
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
@@ -976,106 +958,92 @@ func (s *Supervisor) strandBlocked() {
 	slog.Error("knowledge: stranded until sync is repaired", "ref", knowledge.BlockedRef)
 }
 
-// warnKeyDelivery says out loud, once at boot, that the master key value is
-// sitting in this process's environment -- the weaker of the two production
-// deliveries. Both work; only the file keeps the value out of the
-// environment, and a deployment that picked the env var years ago has no
-// other moment where anyone is told. It fires on a leftover variable too: a
-// deployment that moved to file delivery without unsetting the old one still
-// publishes the value. Log-only: the platform that forced env delivery cannot
-// be argued with at boot.
-func (s *Supervisor) warnKeyDelivery() {
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") != "1" || !creds.KeyValueInEnv() {
-		return
-	}
-	slog.Warn("the master key value is in this process's environment -- readable wherever that environment is; mount the key as a file, point the file variable at the path, and unset the value variable",
-		"value_env", creds.EnvMasterKey, "file_env", creds.EnvMasterKeyFile)
+// supervisorKeys are the secrets the supervisor holds and no run may have.
+// Each arrives one of two ways -- a value in the environment or a path to a
+// mounted file -- so each is answerable to the same two questions, and the
+// package that owns the key exports the variable names to ask them with.
+var supervisorKeys = []struct{ what, valueEnv, fileEnv string }{
+	{"master key", creds.EnvMasterKey, creds.EnvMasterKeyFile},
+	{"deploy key", knowledge.EnvDeployKey, knowledge.EnvDeployKeyFile},
 }
 
-func verifyAttemptGroups(groups []int, slots int) error {
-	for slot := range slots {
-		gid := attemptUIDBase + slot
-		if !slices.Contains(groups, gid) {
-			return fmt.Errorf("the agent user is not in attempt group %d for run slot %d -- rebuild the deploy image from the current template Dockerfile", gid, slot+1)
+// VerifyKeyDelivery inspects how the supervisor's own secrets arrived, only
+// in production, where there are sandboxed runs to keep them from. It runs
+// once at boot, and again before a manual `routines run` -- the same
+// container, the same keys in the environment, the same sandbox grant list,
+// so a layout boot would refuse cannot be accepted just because the
+// supervisor is not the one asking. Composing this here rather than in
+// creds or memory is
+// deliberate: neither owner can answer alone, because the question is about
+// its key *and* what the sandbox grants, and boot policy is the supervisor's
+// job. One rule sets the severity -- whether the thing we isolate can reach
+// the key:
+//
+// A key file inside a path the sandbox grants is fatal. Runs hold the
+// supervisor's uid, so its mode stops nobody, and an agent whose routines
+// can read its own master key has no degraded mode worth running in.
+//
+// A key value in the environment is a warning. It is the weaker delivery --
+// visible to platform introspection, crash dumps, anything running as root
+// -- but not to a run, whose environment is constructed rather than
+// inherited. It warns rather than refuses because the platform that forced
+// env delivery cannot be argued with at boot, and it fires on a leftover
+// variable too: moving to file delivery without unsetting the old one still
+// publishes the value.
+func VerifyKeyDelivery() error {
+	if runner.Confinement() != runner.Sandboxed {
+		return nil
+	}
+	// With the sandbox disabled there is no grant list to sit outside of --
+	// a run reads whatever the supervisor can, wherever the key file is --
+	// and refusing the smaller version of a tradeoff the operator already
+	// took would help nobody. The isolation check names that consequence.
+	confined := !sandbox.Disabled()
+	for _, key := range supervisorKeys {
+		if path := os.Getenv(key.fileEnv); confined && path != "" && sandbox.Exposes(path) {
+			return fmt.Errorf("%s=%s puts the %s inside a path every run's sandbox grants, where a run could read it -- runs share this process's uid, so the file's mode does not stop them. Mount it outside the granted OS paths instead (for example /run/secrets); see docs/operating.md", key.fileEnv, path, key.what)
+		}
+		if os.Getenv(key.valueEnv) != "" {
+			slog.Warn("the "+key.what+" value is in this process's environment -- readable wherever that environment is; mount the key as a file, point the file variable at the path, and unset the value variable",
+				"value_env", key.valueEnv, "file_env", key.fileEnv)
 		}
 	}
 	return nil
 }
 
-// verifySandbox enforces the fail-closed policy at boot, not mid-run. Only
-// production (inside the agent image) spawns model processes natively behind
-// the Landlock shim; everywhere else they run in the per-run container, or
-// the operator has explicitly opted into unconfined dev mode.
-func (s *Supervisor) verifySandbox() error {
-	switch {
-	case os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
-		// Attempt tree access is granted by group: staging chgrps each run's
-		// trees to the attempt's group, unprivileged only because the agent
-		// user belongs to every attempt group. Join the groups first --
-		// whether the image's membership reached this process depends on the
-		// init that booted the container -- then verify: an image without the
-		// identities at all would fail every attempt at staging, so refuse
-		// at boot instead.
-		if err := sandbox.EnsureAttemptGroups(config.MaxConcurrency + 1); err != nil {
-			return err
+// verifyIsolation settles at boot rather than mid-run what will stand between
+// a model process and everything it was not given, and records which it is.
+// Only production spawns model processes directly, each in its own sandbox;
+// elsewhere the run container is the boundary, or a contributor has
+// explicitly opted out of both.
+func (s *Supervisor) verifyIsolation() error {
+	switch runner.Confinement() {
+	case runner.Sandboxed:
+		// Build one throwaway sandbox before the first run needs a real one.
+		// A lower rung is a difference in degree and never fatal; no rung at
+		// all is a difference in kind, because a model process outside one
+		// shares a uid and a filesystem with every peer run and with the
+		// supervisor that holds the keys. That is why the hatch out of it is
+		// an explicit deployment decision rather than a fallback.
+		rung, err := sandbox.Verify()
+		switch {
+		case errors.Is(err, sandbox.ErrDisabled):
+			// Once, plainly, as a reminder of a decision already made -- see
+			// docs/operating.md for what it gives up. Repeating the argument
+			// every boot would not change it.
+			slog.Warn("run sandbox disabled -- model processes run unconfined", "disabled_by", sandbox.EnvDisable)
+		case err != nil:
+			// Which mechanism failed and why is for whoever is debugging the
+			// host, not for the operator being told their agent will not
+			// start; how to recover it is documentation, not a log line.
+			slog.Debug("no run sandbox could be built here", "detail", err)
+			return fmt.Errorf("runs cannot be isolated on this host -- see docs/operating.md, or set %s=1 to run without a sandbox", sandbox.EnvDisable)
+		default:
+			// Which rung is an implementation detail of picking the best one
+			// available, and nothing an operator chose or can act on.
+			slog.Debug("run sandbox active for model processes", "rung", rung.Name())
 		}
-		groups, err := os.Getgroups()
-		if err != nil {
-			return fmt.Errorf("attempt group check: %w", err)
-		}
-		if err := verifyAttemptGroups(groups, cap(s.slots)); err != nil {
-			return err
-		}
-		// Constructed, like every other child: an inherited environment
-		// would republish the supervisor's keys in the probe's own
-		// /proc/<pid>/environ. TMPDIR is the scratch scope it confines.
-		probe := exec.Command(sandbox.HelperPath, "sandbox-probe")
-		probe.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{
-			Uid: attemptUIDBase,
-			Gid: attemptUIDBase,
-		}}
-		probe.Env = []string{
-			"TMPDIR=" + os.Getenv("TMPDIR"),
-			sandbox.EnvAttemptUID + "=" + strconv.Itoa(attemptUIDBase),
-		}
-		out, probeErr := probe.Output()
-		if probeErr == nil {
-			// Prove the other half of reusable identities: an escaped process
-			// in its own session can be found and killed by UID.
-			hold := exec.Command(sandbox.HelperPath, "sandbox-hold")
-			hold.Env = []string{sandbox.EnvAttemptUID + "=" + strconv.Itoa(attemptUIDBase)}
-			hold.SysProcAttr = &syscall.SysProcAttr{
-				Setsid: true,
-				Credential: &syscall.Credential{
-					Uid: attemptUIDBase,
-					Gid: attemptUIDBase,
-				},
-			}
-			if err := hold.Start(); err != nil {
-				return fmt.Errorf("attempt uid cleanup probe start: %w", err)
-			}
-			if err := s.reap(attemptUIDBase); err != nil {
-				_ = hold.Process.Kill()
-				_ = hold.Wait()
-				return fmt.Errorf("attempt uid cleanup probe: %w", err)
-			}
-			if err := hold.Wait(); err == nil {
-				return fmt.Errorf("attempt uid cleanup probe: escaped process was not killed")
-			}
-			slog.Info("filesystem sandbox active for model processes", "mode", strings.TrimSpace(string(out)))
-			return nil
-		}
-		// The probe tolerates Landlock absence, so failure here means the
-		// identity transition itself is broken -- the gating guarantee, which
-		// no override may waive (design: "The required boundary is a
-		// per-attempt UID"). The unsafe override disables only Landlock, in
-		// the shim.
-		var exitErr *exec.ExitError
-		if errors.As(probeErr, &exitErr) && len(exitErr.Stderr) > 0 {
-			return fmt.Errorf("attempt identity probe: %w: %s", probeErr, strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		return fmt.Errorf("attempt identity probe: %w -- the binary needs cap_setuid and cap_setgid; rebuild the deploy image from the current template Dockerfile", probeErr)
-	case os.Getenv("OPENROUTINES_NATIVE") == "1":
+	case runner.Unconfined:
 		slog.Warn("OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
 	default:
 		slog.Info("model processes run in the per-run container")

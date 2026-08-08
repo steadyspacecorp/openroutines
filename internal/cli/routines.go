@@ -11,6 +11,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
+	"github.com/steadyspacecorp/openroutines/internal/supervisor"
 )
 
 const newRoutineTemplate = `---
@@ -91,6 +92,12 @@ func routinesRun(args []string) int {
 	}
 	name, err := routineName(nameArg)
 	if err != nil {
+		return fail(err)
+	}
+	// The same preflight supervise-boot runs: this command spawns a sandboxed
+	// model process too, and a key layout boot would refuse must not be
+	// reachable through the manual entrance.
+	if err := supervisor.VerifyKeyDelivery(); err != nil {
 		return fail(err)
 	}
 	res, err := runner.Run(".", name, skipKnowledge)
