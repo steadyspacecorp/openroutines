@@ -122,7 +122,7 @@ func retentionLabel(dir string) string {
 // this is what keeps a stale worktree from reading as a quiet zero.
 func printKnowledgeLag(dir string) {
 	if st := knowledge.At(dir).Status(); st.Behind > 0 {
-		fmt.Printf("\n%s knowledge/ is %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to get the latest knowledge from origin\n", warnMark, st.Behind, knowledge.Branch)
+		fmt.Printf("\n%s these numbers read local knowledge/, %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to count the latest runs\n", warnMark, st.Behind, knowledge.Branch)
 	}
 }
 
