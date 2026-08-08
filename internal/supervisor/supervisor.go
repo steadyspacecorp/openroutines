@@ -172,7 +172,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	// Before the deploy key is materialized, the lease is taken, or anything
 	// touches git: a key the runs could read is worth failing on while the
 	// deployment has changed nothing yet.
-	if err := verifyKeyDelivery(); err != nil {
+	if err := VerifyKeyDelivery(); err != nil {
 		return err
 	}
 	if configured, err := knowledge.ConfigureDeployKey(); err != nil {
@@ -967,9 +967,13 @@ var supervisorKeys = []struct{ what, valueEnv, fileEnv string }{
 	{"deploy key", knowledge.EnvDeployKey, knowledge.EnvDeployKeyFile},
 }
 
-// verifyKeyDelivery inspects how the supervisor's own secrets arrived, once
-// at boot and only in production, where there are sandboxed runs to keep
-// them from. Composing this here rather than in creds or memory is
+// VerifyKeyDelivery inspects how the supervisor's own secrets arrived, only
+// in production, where there are sandboxed runs to keep them from. It runs
+// once at boot, and again before a manual `routines run` -- the same
+// container, the same keys in the environment, the same sandbox grant list,
+// so a layout boot would refuse cannot be accepted just because the
+// supervisor is not the one asking. Composing this here rather than in
+// creds or memory is
 // deliberate: neither owner can answer alone, because the question is about
 // its key *and* what the sandbox grants, and boot policy is the supervisor's
 // job. One rule sets the severity -- whether the thing we isolate can reach
@@ -986,7 +990,7 @@ var supervisorKeys = []struct{ what, valueEnv, fileEnv string }{
 // env delivery cannot be argued with at boot, and it fires on a leftover
 // variable too: moving to file delivery without unsetting the old one still
 // publishes the value.
-func verifyKeyDelivery() error {
+func VerifyKeyDelivery() error {
 	if runner.Confinement() != runner.Sandboxed {
 		return nil
 	}
