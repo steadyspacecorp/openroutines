@@ -40,7 +40,10 @@ var landlockABI = sync.OnceValue(func() int {
 // It is the weaker rung, and the ways it is weaker are worth stating rather
 // than discovering: an ungranted path is denied rather than absent, peers are
 // listed in /proc, /tmp and /dev/shm are the container's (this rung is
-// granted neither), and nothing collapses the process tree.
+// granted neither), nothing collapses the process tree, and an ungranted
+// file's metadata -- mode, timestamps, xattrs -- stays changeable at any ABI,
+// because Landlock has no right that covers it and everything here shares one
+// user.
 //
 // What it does keep is the part that decides whether a fallback is safe to
 // take automatically. Landlock's domain boundary is checked by the kernel's
@@ -176,7 +179,10 @@ func ExecConfined(args []string) error {
 // abstract sockets -- and best-effort from there down, so an older kernel
 // still gets the filesystem restriction that is the point of the rung. Best
 // effort is safe here only because of the check below: without it, a kernel
-// with no Landlock at all would degrade silently to enforcing nothing.
+// with no Landlock at all would degrade silently to enforcing nothing. What
+// each ABI gives up on the way down is recorded in SECURITY.md rather than
+// guarded here; below v3 the notable loss is the truncate right, so an
+// ungranted file can be emptied though never read or written.
 func confine(ro, rw []string) error {
 	if landlockABI() == 0 {
 		return errors.New("this kernel has no Landlock support")
