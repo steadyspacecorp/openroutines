@@ -10,7 +10,7 @@ The agent's name and job description live in `openroutines.yml`, and both become
 openroutines status                # what the agent has and still needs
 openroutines sync                  # pull the latest knowledge; read the files under knowledge/
 openroutines routines new <name>   # add a routine
-openroutines routines run <name> --skip-knowledge  # real run; knowledge writes discarded
+openroutines routines run <name>   # real run; knowledge writes discarded (--write-knowledge settles)
 openroutines check                 # validate everything; run it in CI
 ```
 

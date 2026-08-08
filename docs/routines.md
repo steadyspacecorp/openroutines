@@ -105,11 +105,11 @@ The runtime handles the knowledge rules automatically, so write the prompt as th
 `routines run` starts opencode in a disposable Docker container, with the same runtime image, opencode version, constructed environment, and assembled workspace as production.
 
 ```bash
-openroutines routines run doc-drift                 # knowledge writes are kept
-openroutines routines run doc-drift --skip-knowledge     # knowledge writes are discarded
+openroutines routines run doc-drift                     # knowledge writes are discarded
+openroutines routines run doc-drift --write-knowledge   # knowledge writes are settled
 ```
 
-Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; `--skip-knowledge` changes only what happens afterward, discarding staged knowledge writes and the run record. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target and use `--skip-knowledge` when you do not want the result retained in agent knowledge.
+Both forms are real runs. They receive the routine's credentials and tools and may perform external actions; the flag changes only what happens afterward. By default a manual run discards its staged knowledge writes and run record -- the terminal is the iteration path, and iterating must not teach the agent or consume its change feed by accident. Pass `--write-knowledge` when the run should count. Use `openroutines check` for non-acting validation. To exercise an acting path, point the routine's configuration at a scratch target.
 
 ## Recording work
 

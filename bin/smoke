@@ -314,7 +314,7 @@ EOF
       cat /tmp/supervise.out
       exit 1
     fi
-    if ! openroutines routines run manual-probe > /tmp/manual.out 2>&1; then
+    if ! openroutines routines run manual-probe --write-knowledge > /tmp/manual.out 2>&1; then
       echo "manual run failed beside the supervisor"
       cat /tmp/manual.out
       exit 1

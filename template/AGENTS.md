@@ -38,7 +38,8 @@ deployed container runs whatever routine is due.
   `openroutines plugin update <name>` three-way merges a reviewed upstream
   update with local plugin edits.
 - **Validate after every change**: `openroutines check`. Run a routine once
-  with `openroutines routines run <name>`; add `--skip-knowledge` to discard its
+  with `openroutines routines run <name>` -- knowledge writes are discarded
+unless you add `--write-knowledge` to settle its
   knowledge writes. Both forms may perform real external actions.
 - **Skills** follow the Agent Skills standard: `skills/<name>/SKILL.md`.
   Treat third-party skills as executable dependencies -- review before
