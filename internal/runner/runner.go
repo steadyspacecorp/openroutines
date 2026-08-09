@@ -951,7 +951,13 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
-			return os.WriteFile(target, raw, 0o755)
+			mode := fs.FileMode(0o644)
+			if info, err := d.Info(); err != nil {
+				return err
+			} else if info.Mode().Perm()&0o111 != 0 {
+				mode = 0o755
+			}
+			return os.WriteFile(target, raw, mode)
 		})
 		if err != nil {
 			return err
