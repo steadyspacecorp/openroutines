@@ -16,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/steadyspacecorp/openroutines/internal/frontmatter"
 	"github.com/steadyspacecorp/openroutines/internal/trigger"
 )
 
@@ -120,23 +121,19 @@ func Parse(path string) (*Routine, error) {
 	if err != nil {
 		return nil, err
 	}
-	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
-	if !strings.HasPrefix(text, "---\n") {
+	doc, err := frontmatter.Split(raw)
+	if errors.Is(err, frontmatter.ErrMissing) {
 		return nil, errors.New("missing frontmatter (file must start with ---)")
 	}
-	rest := text[len("---\n"):]
-	end := strings.Index(rest, "\n---\n")
-	if end < 0 {
-		// Allow a file that is only frontmatter closed by a final "---".
-		if strings.HasSuffix(rest, "\n---") {
-			end = len(rest) - len("\n---")
-		} else {
-			return nil, errors.New("unterminated frontmatter (no closing ---)")
-		}
+	if errors.Is(err, frontmatter.ErrUnterminated) {
+		return nil, errors.New("unterminated frontmatter (no closing ---)")
+	}
+	if err != nil {
+		return nil, err
 	}
 	// Strict decoding: a typo like `actve: false` must be an error, not a
 	// silent fall-through to active-by-default.
-	dec := yaml.NewDecoder(strings.NewReader(rest[:end]))
+	dec := yaml.NewDecoder(strings.NewReader(string(doc.Frontmatter)))
 	dec.KnownFields(true)
 	var fm Frontmatter
 	if err := dec.Decode(&fm); err != nil && !errors.Is(err, io.EOF) {
@@ -159,10 +156,7 @@ func Parse(path string) (*Routine, error) {
 	if fm.Consumes != "" {
 		return nil, errors.New(`frontmatter: the consumes key is retired -- "consumes: knowledge" is now "reports: true"`)
 	}
-	body := ""
-	if bodyStart := end + len("\n---\n"); bodyStart <= len(rest) {
-		body = strings.TrimSpace(rest[min(bodyStart, len(rest)):])
-	}
+	body := strings.TrimSpace(string(doc.Body))
 	name := strings.TrimSuffix(filepath.Base(path), ".md")
 	return &Routine{Name: name, Path: path, FM: fm, Body: body}, nil
 }
@@ -186,16 +180,11 @@ func SetActive(path string, active bool) error {
 // preserving every other byte. Installers use it before a routine becomes
 // visible so an active-by-default source can never race a live supervisor.
 func WithActive(raw []byte, active bool) ([]byte, error) {
-	text := string(raw)
-	if !strings.HasPrefix(text, "---\n") {
-		return nil, fmt.Errorf("missing frontmatter")
+	doc, err := frontmatter.Split(raw)
+	if err != nil {
+		return nil, err
 	}
-	end := strings.Index(text[4:], "\n---")
-	if end < 0 {
-		return nil, fmt.Errorf("unterminated frontmatter")
-	}
-	fmEnd := 4 + end // offset of the newline before the closing ---
-	head, tail := text[:fmEnd], text[fmEnd:]
+	head := string(doc.Frontmatter)
 
 	value := "active: false"
 	if active {
@@ -205,9 +194,9 @@ func WithActive(raw []byte, active bool) ([]byte, error) {
 	if activeLine.MatchString(head) {
 		head = activeLine.ReplaceAllString(head, value)
 	} else {
-		head += "\n" + value
+		head += doc.LineEnding() + value
 	}
-	return []byte(head + tail), nil
+	return doc.WithFrontmatter([]byte(head)), nil
 }
 
 // Error is a load failure attributed to the routine it concerns: the file

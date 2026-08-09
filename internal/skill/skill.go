@@ -3,6 +3,7 @@
 package skill
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/steadyspacecorp/openroutines/internal/frontmatter"
 )
 
 // NamePattern is the Agent Skills name constraint: lowercase
@@ -30,17 +33,18 @@ func Parse(path string) (*Skill, error) {
 	if err != nil {
 		return nil, err
 	}
-	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
-	if !strings.HasPrefix(text, "---\n") {
+	doc, err := frontmatter.Split(raw)
+	if errors.Is(err, frontmatter.ErrMissing) {
 		return nil, fmt.Errorf("%s: missing frontmatter", path)
 	}
-	rest := text[len("---\n"):]
-	end := strings.Index(rest, "\n---")
-	if end < 0 {
+	if errors.Is(err, frontmatter.ErrUnterminated) {
 		return nil, fmt.Errorf("%s: unterminated frontmatter", path)
 	}
+	if err != nil {
+		return nil, err
+	}
 	var s Skill
-	if err := yaml.Unmarshal([]byte(rest[:end]), &s); err != nil {
+	if err := yaml.Unmarshal(doc.Frontmatter, &s); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	s.Dir = filepath.Dir(path)

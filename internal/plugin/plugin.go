@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/frontmatter"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
@@ -316,22 +317,23 @@ func parseManifestFile(path string) (*Manifest, string, error) {
 		}
 		return nil, "", err
 	}
-	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
-	if !strings.HasPrefix(text, "---\n") {
+	doc, err := frontmatter.Split(raw)
+	if errors.Is(err, frontmatter.ErrMissing) {
 		return nil, "", fmt.Errorf("%s: missing frontmatter", FileName)
 	}
-	rest := text[len("---\n"):]
-	end := strings.Index(rest, "\n---\n")
-	if end < 0 {
+	if errors.Is(err, frontmatter.ErrUnterminated) {
 		return nil, "", fmt.Errorf("%s: unterminated frontmatter", FileName)
 	}
+	if err != nil {
+		return nil, "", err
+	}
 	var m Manifest
-	dec := yaml.NewDecoder(bytes.NewReader([]byte(rest[:end])))
+	dec := yaml.NewDecoder(bytes.NewReader(doc.Frontmatter))
 	dec.KnownFields(true)
 	if err := dec.Decode(&m); err != nil && !errors.Is(err, io.EOF) {
 		return nil, "", fmt.Errorf("%s: %w", FileName, err)
 	}
-	return &m, strings.TrimSpace(rest[end+len("\n---\n"):]), nil
+	return &m, strings.TrimSpace(string(doc.Body)), nil
 }
 
 // agentNamespace returns the installed plugin routine namespace and the

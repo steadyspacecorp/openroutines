@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/steadyspacecorp/openroutines/internal/frontmatter"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
@@ -161,15 +162,12 @@ func stampProvenance(path, source, revision string) error {
 	if err != nil {
 		return err
 	}
-	text := string(raw)
-	if !strings.HasPrefix(text, "---\n") {
-		return fmt.Errorf("missing frontmatter")
+	doc, err := frontmatter.Split(raw)
+	if err != nil {
+		return err
 	}
-	end := strings.Index(text[4:], "\n---")
-	if end < 0 {
-		return fmt.Errorf("unterminated frontmatter")
-	}
-	fmEnd := 4 + end
-	stamp := fmt.Sprintf("\nmetadata:\n  source: %q\n  revision: %q", source, revision)
-	return os.WriteFile(path, []byte(text[:fmEnd]+stamp+text[fmEnd:]), 0o644)
+	stamp := fmt.Sprintf("%smetadata:%s  source: %q%s  revision: %q", doc.LineEnding(), doc.LineEnding(), source, doc.LineEnding(), revision)
+	frontmatter := append([]byte(nil), doc.Frontmatter...)
+	frontmatter = append(frontmatter, stamp...)
+	return os.WriteFile(path, doc.WithFrontmatter(frontmatter), 0o644)
 }
