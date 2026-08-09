@@ -54,7 +54,7 @@ type Supervisor struct {
 	Dir        string
 	InstanceID string
 
-	mem       *knowledge.Knowledge
+	mem       *knowledge.Store
 	noOrigin  bool
 	loc       *time.Location
 	retention time.Duration

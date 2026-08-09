@@ -33,13 +33,13 @@ func CursorFile(consumer string) string {
 	return path.Join(stateDirName, "cursors", consumer+".json")
 }
 
-func (m *Knowledge) cursorPath(consumer string) string {
-	return filepath.Join(m.Worktree(), CursorFile(consumer))
+func (store *Store) cursorPath(consumer string) string {
+	return filepath.Join(store.Worktree(), CursorFile(consumer))
 }
 
 // LoadCursor returns nil when the consumer has no cursor yet (first run).
-func (m *Knowledge) LoadCursor(consumer string) (*Cursor, error) {
-	raw, err := os.ReadFile(m.cursorPath(consumer))
+func (store *Store) LoadCursor(consumer string) (*Cursor, error) {
+	raw, err := os.ReadFile(store.cursorPath(consumer))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -64,8 +64,8 @@ var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
 // SaveCursor writes the cursor into the worktree; the caller's next Commit
 // carries it, so consumption is recorded in the run's completion commit.
-func (m *Knowledge) SaveCursor(consumer string, c Cursor) error {
-	p := m.cursorPath(consumer)
+func (store *Store) SaveCursor(consumer string, c Cursor) error {
+	p := store.cursorPath(consumer)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
@@ -77,8 +77,8 @@ func (m *Knowledge) SaveCursor(consumer string, c Cursor) error {
 }
 
 // Cursors lists every consumer with a cursor, for `openroutines status`.
-func (m *Knowledge) Cursors() (map[string]Cursor, error) {
-	dir := filepath.Join(m.StateDir(), "cursors")
+func (store *Store) Cursors() (map[string]Cursor, error) {
+	dir := filepath.Join(store.StateDir(), "cursors")
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -92,7 +92,7 @@ func (m *Knowledge) Cursors() (map[string]Cursor, error) {
 		if !ok {
 			continue
 		}
-		if c, err := m.LoadCursor(name); err == nil && c != nil {
+		if c, err := store.LoadCursor(name); err == nil && c != nil {
 			out[name] = *c
 		}
 	}
@@ -101,8 +101,8 @@ func (m *Knowledge) Cursors() (map[string]Cursor, error) {
 
 // Head returns the knowledge branch's current commit: the fixed `through`
 // boundary a change set is prepared against.
-func (m *Knowledge) Head() (string, error) {
-	return git(m.Worktree(), "rev-parse", "HEAD")
+func (store *Store) Head() (string, error) {
+	return git(store.Worktree(), "rev-parse", "HEAD")
 }
 
 // CommitChange is one knowledge commit's model-facing changes.
@@ -135,8 +135,8 @@ var ErrCursorUnreachable = errors.New("consumer cursor is not on the knowledge b
 // object store, and walking from it would deliver a change set nobody made.
 // Only git's own "no" (exit 1) counts; anything else is git failing to
 // answer, which must not abandon a run.
-func (m *Knowledge) reachable(from, through string) error {
-	wt := m.Worktree()
+func (store *Store) reachable(from, through string) error {
+	wt := store.Worktree()
 	full, err := git(wt, "rev-parse", "--verify", "--quiet", from+"^{commit}")
 	if err != nil {
 		if gitExitCode(err) != 1 {
@@ -160,11 +160,11 @@ func (m *Knowledge) reachable(from, through string) error {
 // additions and removals. Commit-by-commit, never a net endpoint diff: an
 // event added and later pruned by retention must still reach a consumer that
 // hasn't seen it.
-func (m *Knowledge) Changes(from, through string) ([]CommitChange, error) {
+func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 	if from == "" || through == "" {
 		return nil, fmt.Errorf("delivery changes: empty commit range")
 	}
-	if err := m.reachable(from, through); err != nil {
+	if err := store.reachable(from, through); err != nil {
 		return nil, err
 	}
 	// The %x00/%x1f sentinels are emitted by git itself -- argv cannot carry
@@ -176,7 +176,7 @@ func (m *Knowledge) Changes(from, through string) ([]CommitChange, error) {
 		"--invert-grep", "--grep=^" + trimTrailer + "$",
 		from + ".." + through, "--", ".",
 	}, deliveryExcludes...)
-	out, err := git(m.Worktree(), args...)
+	out, err := git(store.Worktree(), args...)
 	if err != nil {
 		return nil, err
 	}

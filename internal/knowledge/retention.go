@@ -30,17 +30,17 @@ const trimTrailer = "Openroutines-Retention-Trim: true"
 // CommitTrim commits what Trim rewrote, carrying the trailer that keeps it
 // out of the delivery feed. Scoped to the files Trim touches: anything else
 // dirty would ride along into the one commit no consumer ever reads.
-func (m *Knowledge) CommitTrim(keep time.Duration) (string, error) {
+func (store *Store) CommitTrim(keep time.Duration) (string, error) {
 	message := fmt.Sprintf("Trim knowledge to retention window (%s)\n\n%s\n", keep, trimTrailer)
-	return m.commitPaths(message, append([]string{runRecordsFile}, trimmedStreams...)...)
+	return store.commitPaths(message, append([]string{runRecordsFile}, trimmedStreams...)...)
 }
 
 // Trim drops record entries older than the window. Age is the line's git
 // commit time via blame -- no timestamp format imposed on routines. Only
 // list items ("- ") outside fences are records; everything else survives, as
 // do uncommitted lines. Returns whether anything changed; the caller commits.
-func (m *Knowledge) Trim(keep time.Duration, now time.Time) (bool, error) {
-	wt := m.Worktree()
+func (store *Store) Trim(keep time.Duration, now time.Time) (bool, error) {
+	wt := store.Worktree()
 	cutoff := now.Add(-keep)
 	changed := false
 

@@ -96,7 +96,7 @@ func cmdSync(args []string) int {
 // sync was blocked -- typically carrying the blocker task that explains the
 // refusal, since the block that stops sync also stops the runs that would
 // otherwise report it.
-func reportStranded(mem *knowledge.Knowledge) {
+func reportStranded(mem *knowledge.Store) {
 	snap := mem.Blocked()
 	if snap.Tip == "" {
 		return
