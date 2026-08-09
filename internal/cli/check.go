@@ -161,106 +161,7 @@ func cmdCheck(args []string) int {
 				okf("%s overrides %s", r.Name, shadowed)
 			}
 		}
-		var errs []string
-		if r.FM.Schedule == "" && r.FM.Trigger == nil {
-			errs = append(errs, "needs a schedule or a trigger")
-		}
-		if r.FM.Schedule != "" {
-			if _, err := cron.ParseStandard(r.FM.Schedule); err != nil {
-				errs = append(errs, fmt.Sprintf("schedule %q: %v", r.FM.Schedule, err))
-			}
-		}
-		if t := r.FM.Trigger; t != nil {
-			if err := t.Validate(); err != nil {
-				errs = append(errs, err.Error())
-			} else if strings.HasPrefix(t.Poll, "http://") {
-				warnf("%s: trigger polls over plain http -- the bearer credential and response travel unencrypted", r.Name)
-			}
-			if t.Credential != "" && !slices.Contains(r.FM.Credentials, t.Credential) {
-				errs = append(errs, fmt.Sprintf("trigger credential %q must also be listed in credentials", t.Credential))
-			}
-			if d, err := t.IntervalDuration(); err == nil && d < time.Minute {
-				warnf("%s: trigger interval %q is below the 1m tick -- polls can't happen more often than the tick", r.Name, t.Interval)
-			}
-			if r.FM.Schedule == "" {
-				warnf("%s: trigger with no schedule heartbeat -- a missed wake-up has no backstop", r.Name)
-			}
-		}
-		if r.FM.Timeout != "" {
-			if _, err := time.ParseDuration(r.FM.Timeout); err != nil {
-				errs = append(errs, fmt.Sprintf("timeout %q is not a valid duration", r.FM.Timeout))
-			}
-		}
-		// The runner caps every attempt at the agent's max_timeout ceiling;
-		// say so here, because a routine silently cut short is worse news
-		// than a rejected setting.
-		if agent != nil {
-			if declared, ceiling := runner.DeclaredTimeout(agent, r), agent.MaxRunTimeout(); declared > ceiling {
-				warnf("%s: timeout %s exceeds the agent's %s ceiling, so attempts are capped at %s -- raise max_timeout in %s or split the work into shorter runs", r.Name, declared, ceiling, ceiling, config.FileName)
-			}
-		}
-		if r.FM.Model != "" && !strings.Contains(r.FM.Model, "/") {
-			errs = append(errs, fmt.Sprintf("model %q must be provider/model", r.FM.Model))
-		}
-		if r.FM.Effort != "" && !effortPattern.MatchString(r.FM.Effort) {
-			errs = append(errs, fmt.Sprintf("effort %q should be a simple token like low, medium, high, or xhigh", r.FM.Effort))
-		}
-		for _, c := range r.FM.Credentials {
-			switch {
-			case !creds.NamePattern.MatchString(c):
-				errs = append(errs, fmt.Sprintf("credential name %q must be lowercase snake_case", c))
-			case strings.HasPrefix(c, creds.ReservedPrefix):
-				errs = append(errs, fmt.Sprintf("credential name %q collides with the reserved %s_* prefix", c, strings.ToUpper(creds.ReservedPrefix)))
-			case creds.ReservedEnvName(c):
-				errs = append(errs, fmt.Sprintf("credential name %q would shadow the %s environment variable in the run", c, strings.ToUpper(c)))
-			}
-		}
-		for _, s := range r.FM.Skills {
-			// Grammar before path use: a declared name becomes a filesystem
-			// path in the run pipeline.
-			if !skill.NamePattern.MatchString(s) {
-				errs = append(errs, fmt.Sprintf("skill name %q is not a valid Agent Skills name", s))
-				continue
-			}
-			if _, err := skill.Find(dir, s); err != nil {
-				errs = append(errs, err.Error())
-			}
-		}
-		for _, m := range r.FM.MCP {
-			// A grant must name a server opencode will actually connect --
-			// an unknown name is a silent no-op at run time, so fail loudly.
-			if !slices.Contains(oc.MCPServers(), m) {
-				errs = append(errs, fmt.Sprintf("mcp server %q is not defined in opencode.json's mcp block", m))
-			}
-		}
-		if !routine.NamePattern.MatchString(r.Name) {
-			errs = append(errs, fmt.Sprintf("routine filename %q: names must be lowercase alphanumerics with hyphens/underscores (the filename is the routine's identity and becomes paths)", r.Name))
-		}
-		if r.Body == "" {
-			errs = append(errs, "empty prompt body")
-		}
-		// Offline wiring validation: render the generated agent definition
-		// exactly as a run would -- no provider key, no Docker.
-		if agent != nil {
-			if _, rerr := runner.RenderDefinition(agent, r, oc.MCPServers()); rerr != nil {
-				errs = append(errs, fmt.Sprintf("generated definition: %v", rerr))
-			}
-		}
-		if len(errs) == 0 {
-			// A dormant routine is valid but will never run; a check mark
-			// there reads as "this will run", which is exactly the
-			// misreading that hides a silently parked reporter. The circle
-			// says: fine, and off.
-			if r.FM.IsActive() {
-				okf("%s (%s, active)", r.Name, scheduleSummary(r))
-			} else {
-				report.inactivef("%s (%s, inactive)", r.Name, scheduleSummary(r))
-			}
-		} else {
-			for _, e := range errs {
-				failf("%s: %s", r.Name, e)
-			}
-		}
+		checkRoutine(dir, agent, oc, r, report)
 	}
 	if len(routines) == 0 && len(parseErrs) == 0 {
 		warnf("no routines defined")
@@ -285,79 +186,7 @@ func cmdCheck(args []string) int {
 		}
 	}
 
-	// Provider-auth readiness: every active routine's effective model needs
-	// its provider key. Runs construct a clean environment, so there is no
-	// ambient fallback in the container -- without the key, the first run
-	// fails inside opencode with an opaque error, and production burns
-	// retry attempts before anyone learns why.
-	providerNeeds := map[string][]string{}
-	if agent != nil {
-		for _, r := range routines {
-			if !r.FM.IsActive() {
-				continue
-			}
-			model, merr := runner.EffectiveModel(agent, r)
-			if merr != nil {
-				continue // already reported against openroutines.yml/frontmatter
-			}
-			keyName := creds.ProviderKeyName(strings.SplitN(model, "/", 2)[0])
-			providerNeeds[keyName] = append(providerNeeds[keyName], r.Name)
-		}
-	}
-
-	// Credentials store
-	report.section("credentials")
-	if key, err := creds.LoadKey(dir); err != nil {
-		if len(providerNeeds) > 0 {
-			failf("%v -- active routines cannot authenticate to their model provider without it", err)
-		} else {
-			warnf("%v", err)
-		}
-	} else if store, err := creds.Read(dir, key); err != nil {
-		failf("%v", err)
-	} else {
-		okf("credentials decrypt (%d stored)", len(store))
-		for _, keyName := range slices.Sorted(maps.Keys(providerNeeds)) {
-			users := providerNeeds[keyName]
-			if _, ok := store[keyName]; !ok {
-				failf("%s not set -- %s cannot authenticate (openroutines credentials set %s)", keyName, strings.Join(users, ", "), keyName)
-			}
-		}
-		// Every declared credential must exist in the store.
-		for _, r := range routines {
-			for _, c := range r.FM.Credentials {
-				if _, ok := store[c]; !ok {
-					failf("%s declares credential %q, not present in %s", r.Name, c, creds.FileName)
-				}
-			}
-		}
-		if agent != nil {
-			// A typed entry names a stored credential; one without a stored
-			// value is dormant misconfiguration. One with a stored value
-			// must be able to serve its type -- a truncated key paste
-			// otherwise first surfaces as a failed run in production.
-			for _, name := range slices.Sorted(maps.Keys(agent.Credentials)) {
-				spec := agent.Credentials[name]
-				v, ok := store[name]
-				if !ok {
-					warnf("credential entry %q (type %s) has no stored value in %s", name, spec.Type, creds.FileName)
-					continue
-				}
-				if err := creds.ValidateStored(spec, v); err != nil {
-					failf("credential %q: %v -- re-store it: openroutines credentials set %s", name, err, name)
-				}
-			}
-		}
-		// A variable sharing a credential's name would be shadowed in the
-		// run environment (the credential wins) -- rename one of them.
-		if agent != nil {
-			for _, name := range slices.Sorted(maps.Keys(agent.Variables)) {
-				if _, ok := store[name]; ok {
-					failf("variable %q collides with a stored credential -- the credential wins in the run environment", name)
-				}
-			}
-		}
-	}
+	checkCredentials(dir, agent, routines, report)
 
 	// opencode.json belongs to the harness and update never rewrites it, so
 	// framework concerns that creep in stay until flagged; the schema
@@ -413,4 +242,158 @@ func cmdCheck(args []string) int {
 	}
 
 	return report.print()
+}
+
+func checkCredentials(dir string, agent *config.Agent, routines []*routine.Routine, report *checkReport) {
+	providerNeeds := map[string][]string{}
+	if agent != nil {
+		for _, r := range routines {
+			if !r.FM.IsActive() {
+				continue
+			}
+			model, err := runner.EffectiveModel(agent, r)
+			if err != nil {
+				continue
+			}
+			keyName := creds.ProviderKeyName(strings.SplitN(model, "/", 2)[0])
+			providerNeeds[keyName] = append(providerNeeds[keyName], r.Name)
+		}
+	}
+	report.section("credentials")
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		if len(providerNeeds) > 0 {
+			report.failf("%v -- active routines cannot authenticate to their model provider without it", err)
+		} else {
+			report.warnf("%v", err)
+		}
+		return
+	}
+	store, err := creds.Read(dir, key)
+	if err != nil {
+		report.failf("%v", err)
+		return
+	}
+	report.okf("credentials decrypt (%d stored)", len(store))
+	for _, keyName := range slices.Sorted(maps.Keys(providerNeeds)) {
+		if _, ok := store[keyName]; !ok {
+			report.failf("%s not set -- %s cannot authenticate (openroutines credentials set %s)", keyName, strings.Join(providerNeeds[keyName], ", "), keyName)
+		}
+	}
+	for _, r := range routines {
+		for _, credential := range r.FM.Credentials {
+			if _, ok := store[credential]; !ok {
+				report.failf("%s declares credential %q, not present in %s", r.Name, credential, creds.FileName)
+			}
+		}
+	}
+	if agent == nil {
+		return
+	}
+	for _, name := range slices.Sorted(maps.Keys(agent.Credentials)) {
+		spec := agent.Credentials[name]
+		value, ok := store[name]
+		if !ok {
+			report.warnf("credential entry %q (type %s) has no stored value in %s", name, spec.Type, creds.FileName)
+			continue
+		}
+		if err := creds.ValidateStored(spec, value); err != nil {
+			report.failf("credential %q: %v -- re-store it: openroutines credentials set %s", name, err, name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(agent.Variables)) {
+		if _, ok := store[name]; ok {
+			report.failf("variable %q collides with a stored credential -- the credential wins in the run environment", name)
+		}
+	}
+}
+
+func checkRoutine(dir string, agent *config.Agent, oc *config.OpenCode, r *routine.Routine, report *checkReport) {
+	var errs []string
+	if r.FM.Schedule == "" && r.FM.Trigger == nil {
+		errs = append(errs, "needs a schedule or a trigger")
+	}
+	if r.FM.Schedule != "" {
+		if _, err := cron.ParseStandard(r.FM.Schedule); err != nil {
+			errs = append(errs, fmt.Sprintf("schedule %q: %v", r.FM.Schedule, err))
+		}
+	}
+	if trigger := r.FM.Trigger; trigger != nil {
+		if err := trigger.Validate(); err != nil {
+			errs = append(errs, err.Error())
+		} else if strings.HasPrefix(trigger.Poll, "http://") {
+			report.warnf("%s: trigger polls over plain http -- the bearer credential and response travel unencrypted", r.Name)
+		}
+		if trigger.Credential != "" && !slices.Contains(r.FM.Credentials, trigger.Credential) {
+			errs = append(errs, fmt.Sprintf("trigger credential %q must also be listed in credentials", trigger.Credential))
+		}
+		if interval, err := trigger.IntervalDuration(); err == nil && interval < time.Minute {
+			report.warnf("%s: trigger interval %q is below the 1m tick -- polls can't happen more often than the tick", r.Name, trigger.Interval)
+		}
+		if r.FM.Schedule == "" {
+			report.warnf("%s: trigger with no schedule heartbeat -- a missed wake-up has no backstop", r.Name)
+		}
+	}
+	if r.FM.Timeout != "" {
+		if _, err := time.ParseDuration(r.FM.Timeout); err != nil {
+			errs = append(errs, fmt.Sprintf("timeout %q is not a valid duration", r.FM.Timeout))
+		}
+	}
+	if agent != nil {
+		if declared, ceiling := runner.DeclaredTimeout(agent, r), agent.MaxRunTimeout(); declared > ceiling {
+			report.warnf("%s: timeout %s exceeds the agent's %s ceiling, so attempts are capped at %s -- raise max_timeout in %s or split the work into shorter runs", r.Name, declared, ceiling, ceiling, config.FileName)
+		}
+	}
+	if r.FM.Model != "" && !strings.Contains(r.FM.Model, "/") {
+		errs = append(errs, fmt.Sprintf("model %q must be provider/model", r.FM.Model))
+	}
+	if r.FM.Effort != "" && !effortPattern.MatchString(r.FM.Effort) {
+		errs = append(errs, fmt.Sprintf("effort %q should be a simple token like low, medium, high, or xhigh", r.FM.Effort))
+	}
+	for _, credential := range r.FM.Credentials {
+		switch {
+		case !creds.NamePattern.MatchString(credential):
+			errs = append(errs, fmt.Sprintf("credential name %q must be lowercase snake_case", credential))
+		case strings.HasPrefix(credential, creds.ReservedPrefix):
+			errs = append(errs, fmt.Sprintf("credential name %q collides with the reserved %s_* prefix", credential, strings.ToUpper(creds.ReservedPrefix)))
+		case creds.ReservedEnvName(credential):
+			errs = append(errs, fmt.Sprintf("credential name %q would shadow the %s environment variable in the run", credential, strings.ToUpper(credential)))
+		}
+	}
+	for _, skillName := range r.FM.Skills {
+		if !skill.NamePattern.MatchString(skillName) {
+			errs = append(errs, fmt.Sprintf("skill name %q is not a valid Agent Skills name", skillName))
+			continue
+		}
+		if _, err := skill.Find(dir, skillName); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	for _, server := range r.FM.MCP {
+		if !slices.Contains(oc.MCPServers(), server) {
+			errs = append(errs, fmt.Sprintf("mcp server %q is not defined in opencode.json's mcp block", server))
+		}
+	}
+	if !routine.NamePattern.MatchString(r.Name) {
+		errs = append(errs, fmt.Sprintf("routine filename %q: names must be lowercase alphanumerics with hyphens/underscores (the filename is the routine's identity and becomes paths)", r.Name))
+	}
+	if r.Body == "" {
+		errs = append(errs, "empty prompt body")
+	}
+	if agent != nil {
+		if _, err := runner.RenderDefinition(agent, r, oc.MCPServers()); err != nil {
+			errs = append(errs, fmt.Sprintf("generated definition: %v", err))
+		}
+	}
+	if len(errs) > 0 {
+		for _, err := range errs {
+			report.failf("%s: %s", r.Name, err)
+		}
+		return
+	}
+	if r.FM.IsActive() {
+		report.okf("%s (%s, active)", r.Name, scheduleSummary(r))
+	} else {
+		report.inactivef("%s (%s, inactive)", r.Name, scheduleSummary(r))
+	}
 }
