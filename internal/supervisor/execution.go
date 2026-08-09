@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
@@ -142,6 +143,16 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	if settlement.EventsDiscarded {
 		log.Info("discarded staged events.md change (teamwork: off)")
 	}
+	conflictsCommitted := s.recordKnowledgeConflicts(r, pending, settlement, log)
+	shouldPush := reportSettlement(ctx, settlement, result, abandoned, log)
+	if !shouldPush || !conflictsCommitted {
+		return
+	}
+	s.pushBestEffort()
+	return
+}
+
+func (s *Supervisor) recordKnowledgeConflicts(r *routine.Routine, pending *schedule.Pending, settlement *runner.Settlement, log *slog.Logger) bool {
 	for i, conflict := range settlement.Conflicts {
 		taskID := fmt.Sprintf("task-%s-knowledge-conflict-%d", pending.RunID, i+1)
 		if err := s.store.AppendHumanTask(taskID,
@@ -152,13 +163,17 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		log.Warn("concurrent knowledge edit quarantined -- canonical knowledge left unchanged",
 			"path", conflict.Path, "quarantine", conflict.Quarantine)
 	}
-	conflictCommitOK := true
-	if len(settlement.Conflicts) > 0 {
-		if _, err := s.store.Commit(fmt.Sprintf("Record %s knowledge conflicts", pending.RunID)); err != nil {
-			conflictCommitOK = false
-			log.Error("conflict task commit failed", "error", err)
-		}
+	if len(settlement.Conflicts) == 0 {
+		return true
 	}
+	if _, err := s.store.Commit(fmt.Sprintf("Record %s knowledge conflicts", pending.RunID)); err != nil {
+		log.Error("conflict task commit failed", "error", err)
+		return false
+	}
+	return true
+}
+
+func reportSettlement(ctx context.Context, settlement *runner.Settlement, result *runner.AttemptResult, abandoned bool, log *slog.Logger) bool {
 	switch {
 	case settlement.Outcome == runner.Canceled:
 		if ctx.Err() != nil {
@@ -166,7 +181,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		} else {
 			log.Warn("canceled -- lease lost mid-run; whoever holds the lease retries it")
 		}
-		return // no push: shutdown's final commit carries the record, and a lease loser must not push
+		return false // shutdown's final commit carries the record, and a lease loser must not push
 	case settlement.Outcome == runner.Completed:
 		log.Info("run completed", withSessions(result.SessionsDir, "duration", result.Duration)...)
 	case abandoned:
@@ -174,11 +189,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	default:
 		log.Error("attempt failed -- will retry", withSessions(result.SessionsDir, "detail", settlement.Detail)...)
 	}
-	if !conflictCommitOK {
-		return // keep completion and remediation together on the next successful push
-	}
-	s.pushBestEffort()
-	return
+	return true
 }
 
 // withSessions names the attempt's exported sessions only when there are some.
