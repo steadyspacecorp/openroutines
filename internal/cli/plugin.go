@@ -60,11 +60,11 @@ func pluginAdd(args []string) int {
 	if len(rest) != 1 {
 		return fail(fmt.Errorf("%s", pluginAddUsage))
 	}
-	source := rest[0]
+	sourceRef := rest[0]
 	subPath := flags["--path"]
 	_, yes := flags["--yes"]
 
-	root, provenance, cleanup, err := plugin.Fetch(source, subPath, "")
+	root, provenance, cleanup, err := plugin.Fetch(sourceRef, subPath, "")
 	if err != nil {
 		return fail(err)
 	}
