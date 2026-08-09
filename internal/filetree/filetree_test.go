@@ -34,4 +34,16 @@ func TestCopyRegularAppliesModeAndSkipPolicies(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, ".git")); !os.IsNotExist(err) {
 		t.Fatalf("skipped directory exists: %v", err)
 	}
+
+	dataDst := filepath.Join(t.TempDir(), "data")
+	if err := CopyRegular(src, dataDst, Options{Mode: DataFiles}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dataDst, "script"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Errorf("DataFiles executable mode = %o, want 644", got)
+	}
 }
