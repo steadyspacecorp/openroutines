@@ -59,8 +59,8 @@ func (p *PreparedAttempt) Discard() error {
 // readable after a local run's container exits.
 const attemptHomeName = ".home"
 
-// Stage prepares one attempt without spawning anything. knowledgeLock is the caller's
-// knowledge lock, held only around the worktree reads -- credential
+// Stage prepares one attempt without spawning anything. knowledgeLock is the
+// caller's knowledge lock, held only around the worktree reads -- credential
 // resolution can spend seconds on the network. On error, everything Stage
 // acquired is already released.
 func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt, knowledgeLock sync.Locker) (prepared *PreparedAttempt, err error) {
@@ -162,8 +162,8 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt,
 	if err := writeAgentDefinition(workspaceRoot, agent, r, oc.MCPServers(), attempt); err != nil {
 		return nil, err
 	}
-	runTmp := filepath.Join(workspaceRoot, ".runtmp")
-	if err := os.MkdirAll(runTmp, 0o755); err != nil {
+	tempDir := filepath.Join(workspaceRoot, ".runtmp")
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
 		return nil, err
 	}
 	attemptHome := filepath.Join(workspaceRoot, attemptHomeName)
@@ -172,14 +172,37 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt,
 		if err := prepareWorkspaceAccess(attempt.AttemptUID, workspaceRoot); err != nil {
 			return nil, fmt.Errorf("preparing read-only attempt workspace: %w", err)
 		}
-		if err := prepareAttemptTrees(attempt.AttemptUID, workspace.KnowledgeDir, runTmp, attemptHome); err != nil {
+		if err := prepareAttemptTrees(attempt.AttemptUID, workspace.KnowledgeDir, tempDir, attemptHome); err != nil {
 			return nil, fmt.Errorf("preparing attempt uid %d trees: %w", attempt.AttemptUID, err)
 		}
 		workspace.attemptUID = attempt.AttemptUID
 	}
 
-	// Clean environment: constructed, never inherited.
-	env := frameworkEnv(agent.Timezone, r, attempt)
+	env := attemptEnv(agent, r, attempt, secrets)
+	opencodeArgs := attemptArgs(r, model)
+
+	ok = true
+	return &PreparedAttempt{
+		agentDir:     dir,
+		routine:      r,
+		attempt:      attempt,
+		model:        model,
+		timeout:      timeout,
+		secrets:      secrets,
+		workspace:    workspace,
+		tempDir:      tempDir,
+		env:          env,
+		opencodeArgs: opencodeArgs,
+	}, nil
+}
+
+func attemptEnv(agent *config.Agent, r *routine.Routine, attempt Attempt, secrets *runSecrets) []string {
+	env := []string{
+		"TZ=" + agent.Timezone,
+		"OPENROUTINES_RUN_ID=" + attempt.RunID,
+		"OPENROUTINES_ATTEMPT_ID=" + attempt.ID(),
+		"OPENROUTINES_URL=" + r.Frontmatter.EffectiveURL(),
+	}
 	if !attempt.ScheduledFor.IsZero() {
 		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+attempt.ScheduledFor.Format(time.RFC3339))
 	}
@@ -203,7 +226,10 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt,
 		}
 		env = append(env, strings.ToUpper(k)+"="+agent.Variables[k])
 	}
+	return env
+}
 
+func attemptArgs(r *routine.Routine, model string) []string {
 	// Identical across spawn paths. opencode's --log-level takes the same
 	// four names slog renders.
 	opencodeArgs := []string{
@@ -214,29 +240,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt,
 		opencodeArgs = append(opencodeArgs, "--variant", r.Frontmatter.Effort)
 	}
 	opencodeArgs = append(opencodeArgs, r.Body)
-
-	ok = true
-	return &PreparedAttempt{
-		agentDir:     dir,
-		routine:      r,
-		attempt:      attempt,
-		model:        model,
-		timeout:      timeout,
-		secrets:      secrets,
-		workspace:    workspace,
-		tempDir:      runTmp,
-		env:          env,
-		opencodeArgs: opencodeArgs,
-	}, nil
-}
-
-func frameworkEnv(timezone string, r *routine.Routine, attempt Attempt) []string {
-	return []string{
-		"TZ=" + timezone,
-		"OPENROUTINES_RUN_ID=" + attempt.RunID,
-		"OPENROUTINES_ATTEMPT_ID=" + attempt.ID(),
-		"OPENROUTINES_URL=" + r.Frontmatter.EffectiveURL(),
-	}
+	return opencodeArgs
 }
 
 // Run spawns the prepared attempt's model process and waits it out. Derived
