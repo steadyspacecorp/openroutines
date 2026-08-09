@@ -4,11 +4,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"github.com/steadyspacecorp/openroutines/internal/config"
-	"github.com/steadyspacecorp/openroutines/internal/knowledge"
-	"github.com/steadyspacecorp/openroutines/internal/routine"
-	"github.com/steadyspacecorp/openroutines/internal/skill"
-	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -16,6 +11,12 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/filetree"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
+	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
 // buildWorkspace assembles the run workspace by allow-list: the configuration
@@ -77,33 +78,7 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 		}
 		src := found.Dir
 		dest := filepath.Join(workspace, ".opencode", "skills", name)
-		err = filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(src, path)
-			target := filepath.Join(dest, rel)
-			if d.IsDir() {
-				return os.MkdirAll(target, 0o755)
-			}
-			if !d.Type().IsRegular() {
-				return nil
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			mode := fs.FileMode(0o644)
-			if info, err := d.Info(); err != nil {
-				return err
-			} else if info.Mode().Perm()&0o111 != 0 {
-				mode = 0o755
-			}
-			return os.WriteFile(target, raw, mode)
-		})
+		err = filetree.CopyRegular(src, dest, filetree.Options{Mode: filetree.PreserveExecutables})
 		if err != nil {
 			return err
 		}
