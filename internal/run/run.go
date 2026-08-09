@@ -1,3 +1,4 @@
+// Package run owns run identities and the persisted attempt record schema.
 package run
 
 import (
@@ -8,6 +9,7 @@ import (
 
 const idAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 
+// NewID returns a random logical run identifier.
 func NewID() string {
 	buf := make([]byte, 10)
 	if _, err := rand.Read(buf); err != nil {
@@ -19,6 +21,7 @@ func NewID() string {
 	return "run_" + string(buf)
 }
 
+// Tokens is one attempt's reported token consumption.
 type Tokens struct {
 	Input        int64   `json:"input"`
 	Output       int64   `json:"output"`
@@ -28,6 +31,7 @@ type Tokens struct {
 	CostReported float64 `json:"-"`
 }
 
+// Record is one persisted routine attempt.
 type Record struct {
 	RunID          string  `json:"run_id"`
 	Routine        string  `json:"routine"`
@@ -46,11 +50,13 @@ type Record struct {
 	CostReported   float64 `json:"cost_reported,omitempty"`
 }
 
+// JSON encodes the record as one runs.jsonl line.
 func (r Record) JSON() string {
 	raw, _ := json.Marshal(r)
 	return string(raw)
 }
 
+// ParseRecords decodes valid records and skips malformed lines.
 func ParseRecords(raw []byte) []Record {
 	var records []Record
 	for line := range strings.SplitSeq(string(raw), "\n") {

@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/steadyspacecorp/openroutines/internal/frontmatter"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
+	sourcepkg "github.com/steadyspacecorp/openroutines/internal/source"
 )
 
 // Vendors a skill from a git repository into skills/<name>, recording
@@ -31,32 +31,11 @@ func skillsAdd(args []string) int {
 	}
 	source := rest[0]
 	subPath := flags["--path"]
-	cloneURL := source
-	if !strings.Contains(source, "://") && !strings.Contains(source, "@") && strings.Count(source, "/") == 1 {
-		cloneURL = "https://github.com/" + source + ".git"
-	}
-
-	tmp, err := os.MkdirTemp("", "openroutines-skill-*")
+	root, provenance, cleanup, err := sourcepkg.Fetch(source, subPath, "")
 	if err != nil {
-		return fail(err)
+		return fail(fmt.Errorf("fetch skill: %w", err))
 	}
-	defer os.RemoveAll(tmp)
-
-	// Ambient git (vendoring needs the user's own auth), but the URL is
-	// pasted input: disable protocol.ext and terminate option parsing so a
-	// leading-dash "URL" can't become a flag or trigger command execution.
-	clone := exec.Command("git", "-c", "protocol.ext.allow=never", "clone", "--quiet", "--depth", "1", "--", cloneURL, tmp)
-	clone.Stderr = os.Stderr
-	if err := clone.Run(); err != nil {
-		return fail(fmt.Errorf("clone %s: %w", cloneURL, err))
-	}
-	revBytes, _ := exec.Command("git", "-C", tmp, "rev-parse", "--short", "HEAD").Output()
-	revision := strings.TrimSpace(string(revBytes))
-
-	root := tmp
-	if subPath != "" {
-		root = filepath.Join(tmp, filepath.Clean(subPath))
-	}
+	defer cleanup()
 	skillDir, err := findSkillDir(root)
 	if err != nil {
 		return fail(err)
@@ -109,11 +88,11 @@ func skillsAdd(args []string) int {
 		return fail(err)
 	}
 
-	if err := stampProvenance(filepath.Join(dest, "SKILL.md"), source, revision); err != nil {
+	if err := stampProvenance(filepath.Join(dest, "SKILL.md"), source, provenance.Revision); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not record provenance: %v\n", err)
 	}
 
-	fmt.Printf("Vendored %q -> %s (from %s @ %s)\n", s.Name, dest, source, revision)
+	fmt.Printf("Vendored %q -> %s (from %s @ %s)\n", s.Name, dest, source, provenance.Revision)
 	fmt.Printf("  %s\n\n", firstLine(s.Description))
 	fmt.Println("A skill is instructions -- and sometimes code -- your agent will follow")
 	fmt.Println("unattended. Review the diff like a dependency before committing, then")
