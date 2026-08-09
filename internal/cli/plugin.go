@@ -19,7 +19,8 @@ const pluginUsage = "usage: openroutines plugin <add|list|update>"
 
 func cmdPlugin(args []string) int {
 	if len(args) == 0 {
-		return fail(fmt.Errorf("%s", pluginUsage))
+		fmt.Fprintln(os.Stderr, pluginUsage)
+		return 2
 	}
 	if wantsHelp(args[:1]) {
 		fmt.Println(pluginUsage)
@@ -33,7 +34,9 @@ func cmdPlugin(args []string) int {
 	case "update":
 		return pluginUpdate(args[1:])
 	default:
-		return fail(fmt.Errorf("unknown plugin command %q (available: add, list, update)", args[0]))
+		fmt.Fprintf(os.Stderr, "openroutines: unknown plugin command %q\n\n", args[0])
+		fmt.Println(pluginUsage)
+		return 2
 	}
 }
 

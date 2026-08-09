@@ -74,3 +74,24 @@ func TestRunAllowsScaffoldOutsideAnAgentRepo(t *testing.T) {
 		t.Fatalf("scaffold did not create an agent repo: %v", err)
 	}
 }
+
+func TestPluginUsageErrorsExitTwo(t *testing.T) {
+	for _, args := range [][]string{nil, {"unknown"}} {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stderr := os.Stderr
+		stdout := os.Stdout
+		os.Stderr = w
+		os.Stdout = w
+		code := cmdPlugin(args)
+		os.Stderr = stderr
+		os.Stdout = stdout
+		w.Close()
+		r.Close()
+		if code != 2 {
+			t.Fatalf("cmdPlugin(%q) exit code = %d, want 2", args, code)
+		}
+	}
+}
