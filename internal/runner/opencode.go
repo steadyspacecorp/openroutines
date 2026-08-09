@@ -53,7 +53,7 @@ func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 			return nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
 		}
 		return nativeRuntime{workspace: p.workspace.root, tempDir: p.tempDir, env: p.env}, nil
-	default:
+	case mode.LocalContainer:
 		if _, err := exec.LookPath("docker"); err != nil {
 			return nil, fmt.Errorf("docker is required to run routines -- the model process executes in a container (see README prerequisites); contributors with opencode installed locally can set OPENROUTINES_NATIVE=1")
 		}
@@ -81,6 +81,7 @@ func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 			env:       p.env,
 		}, nil
 	}
+	return nil, fmt.Errorf("unsupported deployment mode %d", currentMode)
 }
 
 // sandboxedRuntime is production: opencode from the image's PATH, the run

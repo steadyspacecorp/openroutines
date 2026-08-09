@@ -36,8 +36,8 @@ type triggerServer struct {
 	polls int
 }
 
-func newTriggerServer(value string) *triggerServer {
-	ts := &triggerServer{value: value}
+func newTriggerServer() *triggerServer {
+	ts := &triggerServer{value: "v1"}
 	ts.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		ts.mu.Lock()
 		defer ts.mu.Unlock()
@@ -73,7 +73,7 @@ func runCount(t *testing.T, dir string) int {
 }
 
 func TestTriggerBaselineThenFiresOnChange(t *testing.T) {
-	srv := newTriggerServer("v1")
+	srv := newTriggerServer()
 	defer srv.Close()
 	dir := fixture(t, "ok")
 	writeTriggerRoutine(t, dir, srv.URL, "  interval: 1m\n")
@@ -109,7 +109,7 @@ func TestTriggerBaselineThenFiresOnChange(t *testing.T) {
 // polls is caught on the next one -- delayed by at most the interval, never
 // lost -- and consecutive changes produce a steady one-run-per-interval beat.
 func TestTriggerIntervalPacesFires(t *testing.T) {
-	srv := newTriggerServer("v1")
+	srv := newTriggerServer()
 	defer srv.Close()
 	dir := fixture(t, "ok")
 	writeTriggerRoutine(t, dir, srv.URL, "  interval: 3m\n")
@@ -147,7 +147,7 @@ func TestTriggerIntervalPacesFires(t *testing.T) {
 }
 
 func TestTriggerIntervalThrottlesPolls(t *testing.T) {
-	srv := newTriggerServer("v1")
+	srv := newTriggerServer()
 	defer srv.Close()
 	dir := fixture(t, "ok")
 	writeTriggerRoutine(t, dir, srv.URL, "  interval: 2m\n")
@@ -190,7 +190,7 @@ func TestTriggerPollErrorsDoNotFire(t *testing.T) {
 // the run, the trigger baseline refreshes so the same news does not fire a
 // second, redundant run right after.
 func TestScheduledRunRefreshesTriggerBaseline(t *testing.T) {
-	srv := newTriggerServer("v1")
+	srv := newTriggerServer()
 	defer srv.Close()
 	dir := fixture(t, "ok")
 	fm := "---\nschedule: \"*/5 * * * *\"\ntrigger:\n  poll: " + srv.URL + "\n  interval: 1m\n---\nDo the fake thing.\n"
@@ -307,7 +307,7 @@ func TestTriggerDerivesTypedCredential(t *testing.T) {
 // refused before it is materialized -- the rule `check` errors on, enforced
 // again at runtime.
 func TestTriggerRefusesUnlistedCredential(t *testing.T) {
-	srv := newTriggerServer("v1")
+	srv := newTriggerServer()
 	defer srv.Close()
 	dir := fixture(t, "ok")
 	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600); err != nil {

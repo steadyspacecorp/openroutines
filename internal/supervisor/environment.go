@@ -105,7 +105,7 @@ func (s *Supervisor) verifySandbox() error {
 		return fmt.Errorf("attempt identity probe: %w -- the binary needs cap_setuid and cap_setgid; rebuild the deploy image from the current template Dockerfile", probeErr)
 	case mode.LocalNative:
 		slog.Warn("OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
-	default:
+	case mode.LocalContainer:
 		slog.Info("model processes run in the per-run container")
 	}
 	return nil
