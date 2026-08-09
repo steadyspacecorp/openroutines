@@ -23,7 +23,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
-// attemptRuntime is one attempt's grip on its opencode process: run hands
+// One attempt's grip on its opencode process: run hands
 // back the model process ready to start, kill and reap end it, and exec runs
 // one follow-up subcommand as the supervisor and returns its stdout.
 type attemptRuntime interface {
@@ -33,7 +33,7 @@ type attemptRuntime interface {
 	exec(args ...string) ([]byte, error)
 }
 
-// runtime picks the attempt's deployment mode and checks its prerequisites.
+// Picks the attempt's deployment mode and checks its prerequisites.
 func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 	currentMode := mode.Current()
 	switch currentMode {
@@ -84,7 +84,7 @@ func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 	return nil, fmt.Errorf("unsupported deployment mode %d", currentMode)
 }
 
-// sandboxedRuntime is production: opencode from the image's PATH, the run
+// Production: opencode from the image's PATH, the run
 // confined behind the Landlock shim as the attempt's own identity.
 type sandboxedRuntime struct {
 	processGroup
@@ -95,12 +95,11 @@ type sandboxedRuntime struct {
 	env          []string
 }
 
-// home is the disposable per-attempt HOME inside the workspace.
 func (h sandboxedRuntime) home() string { return filepath.Join(h.workspace, attemptHomeName) }
 
 func (h sandboxedRuntime) dataHome() string { return filepath.Join(h.home(), ".local", "share") }
 
-// run builds the model process behind the Landlock shim -- our own binary
+// Builds the model process behind the Landlock shim -- our own binary
 // applies the rules to itself, then execs opencode. HOME is disposable and
 // the attempt's alone: a shared writable home let one routine persist state,
 // plugins included, into a later routine's session.
@@ -127,7 +126,7 @@ func (h sandboxedRuntime) run(ocArgs []string) *exec.Cmd {
 	return cmd
 }
 
-// exec runs one subcommand with a minted hygiene HOME (see captureHome); the
+// Runs one subcommand with a minted hygiene HOME (see captureHome); the
 // attempt's store is reached by XDG_DATA_HOME -- data, never code.
 func (h sandboxedRuntime) exec(args ...string) ([]byte, error) {
 	gid := attemptGroup(h.home())
@@ -161,7 +160,7 @@ func (h sandboxedRuntime) exec(args ...string) ([]byte, error) {
 	return runToFile(cmd)
 }
 
-// captureHome mints the HOME one capture exec runs with: empty and never
+// Mints the HOME one capture exec runs with: empty and never
 // attempt-writable. opencode auto-loads plugins from its config dir at
 // startup, `session list` and `export` included (verified against 1.18.3) --
 // pointed at the attempt's own home, the exec would execute whatever a
@@ -189,7 +188,7 @@ func captureHome(workspace string, gid uint32) (string, func(), error) {
 	return home, cleanup, nil
 }
 
-// underDir reports whether path sits at or below dir, both resolved: the
+// Reports whether path sits at or below dir, both resolved: the
 // containment check has to survive /var -> /private/var style symlinks.
 func underDir(dir, path string) (bool, error) {
 	d, err := filepath.EvalSymlinks(dir)
@@ -207,7 +206,7 @@ func underDir(dir, path string) (bool, error) {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)), nil
 }
 
-// attemptGroup reads back the identity the attempt home was granted to at
+// Reads back the identity the attempt home was granted to at
 // staging; 0 means no identity scheme (native mode, tests).
 func attemptGroup(attemptHome string) uint32 {
 	info, err := os.Stat(attemptHome)
@@ -221,7 +220,7 @@ func attemptGroup(attemptHome string) uint32 {
 	return st.Gid
 }
 
-// nativeRuntime is OPENROUTINES_NATIVE=1: the developer's own opencode,
+// OPENROUTINES_NATIVE=1: the developer's own opencode,
 // unconfined by explicit opt-in. Their real HOME stays (opencode auth lives
 // there); sessions are reached by working directory, which is this attempt's
 // alone. No capture-home hygiene -- the run already executed unconfined with
@@ -254,7 +253,7 @@ func (n nativeRuntime) exec(args ...string) ([]byte, error) {
 	return runToFile(cmd)
 }
 
-// containerRuntime is the local default: opencode exists only inside the
+// The local default: opencode exists only inside the
 // runtime image, so both paths re-enter it with the workspace mounted at
 // /work and nothing else from the host visible.
 type containerRuntime struct {
@@ -264,7 +263,7 @@ type containerRuntime struct {
 	env       []string
 }
 
-// run builds the docker run invocation for the attempt. Env vars are
+// Builds the docker run invocation for the attempt. Env vars are
 // passed by NAME only -- docker resolves the values from the client
 // process's environment -- so secret values never appear on the command
 // line (argv is world-readable via ps for the duration of the run).
@@ -298,16 +297,16 @@ func (c containerRuntime) kill(cmd *exec.Cmd, done chan error, log *slog.Logger)
 	killClient(cmd, containerExitGrace, done, log)
 }
 
-// reap is a no-op: the run's pid namespace dies with `docker run --rm`,
+// A no-op: the run's pid namespace dies with `docker run --rm`,
 // which reaps every descendant already.
 func (c containerRuntime) reap(*exec.Cmd) {}
 
-// captureHomeMount is where the capture exec's empty home lives inside
+// Where the capture exec's empty home lives inside
 // the runtime image -- deliberately outside /work, the attempt's
 // workspace.
 const captureHomeMount = "/capture-home"
 
-// captureOutName is where an in-container capture exec's stdout lands: the
+// Where an in-container capture exec's stdout lands: the
 // file that defeats opencode's lossy exit (see runToFile) has to sit on
 // opencode's side of docker's stdout pipe.
 const captureOutName = ".capture-out"
@@ -358,7 +357,7 @@ func (c containerRuntime) exec(args ...string) ([]byte, error) {
 	return io.ReadAll(out)
 }
 
-// processGroup is how the direct-spawn modes end a run: the model process
+// How the direct-spawn modes end a run: the model process
 // leads its own process group, created at spawn so a kill reaches every
 // descendant.
 type processGroup struct{}
@@ -369,11 +368,11 @@ func (processGroup) kill(cmd *exec.Cmd, done chan error, log *slog.Logger) {
 
 func (processGroup) reap(cmd *exec.Cmd) { reapGroup(cmd) }
 
-// captureTimeout bounds each capture exec: a hung docker or opencode must
+// Bounds each capture exec: a hung docker or opencode must
 // not stall the supervisor's tick.
 const captureTimeout = 30 * time.Second
 
-// runToFile runs one capture exec with its stdout on a plain file. opencode
+// Runs one capture exec with its stdout on a plain file. opencode
 // exits without draining its final stdout write, so a large export through a
 // pipe arrives cut at a 64 KiB boundary with exit code 0; file writes are
 // synchronous. The child inherits only the open descriptor and the readback
@@ -402,7 +401,7 @@ func runToFile(cmd *exec.Cmd) ([]byte, error) {
 	return io.ReadAll(out)
 }
 
-// tailBuffer keeps the last stderrTailCap bytes: the failure explanation
+// Keeps the last stderrTailCap bytes: the failure explanation
 // lands at the end of the stream, and keeping all of an untrusted stream
 // would hand bookkeeping a memory-exhaustion lever.
 type tailBuffer struct {
@@ -421,7 +420,7 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 
 func (t *tailBuffer) String() string { return string(t.buf) }
 
-// execError keeps what a failed capture exec said on stderr -- the only
+// Keeps what a failed capture exec said on stderr -- the only
 // trace of why bookkeeping degraded.
 func execError(err error, stderr *tailBuffer) error {
 	if s := strings.TrimSpace(stderr.String()); s != "" {

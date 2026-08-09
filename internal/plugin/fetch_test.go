@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// gitCommitAll initializes a repository at dir if needed and commits
-// everything in it, returning the commit hash.
 func gitCommitAll(t *testing.T, dir, message string) string {
 	t.Helper()
 	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {

@@ -1,4 +1,4 @@
-// Package trigger implements event-driven routine wake-ups: a cheap,
+// Implements event-driven routine wake-ups: a cheap,
 // outbound change-detection poll evaluated on the supervisor's tick. A
 // trigger carries no payload -- on change the routine simply becomes due and
 // pulls its actual work through its own skills. The poll response is opaque:
@@ -22,27 +22,27 @@ import (
 )
 
 const (
-	// DefaultInterval is the poll cadence when the frontmatter doesn't set
+	// The poll cadence when the frontmatter doesn't set
 	// one. The interval bounds both request rate and fire rate (a poll is the
 	// only fire opportunity), so one knob covers courtesy and spend alike.
 	DefaultInterval = 5 * time.Minute
 
-	// RequestTimeout bounds one poll; polls run serially on the tick, so a
+	// Bounds one poll; polls run serially on the tick, so a
 	// hung endpoint must not eat the minute.
 	RequestTimeout = 10 * time.Second
 
-	// selectBodyCap bounds a body that must be held in knowledge for JSON
+	// Bounds a body that must be held in knowledge for JSON
 	// extraction. hashBodyCap bounds how much of a raw body is streamed into
 	// the comparison hash -- hashing needs no buffer, so it can be generous.
 	selectBodyCap = 256 << 10
 	hashBodyCap   = 4 << 20
 )
 
-// StateDirName is the subdirectory of the supervisor-owned state/ directory
+// The subdirectory of the supervisor-owned state/ directory
 // holding per-routine trigger state.
 const StateDirName = "triggers"
 
-// State is one routine's durable trigger record: the last comparison value
+// One routine's durable trigger record: the last comparison value
 // and the conditional-request validators that produced it. Poll timing is
 // deliberately absent -- persisting it would dirty the knowledge worktree on
 // every poll.
@@ -57,7 +57,7 @@ func statePath(stateDir, name string) string {
 	return filepath.Join(stateDir, StateDirName, name+".json")
 }
 
-// Load reads a routine's trigger state; nil (no error) when none exists yet.
+// Reads a routine's trigger state; nil (no error) when none exists yet.
 func Load(stateDir, name string) (*State, error) {
 	raw, err := os.ReadFile(statePath(stateDir, name))
 	if err != nil {
@@ -73,7 +73,6 @@ func Load(stateDir, name string) (*State, error) {
 	return &s, nil
 }
 
-// Save writes a routine's trigger state.
 func (s *State) Save(stateDir string) error {
 	if err := os.MkdirAll(filepath.Join(stateDir, StateDirName), 0o755); err != nil {
 		return err
@@ -85,7 +84,6 @@ func (s *State) Save(stateDir string) error {
 	return os.WriteFile(statePath(stateDir, s.Routine), append(raw, '\n'), 0o644)
 }
 
-// Spec is a routine's trigger declaration, parsed from frontmatter.
 type Spec struct {
 	Poll       string `yaml:"poll"`
 	Credential string `yaml:"credential,omitempty"`
@@ -93,7 +91,7 @@ type Spec struct {
 	Interval   string `yaml:"interval,omitempty"` // poll cadence; default 5m, floor one tick
 }
 
-// IntervalDuration applies the default.
+// Uses DefaultInterval when frontmatter omits the interval.
 func (t Spec) IntervalDuration() (time.Duration, error) {
 	if t.Interval == "" {
 		return DefaultInterval, nil
@@ -101,7 +99,7 @@ func (t Spec) IntervalDuration() (time.Duration, error) {
 	return time.ParseDuration(t.Interval)
 }
 
-// Validate checks the declaration shape; policy warnings (https, interval
+// Checks the declaration shape; policy warnings (https, interval
 // below the tick) belong to `openroutines check`.
 func (t Spec) Validate() error {
 	if t.Poll == "" {
@@ -122,7 +120,7 @@ func (t Spec) Validate() error {
 	return nil
 }
 
-// Client is the poll HTTP client: short timeout, and no redirects -- a
+// The poll HTTP client: short timeout, and no redirects -- a
 // declared URL is the reviewed grant, and a redirect is a different URL.
 var Client = &http.Client{
 	Timeout: RequestTimeout,
@@ -131,14 +129,14 @@ var Client = &http.Client{
 	},
 }
 
-// Result is one poll's outcome. Changed reports whether the observed value
+// One poll's outcome. Changed reports whether the observed value
 // differs from prior; Next is the state to persist if the caller fires.
 type Result struct {
 	Changed bool
 	Next    State
 }
 
-// Poll performs one change-detection request. prior may be nil (first
+// Performs one change-detection request. prior may be nil (first
 // sight): the first observation establishes the baseline and never reports a
 // change. The credential, when present, is sent as a bearer token and never
 // appears in errors.

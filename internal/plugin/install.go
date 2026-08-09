@@ -14,7 +14,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
-// Install is a validated install: the bundle, the agent it targets, and the
+// A validated install: the bundle, the agent it targets, and the
 // provenance to record. Apply is reachable only through PrepareInstall, so
 // nothing can be copied past a failed check.
 type Install struct {
@@ -24,7 +24,7 @@ type Install struct {
 	source   Source
 }
 
-// PrepareInstall validates everything an install depends on: the provenance
+// Validates everything an install depends on: the provenance
 // to record, the whole payload at bundleDir, and the agent's namespace.
 // Install refuses to replace anything -- an existing path is the user's.
 func PrepareInstall(agentDir, bundleDir string, source Source) (*Install, error) {
@@ -91,7 +91,7 @@ func (p *Plugin) collisions(routines []*routine.Routine, skills []*skill.Skill, 
 	return taken
 }
 
-// Apply copies the bundle into the agent: routines and skills always; ledger
+// Copies the bundle into the agent: routines and skills always; ledger
 // stubs only when the knowledge worktree already exists (the supervisor
 // creates it on first run), otherwise they're returned as pending.
 func (i *Install) Apply() (installed, pendingStubs []string, err error) {

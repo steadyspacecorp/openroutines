@@ -13,7 +13,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
 
-// execute runs one attempt of a pending logical run and settles the outcome.
+// Runs one attempt of a pending logical run and settles the outcome.
 func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time, attemptUID uint32) (cleanupErr error) {
 	// Attempts interleave on one stdout, so the identity travels with the
 	// logger.
@@ -193,7 +193,6 @@ func reportSettlement(ctx context.Context, settlement *runner.Settlement, result
 	return true
 }
 
-// withSessions names the attempt's exported sessions only when there are some.
 func withSessions(sessionsDir string, args ...any) []any {
 	if sessionsDir != "" {
 		args = append(args, "sessions", sessionsDir)

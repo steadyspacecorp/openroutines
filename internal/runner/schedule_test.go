@@ -120,7 +120,7 @@ func TestRenderScheduleUsesAgentTimezoneNotArgumentZone(t *testing.T) {
 	}
 }
 
-// section returns got between the line starting the `from` table and the
+// Returns got between the line starting the `from` table and the
 // `to` marker ("" = end).
 func section(got, from, to string) string {
 	start := strings.Index(got, from)

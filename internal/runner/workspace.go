@@ -19,7 +19,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
-// buildWorkspace assembles the run workspace by allow-list: the configuration
+// Assembles the run workspace by allow-list: the configuration
 // file, opencode.json, and routines/ -- everything else a run sees is staged
 // deliberately by the pipeline. (A deny-list once missed exactly one entry,
 // the encrypted credential store.) name is the routine being run, whose
@@ -60,7 +60,7 @@ func buildWorkspace(dir, workspace, name string) error {
 	return nil
 }
 
-// copyDeclaredSkills places exactly the routine's declared skills into the
+// Places exactly the routine's declared skills into the
 // workspace at opencode's discovery path (.opencode/skills/). Undeclared
 // skills are not merely permission-denied -- they are not present at all.
 func copyDeclaredSkills(dir, workspace string, names []string) error {
@@ -86,7 +86,7 @@ func copyDeclaredSkills(dir, workspace string, names []string) error {
 	return nil
 }
 
-// applyDeclaredMCP rewrites the workspace's opencode.json so its mcp block
+// Rewrites the workspace's opencode.json so its mcp block
 // holds only the declared servers. The deny rules already close ungranted
 // surfaces; removing the entry keeps the run's opencode from contacting the
 // server at all. Raw JSON values keep unrelated configuration byte-exact.
@@ -159,7 +159,7 @@ type instructionData struct {
 	Variables     string // "$PRODUCT_REPO, $DOCS_URL" -- empty when none configured
 }
 
-// writeAgentDefinition places the generated opencode agent for this run at
+// Places the generated opencode agent for this run at
 // the harness's discovery path in the workspace.
 func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Routine, servers []string, attempt Attempt) error {
 	def, err := renderDefinition(agent, r, servers, attempt)
@@ -173,7 +173,7 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 	return os.WriteFile(filepath.Join(dir, "routine.md"), []byte(def), 0o644)
 }
 
-// renderDefinition generates the run's opencode agent: default-deny skills,
+// Generates the run's opencode agent: default-deny skills,
 // an explicit rule per configured MCP server (servers is passed in so rule
 // generation can never silently see an empty config), and the standing
 // instruction.
@@ -227,7 +227,7 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	return b.String(), nil
 }
 
-// RenderDefinition generates a routine's agent definition exactly as a run
+// Generates a routine's agent definition exactly as a run
 // would, without running anything -- check validates wiring with it offline.
 func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string) (string, error) {
 	return renderDefinition(agent, r, servers, Attempt{RunID: "run_check"})
@@ -240,7 +240,7 @@ func formatAttemptTime(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
-// variablesLine renders the agent's variable names ("$PRODUCT_REPO,
+// Renders the agent's variable names ("$PRODUCT_REPO,
 // $DOCS_URL") for the standing instruction.
 func variablesLine(agent *config.Agent) string {
 	names := slices.Sorted(maps.Keys(agent.Variables))

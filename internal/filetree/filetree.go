@@ -1,4 +1,3 @@
-// Package filetree copies trusted directory trees with an explicit mode policy.
 package filetree
 
 import (
@@ -7,23 +6,21 @@ import (
 	"path/filepath"
 )
 
-// ModePolicy chooses the permissions assigned to copied regular files.
 type ModePolicy uint8
 
 const (
-	// DataFiles writes every regular file as non-executable.
+	// Writes every regular file as non-executable.
 	DataFiles ModePolicy = iota
-	// PreserveExecutables carries the source executable bit into the copy.
+	// Carries the source executable bit into the copy.
 	PreserveExecutables
 )
 
-// Options controls filtering and regular-file permissions.
 type Options struct {
 	Mode ModePolicy
 	Skip func(rel string, entry fs.DirEntry) bool
 }
 
-// CopyRegular copies directories and regular files, ignoring special files.
+// Copies directories and regular files, ignoring special files.
 func CopyRegular(src, dst string, options Options) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err

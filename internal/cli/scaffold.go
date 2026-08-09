@@ -16,7 +16,6 @@ const templateRoot = "template"
 
 const scaffoldUsage = "usage: openroutines scaffold <path>"
 
-// Stamps out a new agent repository from the embedded template.
 func cmdScaffold(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {

@@ -40,8 +40,6 @@ func testKeyPEM(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 }
 
-// credentialsAgent builds an agent directory with a master key and the given
-// openroutines.yml, ready for the credentials commands to open its store.
 func credentialsAgent(t *testing.T, agentYAML string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -54,8 +52,6 @@ func credentialsAgent(t *testing.T, agentYAML string) string {
 	return dir
 }
 
-// withStdin feeds input to os.Stdin for the duration of run, restoring it
-// afterward.
 func withStdin(t *testing.T, input string, run func()) {
 	t.Helper()
 	r, w, err := os.Pipe()

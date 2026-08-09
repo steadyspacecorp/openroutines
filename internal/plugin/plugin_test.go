@@ -69,7 +69,6 @@ func TestLoadFixturePlugins(t *testing.T) {
 	}
 }
 
-// write builds a minimal plugin dir; extra maps rel path -> content.
 func write(t *testing.T, extra map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -219,7 +218,7 @@ func TestSummaryStatesWebAccess(t *testing.T) {
 	}
 }
 
-// testSource is valid provenance: Install validates it as strictly as
+// Valid provenance: Install validates it as strictly as
 // ReadSource does, so the revision has to be a full commit hash.
 var testSource = Source{
 	Repository: "example.test/demo.git",

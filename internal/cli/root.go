@@ -1,4 +1,3 @@
-// Package cli implements the openroutines command surface.
 package cli
 
 import (
@@ -69,7 +68,6 @@ var repoOptional = map[string]bool{
 	"sandbox-reclaim":     true,
 }
 
-// Run dispatches a CLI invocation and returns the process exit code.
 func Run(args []string) int {
 	if len(args) == 0 {
 		fmt.Print(usage)

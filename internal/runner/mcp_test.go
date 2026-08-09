@@ -8,8 +8,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-// genDefWithMCP renders a definition for an agent whose opencode.json
-// defines two MCP servers.
 func genDefWithMCP(t *testing.T, attempt Attempt, fm routine.Frontmatter) string {
 	t.Helper()
 	r := &routine.Routine{Name: "x", Frontmatter: fm}
@@ -32,7 +30,6 @@ func TestMCPServersDenyByDefault(t *testing.T) {
 	}
 }
 
-// A grant opens exactly the named server; the others stay closed.
 func TestMCPGrantOpensOnlyNamedServer(t *testing.T) {
 	def := genDefWithMCP(t, Attempt{RunID: "run_t"}, routine.Frontmatter{MCP: []string{"steady"}})
 	if !strings.Contains(def, `"steady_*": allow`) {

@@ -81,7 +81,7 @@ func TestVerifyAttemptGroupsChecksEveryRunSlot(t *testing.T) {
 	}
 }
 
-// fakeOpencode is a stand-in for the real binary: it reads fake-mode from
+// A stand-in for the real binary: it reads fake-mode from
 // its own directory (the workspace is allow-list built and carries no test
 // scaffolding) to decide whether to succeed (writing knowledge) or fail. The
 // probe mode clones the knowledge branch from origin at the first spawn --
@@ -148,7 +148,6 @@ case "$mode" in
 esac
 `
 
-// agentYAML is the test agent's config, in the given timezone.
 func agentYAML(tz string) string {
 	return fmt.Sprintf(`name: test-agent
 description: Tests the supervisor
@@ -162,13 +161,12 @@ defaults:
 `, tz)
 }
 
-// fixture builds a UTC agent whose one routine fires every minute.
 func fixture(t *testing.T, mode string) string {
 	t.Helper()
 	return fixtureIn(t, mode, "UTC", "every-minute", "* * * * *")
 }
 
-// fixtureIn builds an agent repo (no origin: local mode) in the given
+// Builds an agent repo (no origin: local mode) in the given
 // timezone with one scheduled routine, and puts a fake opencode on PATH.
 func fixtureIn(t *testing.T, mode, tz, name, spec string) string {
 	t.Helper()
@@ -205,7 +203,7 @@ func newSupervisor(t *testing.T, dir string) *Supervisor {
 	return s
 }
 
-// usurpLease takes the lease at origin under another instance's name and then
+// Takes the lease at origin under another instance's name and then
 // keeps heartbeating it, CAS-looping against the holder's own renewals. The
 // heartbeat is the point: a lease written once expires a TTL later, and an
 // expired foreign lease is one the holder may correctly reclaim -- which put
@@ -261,7 +259,7 @@ func loadState(t *testing.T, s *Supervisor) *schedule.State {
 	return st
 }
 
-// optInConcurrency writes concurrency into a fixture's config, the way an
+// Writes concurrency into a fixture's config, the way an
 // operator would: parallelism is opt-in, and these tests are the opt-in path.
 func optInConcurrency(t *testing.T, dir string, n int) {
 	t.Helper()
@@ -275,7 +273,7 @@ func optInConcurrency(t *testing.T, dir string, n int) {
 	}
 }
 
-// tickWait runs one scheduling pass and waits for every attempt it launched
+// Runs one scheduling pass and waits for every attempt it launched
 // to settle -- the synchronous shape the scheduling tests want, and exactly
 // what a serial Tick used to do.
 func (s *Supervisor) tickWait(ctx context.Context, now time.Time) {
@@ -297,12 +295,11 @@ func runCmd(t *testing.T, cwd string, args ...string) {
 	}
 }
 
-// fakeBinDir is where fixture put the fake opencode: the first PATH entry.
 func fakeBinDir() string {
 	return strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 }
 
-// withOrigin gives the agent a bare origin and tells the fake opencode where
+// Gives the agent a bare origin and tells the fake opencode where
 // it is, so a probe run can clone it mid-attempt. Returns the bare repo path.
 func withOrigin(t *testing.T, dir string) string {
 	t.Helper()
@@ -315,7 +312,6 @@ func withOrigin(t *testing.T, dir string) string {
 	return bare
 }
 
-// gitTry runs git in dir and returns its combined output, error and all.
 func gitTry(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -332,7 +328,7 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 	return out
 }
 
-// replacementState is the scheduling state a replacement container would read
+// The scheduling state a replacement container would read
 // for a routine after materializing knowledge from origin, as of the moment the
 // first probe attempt's model process started.
 func replacementState(t *testing.T, name string) *schedule.State {
@@ -724,8 +720,6 @@ func TestBackoffHoldsBetweenAttempts(t *testing.T) {
 	}
 }
 
-// driveToAbandonment ticks through a full failed logical run (5 attempts
-// with backoff) and returns the time after abandonment.
 func driveToAbandonment(t *testing.T, s *Supervisor, from time.Time) time.Time {
 	t.Helper()
 	ctx := context.Background()

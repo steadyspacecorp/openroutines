@@ -1,4 +1,4 @@
-// Package scrub redacts secret values from text and byte streams before they
+// Redacts secret values from text and byte streams before they
 // leave the process. Defense in depth: exact-value matching only (design
 // decision "Credentials", rule 3) -- the primary protection is that
 // undeclared secrets never enter the process. One process-wide registry:
@@ -45,7 +45,7 @@ func swap(mutate func(map[string]entry)) {
 	}
 }
 
-// Register adds process-lifetime secret values, keyed by the name that
+// Adds process-lifetime secret values, keyed by the name that
 // appears in the redaction marker. A re-registered name overwrites rather
 // than accumulates, so repeated materialization of the same credential
 // keeps the registry bounded.
@@ -59,7 +59,7 @@ func Register(values map[string]string) {
 
 var ephemeralSeq atomic.Uint64
 
-// RegisterEphemeral adds one short-lived secret value under its own entry:
+// Adds one short-lived secret value under its own entry:
 // concurrent runs minting the same credential each hold distinct material,
 // and one registration must never displace another still in use. The
 // returned release removes exactly this entry, which is what keeps the
@@ -72,7 +72,7 @@ func RegisterEphemeral(name, value string) (release func()) {
 	}
 }
 
-// Redacted replaces every registered secret value in s with [REDACTED:name].
+// Replaces every registered secret value in s with [REDACTED:name].
 func Redacted(s string) string {
 	for _, e := range *process.Load() {
 		if e.value == "" {
@@ -83,19 +83,18 @@ func Redacted(s string) string {
 	return s
 }
 
-// Writer redacts registered secret values from a byte stream, line by line,
+// Redacts registered secret values from a byte stream, line by line,
 // reading the registry as of each write -- a stream outlives registration.
 type Writer struct {
 	dst io.Writer
 	buf bytes.Buffer
 }
 
-// NewWriter wraps dst in registry-backed redaction.
 func NewWriter(dst io.Writer) *Writer {
 	return &Writer{dst: dst}
 }
 
-// maxBuffered caps the partial-line buffer: output with no newlines flushes
+// Caps the partial-line buffer: output with no newlines flushes
 // through redaction in chunks instead of growing without bound. A secret
 // split across the chunk boundary can evade redaction -- accepted; this is
 // defense in depth, and an unbounded buffer is a knowledge hole.
@@ -120,7 +119,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Flush writes any buffered partial line, redacted.
+// Writes any buffered partial line, redacted.
 func (w *Writer) Flush() {
 	if w.buf.Len() > 0 {
 		_, _ = io.WriteString(w.dst, Redacted(w.buf.String()))

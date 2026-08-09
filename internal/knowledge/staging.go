@@ -16,7 +16,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/filetree"
 )
 
-// Snapshot copies the knowledge worktree's files into a plain staging directory:
+// Copies the knowledge worktree's files into a plain staging directory:
 // regular files only, no git metadata. This staged copy is what a routine
 // sees and writes as knowledge/.
 func (store *Store) Snapshot(stagingDir string) error {
@@ -50,13 +50,13 @@ func topSegment(rel string) string {
 	return strings.Split(rel, string(filepath.Separator))[0]
 }
 
-// CloneTree copies a snapshot tree verbatim, so the run's staged copy and the
+// Copies a snapshot tree verbatim, so the run's staged copy and the
 // import's base come from one worktree read.
 func CloneTree(src, dst string) error {
 	return filetree.CopyRegular(src, dst, filetree.Options{Mode: filetree.DataFiles})
 }
 
-// stagedPathPolicy rejects paths that may never enter the worktree: git
+// Rejects paths that may never enter the worktree: git
 // control files, supervisor-owned bookkeeping, absurd depth. Applied by
 // Validate and again by the import copy -- the tree can change under the walk
 // that validated it.
@@ -74,7 +74,7 @@ func stagedPathPolicy(rel string, isDir bool) error {
 	return nil
 }
 
-// Validate rejects a staged knowledge tree that contains anything but regular
+// Rejects a staged knowledge tree that contains anything but regular
 // files under sane limits. A rejected tree fails the whole run.
 func Validate(stagingDir string) error {
 	entries := 0
@@ -112,7 +112,7 @@ func Validate(stagingDir string) error {
 	})
 }
 
-// Import applies the staged tree to the worktree as a three-way merge against
+// Applies the staged tree to the worktree as a three-way merge against
 // the base snapshot: an untouched file imports nothing (a stale copy must
 // never regress concurrent settlements), a file only the run changed copies
 // whole, appends on both sides compose, and any other concurrent edit keeps
@@ -182,7 +182,7 @@ func (store *Store) Import(stagingDir, baseDir string) (conflicted []Conflict, e
 	})
 }
 
-// RestoreFile puts the base-snapshot copy of one knowledge file back into the
+// Puts the base-snapshot copy of one knowledge file back into the
 // staged tree -- restored to base, not the live worktree, so the import's
 // unchanged-versus-base rule then skips it. The enforcement half of
 // `teamwork: off`. Reports whether a staged change was discarded.
@@ -223,14 +223,14 @@ func RestoreFile(stagingDir, baseDir, name string) (bool, error) {
 	return true, root.WriteFile(name, want, 0o644)
 }
 
-// Conflict records a semantic concurrent edit and the durable path where the
+// Records a semantic concurrent edit and the durable path where the
 // competing staged version was preserved.
 type Conflict struct {
 	Path       string
 	Quarantine string
 }
 
-// copyStaged brings every staged file into the worktree. Staging is not
+// Brings every staged file into the worktree. Staging is not
 // quiescent -- a descendant of the model process can outlive the run and
 // rewrite what Validate approved -- so an os.Root confines every path and
 // every check is re-applied on the descriptor being read. The copy lands in a
@@ -340,7 +340,7 @@ func copyStaged(stagingDir, baseDir, wt string) (conflicted []Conflict, err erro
 	return conflicted, nil
 }
 
-// appendMerge composes only the shape we can prove safe: both descendants
+// Composes only the shape we can prove safe: both descendants
 // retain the complete base and add bytes at its end. Semantic edits belong in
 // quarantine, never in an automatic union.
 func appendMerge(ours, base, theirs []byte) ([]byte, bool) {
@@ -354,7 +354,7 @@ func appendMerge(ours, base, theirs []byte) ([]byte, bool) {
 	return merged, true
 }
 
-// copyStagedFile copies one staged file into the scratch tree, bounded by the
+// Copies one staged file into the scratch tree, bounded by the
 // same size cap Validate measured against: the file can have grown since.
 func copyStagedFile(root *os.Root, rel, dest string) error {
 	in, err := openStaged(root, rel)
@@ -380,7 +380,7 @@ func copyStagedFile(root *os.Root, rel, dest string) error {
 	return nil
 }
 
-// openStaged opens a path inside the staging tree and proves on the
+// Opens a path inside the staging tree and proves on the
 // descriptor itself that it is an ordinary unaliased file -- nothing an
 // earlier stat decided is trusted. O_NONBLOCK so a fifo cannot park the
 // caller.

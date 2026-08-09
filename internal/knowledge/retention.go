@@ -11,23 +11,23 @@ import (
 	"time"
 )
 
-// trimmedStreams are the record streams the retention window applies to.
+// The record streams the retention window applies to.
 // tasks.md is a living list (age doesn't make a task done) and ledgers are
 // routine-owned -- both exempt. Pruning removes a line from the working view
 // only; the commit that introduced it stays in history, which is what the
 // delivery feed reads (see delivery.go).
 var trimmedStreams = []string{"events.md", "context.md"}
 
-// runRecordsFile is the run log, trimmed by its own timestamps rather than the
+// The run log, trimmed by its own timestamps rather than the
 // record streams' blame times, and never part of the delivery feed.
 const runRecordsFile = "runs.jsonl"
 
-// trimTrailer marks a commit as a retention trim, and is the whole mechanism
+// Marks a commit as a retention trim, and is the whole mechanism
 // keeping trims out of the delivery feed (see Changes). Nothing else on the
 // knowledge branch writes it: commit messages are the supervisor's own.
 const trimTrailer = "Openroutines-Retention-Trim: true"
 
-// CommitTrim commits what Trim rewrote, carrying the trailer that keeps it
+// Commits what Trim rewrote, carrying the trailer that keeps it
 // out of the delivery feed. Scoped to the files Trim touches: anything else
 // dirty would ride along into the one commit no consumer ever reads.
 func (store *Store) CommitTrim(keep time.Duration) (string, error) {
@@ -35,7 +35,7 @@ func (store *Store) CommitTrim(keep time.Duration) (string, error) {
 	return store.commitPaths(message, append([]string{runRecordsFile}, trimmedStreams...)...)
 }
 
-// Trim drops record entries older than the window. Age is the line's git
+// Drops record entries older than the window. Age is the line's git
 // commit time via blame -- no timestamp format imposed on routines. Only
 // list items ("- ") outside fences are records; everything else survives, as
 // do uncommitted lines. Returns whether anything changed; the caller commits.
@@ -96,7 +96,7 @@ func (store *Store) Trim(keep time.Duration, now time.Time) (bool, error) {
 	return changed, nil
 }
 
-// blameLineTimes maps 1-based line numbers to their commit times.
+// Maps 1-based line numbers to their commit times.
 // Uncommitted lines are absent from the map (and therefore kept).
 func blameLineTimes(worktree, file string) (map[int]time.Time, error) {
 	out, err := git(worktree, "blame", "--line-porcelain", "--", file)

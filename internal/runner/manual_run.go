@@ -13,7 +13,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/run"
 )
 
-// RehearsalFileName is the fixture document injected into a rehearsal run's
+// The fixture document injected into a rehearsal run's
 // workspace.
 const RehearsalFileName = "rehearsal.md"
 
@@ -27,7 +27,7 @@ below exactly, against the fixtures.
 
 `
 
-// livePreamble governs a rehearsal with no fixtures: grants stay so reads
+// Governs a rehearsal with no fixtures: grants stay so reads
 // work, the read-only restraint is asked of the model rather than enforced --
 // the enforced part is that nothing settles.
 const livePreamble = `REHEARSAL RUN, live world. Read anything this routine normally reads --
@@ -40,7 +40,7 @@ Follow the routine below exactly, under these restraints.
 
 `
 
-// RunManual executes routine name manually. Rehearsals always discard knowledge.
+// Executes routine name manually. Rehearsals always discard knowledge.
 // In the production container a manual run reserves the manual attempt
 // identity, so it can never share a uid with a supervisor slot.
 func RunManual(dir, name string, options ManualOptions) (result *ManualResult, err error) {

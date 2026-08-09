@@ -22,7 +22,7 @@ func writeTree(t *testing.T, root string, files map[string]string) {
 	}
 }
 
-// updateFixture creates an upstream plugin repository and installs it into a
+// Creates an upstream plugin repository and installs it into a
 // fresh agent, exactly as plugin add does: fetched from a clone, with real
 // provenance.
 func updateFixture(t *testing.T) (agent, repo string) {

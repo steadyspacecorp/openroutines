@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// spec parses a UTC-bound schedule; tests that care about a real zone call
+// Parses a UTC-bound schedule; tests that care about a real zone call
 // Parse directly.
 func spec(t *testing.T, expr string) *Spec {
 	t.Helper()

@@ -41,6 +41,10 @@ Use these terms consistently across code, logs, and docs:
 - The project is **OpenRoutines** in prose and `openroutines` in machine identifiers.
 - README.md and the `docs/` pages use `--` double hyphens, not em dashes; conversational but technical tone; no marketing superlatives.
 - Documentation paragraphs use one sentence per physical line, a blank line between paragraphs -- no column-wrapping, and no giant one-line paragraphs either. A single-sentence edit should produce a single-line diff, not a whole-paragraph one.
+- Code comments default to none.
+  Write one only to explain something non-obvious -- a hidden invariant, a rejected alternative, a security or kernel gotcha, or the reason behind a magic number.
+  Write for the future reader at that location: do not repeat the name or restate what the adjacent code already says.
+  Do not treat existing comment density as precedent; every new comment must justify itself independently.
 
 ## Verifying changes
 

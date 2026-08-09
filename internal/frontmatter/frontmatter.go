@@ -1,4 +1,3 @@
-// Package frontmatter splits and rewrites Markdown frontmatter documents.
 package frontmatter
 
 import (
@@ -7,13 +6,10 @@ import (
 )
 
 var (
-	// ErrMissing reports a document without an opening delimiter.
-	ErrMissing = errors.New("missing frontmatter")
-	// ErrUnterminated reports a document without a closing delimiter.
+	ErrMissing      = errors.New("missing frontmatter")
 	ErrUnterminated = errors.New("unterminated frontmatter")
 )
 
-// Document is a Markdown file separated into frontmatter and body.
 type Document struct {
 	Frontmatter []byte
 	Body        []byte
@@ -24,7 +20,7 @@ type Document struct {
 	lineEnding  string
 }
 
-// Split finds the leading frontmatter block without normalizing source bytes.
+// Finds the leading frontmatter block without normalizing source bytes.
 func Split(raw []byte) (Document, error) {
 	lineEnding := "\n"
 	headerStart := len("---\n")
@@ -72,12 +68,12 @@ func Split(raw []byte) (Document, error) {
 	return Document{}, ErrUnterminated
 }
 
-// LineEnding returns the opening delimiter's line ending.
+// Returns the opening delimiter's line ending.
 func (d Document) LineEnding() string {
 	return d.lineEnding
 }
 
-// WithFrontmatter replaces only the document's frontmatter bytes.
+// Replaces only the document's frontmatter bytes.
 func (d Document) WithFrontmatter(frontmatter []byte) []byte {
 	out := make([]byte, 0, len(d.raw)-len(d.Frontmatter)+len(frontmatter))
 	out = append(out, d.raw[:d.headerStart]...)

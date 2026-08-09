@@ -15,7 +15,7 @@ type dueRun struct {
 	state   *schedule.State
 }
 
-// plan is the tick's bookkeeping critical section: reconcile knowledge with
+// The tick's bookkeeping critical section: reconcile knowledge with
 // origin, trim, reconcile every routine's scheduling state, and commit the
 // intent -- all under the knowledge lock, serialized against in-flight
 // reservations and settlements. Returns the runnable dispatches, or ok=false
@@ -186,7 +186,6 @@ func (s *Supervisor) mintPending(r *routine.Routine, st *schedule.State, spec *s
 	return true
 }
 
-// isRunning reports whether a routine has an attempt executing right now.
 func (s *Supervisor) isRunning(name string) bool {
 	s.pool.inFlightMu.Lock()
 	defer s.pool.inFlightMu.Unlock()
@@ -203,7 +202,7 @@ func (s *Supervisor) setRunning(name string, running bool) {
 	}
 }
 
-// commitIntent makes the knowledge worktree durable before anything acts on
+// Makes the knowledge worktree durable before anything acts on
 // it. Whatever the worktree carries is the intent: Commit no-ops on a clean
 // tree, so the normal path costs nothing.
 func (s *Supervisor) commitIntent(message string) bool {
@@ -227,7 +226,7 @@ func (s *Supervisor) commitIntent(message string) bool {
 	return true
 }
 
-// reserve claims the attempt a routine is about to run. Returns the give-back
+// Claims the attempt a routine is about to run. Returns the give-back
 // for an attempt that never becomes a run: a shutdown, a failed intent commit.
 func reserve(pending *schedule.Pending, now time.Time) (giveBack func()) {
 	prior := pending.LastAttemptAt
@@ -239,7 +238,7 @@ func reserve(pending *schedule.Pending, now time.Time) (giveBack func()) {
 	}
 }
 
-// abandon gives up on a pending run: the work becomes a human-owned task, the
+// Gives up on a pending run: the work becomes a human-owned task, the
 // watermark advances, and the breaker counts the abandonment. The caller
 // saves and commits the state.
 func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, sessionsDir string, now time.Time) {

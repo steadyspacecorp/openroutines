@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// TestLandlockConfinement verifies the production rule set on a real kernel.
+// Verifies the production rule set on a real kernel.
 // This is the test the security audit asked for first: the run workspace
 // must not be writable (it lives inside /tmp, and Landlock rules are
 // additive -- a blanket /tmp grant would open it), the supervisor's environ
@@ -149,7 +149,7 @@ func TestLandlockConfinement(t *testing.T) {
 	}
 }
 
-// landlockHelper runs confined: it applies the rules exactly as the
+// Runs confined: it applies the rules exactly as the
 // sandbox-exec shim does, probes each boundary, prints "name allowed|denied"
 // lines, and exits.
 func landlockHelper() {

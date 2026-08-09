@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// twoClones builds the #4 harness: a bare origin and two independent clones
+// Builds the #4 harness: a bare origin and two independent clones
 // (generations / machines) with knowledge materialized in each.
 func twoClones(t *testing.T) (a, b string) {
 	t.Helper()
@@ -51,7 +51,7 @@ func gitT(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// blackhole is an origin that accepts connections and then says nothing --
+// An origin that accepts connections and then says nothing --
 // a partitioned network drops packets rather than refusing them, so the
 // client waits on a reply that never comes. The URL is https so the stall
 // happens in a child helper (git-remote-https), where it happens in

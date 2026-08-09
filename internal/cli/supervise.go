@@ -12,7 +12,6 @@ import (
 
 const superviseUsage = "usage: openroutines supervise"
 
-// Runs the scheduler until SIGTERM/SIGINT: the container entrypoint.
 func cmdSupervise(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {

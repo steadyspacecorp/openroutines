@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Passthrough passes an external process's already-formatted (logfmt) log
+// Passes an external process's already-formatted (logfmt) log
 // lines through one at a time, appending fixed attributes -- no parsing
 // needed, since logfmt is just key=value pairs and each line keeps the
 // emitting process's own timestamp, level, and fields. Can't go through
@@ -22,7 +22,7 @@ type Passthrough struct {
 	buf    []byte
 }
 
-// NewPassthrough decorates every line written to it with attrs and passes
+// Decorates every line written to it with attrs and passes
 // it to Writer, the process's log destination. The attrs are rendered
 // once, by slog's own TextHandler, so their quoting matches the process
 // logger's records exactly.
@@ -42,7 +42,7 @@ func (w *Passthrough) Write(p []byte) (int, error) {
 	}
 }
 
-// Flush emits a trailing line the stream ended without terminating.
+// Emits a trailing line the stream ended without terminating.
 func (w *Passthrough) Flush() {
 	if len(w.buf) > 0 {
 		w.emit(w.buf)

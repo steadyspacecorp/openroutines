@@ -10,10 +10,9 @@ import (
 	"strings"
 )
 
-// OpenCodeFileName is the harness's config file, named for opencode.
 const OpenCodeFileName = "opencode.json"
 
-// OpenCode is the framework's read of opencode.json. The file is harness
+// The framework's read of opencode.json. The file is harness
 // config -- permission policy, provider endpoints, MCP server definitions --
 // interpreted by opencode alone; the framework only reads names and shapes,
 // to enforce per-routine grants and flag configuration drift. The zero value
@@ -26,7 +25,7 @@ type OpenCode struct {
 	Missing bool
 }
 
-// LoadOpenCode parses dir's opencode.json. A missing file is an agent
+// Parses dir's opencode.json. A missing file is an agent
 // without harness config -- an empty view, no error. An unparseable file
 // is an error: opencode itself could not load it, so every run would
 // fail. The returned view is always usable, empty on error.
@@ -45,7 +44,7 @@ func LoadOpenCode(dir string) (*OpenCode, error) {
 	return &OpenCode{cfg: cfg}, nil
 }
 
-// ProviderBaseURL returns the baseURL a provider block declares, or ""
+// Returns the baseURL a provider block declares, or ""
 // when none does. Quoted in run diagnostics only -- the framework never
 // requests against it.
 func (o *OpenCode) ProviderBaseURL(id string) string {
@@ -56,7 +55,7 @@ func (o *OpenCode) ProviderBaseURL(id string) string {
 	return u
 }
 
-// MCPServers returns the names defined in the `mcp` block, sorted. The
+// Returns the names defined in the `mcp` block, sorted. The
 // entries themselves stay opaque -- the names are what grants reference
 // and what permission rules close over.
 func (o *OpenCode) MCPServers() []string {
@@ -64,7 +63,7 @@ func (o *OpenCode) MCPServers() []string {
 	return slices.Sorted(maps.Keys(mcp))
 }
 
-// Drift returns warnings about framework concerns that have crept into
+// Returns warnings about framework concerns that have crept into
 // the harness's file. Model *choice* belongs to openroutines.yml and frontmatter,
 // so a harness-side default model (including one pinned inside an agent
 // override) or any block beyond the known set is drift worth flagging.
@@ -108,7 +107,7 @@ func mcpEntry(url, credential string) map[string]any {
 	return entry
 }
 
-// MCPSnippet is a declared server's entry as the exact JSON shown at the
+// A declared server's entry as the exact JSON shown at the
 // consent prompt and in the paste step -- what you read is what
 // AddMCPServer lands.
 func MCPSnippet(name, url, credential string) string {
@@ -116,7 +115,7 @@ func MCPSnippet(name, url, credential string) string {
 	return fmt.Sprintf("%q: %s", name, entry)
 }
 
-// AddMCPServer inserts one declared server into opencode.json's mcp
+// Inserts one declared server into opencode.json's mcp
 // block. Refuses to overwrite an existing entry. The caller is
 // responsible for the
 // consent gate -- plugins may only ever declare servers, and a person

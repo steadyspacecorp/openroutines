@@ -1,4 +1,4 @@
-// Package runner executes one routine attempt: the per-run pipeline shared by
+// Executes one routine attempt: the per-run pipeline shared by
 // `openroutines routines run` and the supervisor.
 package runner
 
@@ -26,7 +26,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// PreparedAttempt holds everything needed to spawn one attempt. Stage does
+// Holds everything needed to spawn one attempt. Stage does
 // every read from the knowledge worktree or supervisor-owned state; Run
 // touches neither. Attempts can therefore execute in parallel while
 // preparation and settlement serialize behind the knowledge lock.
@@ -42,24 +42,24 @@ type PreparedAttempt struct {
 	env          []string
 	opencodeArgs []string
 
-	// echo, when set, receives the run's scrubbed stdout live -- the manual
+	// When set, receives the run's scrubbed stdout live -- the manual
 	// `routines run` terminal. The supervisor never sets it.
 	echo io.Writer
 }
 
-// Discard releases a prepared attempt that will not be spawned (for example,
+// Releases a prepared attempt that will not be spawned (for example,
 // because its supervisor lost the lease after preparation).
 func (p *PreparedAttempt) Discard() error {
 	p.secrets.release()
 	return p.workspace.Cleanup()
 }
 
-// attemptHomeName is the disposable per-attempt home inside the run
+// The disposable per-attempt home inside the run
 // workspace: sandbox hygiene in production, and what keeps session data
 // readable after a local run's container exits.
 const attemptHomeName = ".home"
 
-// Stage prepares one attempt without spawning anything. knowledgeLock is the
+// Prepares one attempt without spawning anything. knowledgeLock is the
 // caller's knowledge lock, held only around the worktree reads -- credential
 // resolution can spend seconds on the network. On error, everything Stage
 // acquired is already released.
@@ -243,7 +243,7 @@ func attemptArgs(r *routine.Routine, model string) []string {
 	return opencodeArgs
 }
 
-// Run spawns the prepared attempt's model process and waits it out. Derived
+// Spawns the prepared attempt's model process and waits it out. Derived
 // credential material is revoked when the attempt ends, success or failure;
 // a fresh attempt derives fresh material. On error the workspace is already
 // cleaned, and a cleanup failure is joined to the returned error.

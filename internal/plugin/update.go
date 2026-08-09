@@ -18,7 +18,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
-// Update is a prepared update: the recorded and current upstream revisions,
+// A prepared update: the recorded and current upstream revisions,
 // what changed between them, and the validated upstream bundle. Apply is
 // reachable only through PrepareUpdate, so the merge cannot run past a
 // failed check.
@@ -34,18 +34,18 @@ type Update struct {
 	cleanups     []func()
 }
 
-// Current reports that the installed plugin already matches upstream; a
+// Reports that the installed plugin already matches upstream; a
 // current Update carries no Changes or Upstream and has nothing to Apply.
 func (u *Update) Current() bool { return u.New.Revision == u.Old.Revision }
 
-// Close releases the temporary clones.
+// Releases the temporary clones.
 func (u *Update) Close() {
 	for _, f := range u.cleanups {
 		f()
 	}
 }
 
-// PrepareUpdate fetches the plugin's current upstream and its recorded
+// Fetches the plugin's current upstream and its recorded
 // revision, then validates everything the update depends on: the upstream
 // payload, its name, and collisions with agent content outside the plugin
 // itself.
@@ -106,7 +106,7 @@ func PrepareUpdate(agentDir, name string) (*Update, error) {
 	return u, nil
 }
 
-// Apply merges local edits, the recorded base, and upstream file-wise into a
+// Merges local edits, the recorded base, and upstream file-wise into a
 // staging directory, deactivates routines new since the base, revalidates
 // the merged bundle, and swaps it in atomically. Provenance advances only on
 // a conflict-free merge, so conflicted files keep their markers and rerunning
@@ -181,7 +181,6 @@ func (u *Update) Apply() (conflicts []string, err error) {
 	return conflicts, nil
 }
 
-// Replaces framework-owned provenance after a clean update.
 func writeSource(dir string, source Source) error {
 	raw, err := yaml.Marshal(source)
 	if err != nil {
@@ -190,7 +189,6 @@ func writeSource(dir string, source Source) error {
 	return os.WriteFile(filepath.Join(dir, SourceFileName), raw, 0o644)
 }
 
-// Summarizes upstream file additions, modifications, and removals.
 func changes(base, next string) ([]string, error) {
 	files := map[string]bool{}
 	for _, root := range []string{base, next} {

@@ -34,7 +34,6 @@ REMOTE_SHA=$(git rev-parse origin/main)
 [ "$LOCAL_SHA" = "$REMOTE_SHA" ] ||
   fail "Local main (${LOCAL_SHA:0:7}) is out of sync with origin (${REMOTE_SHA:0:7})."
 
-# Pick the next version; on a prerelease train, bump it or promote.
 BASE="${CURRENT_VERSION#v}"
 if [[ "$BASE" == *-alpha.* ]]; then
   STABLE="${BASE%%-*}"
@@ -56,7 +55,6 @@ CHANGES=$(git log --pretty='- %s (%h)' "$CURRENT_VERSION..HEAD")
 echo -e "**Changes since $CURRENT_VERSION**\n$CHANGES" | gum format
 gum confirm "Release $NEW_VERSION?" --padding "1" || fail "Aborted."
 
-# Tag HEAD and push; the push triggers release.yml.
 git tag -a "$NEW_VERSION" -m "$NEW_VERSION"
 gum spin --title "Releasing ${NEW_VERSION}…" -- git push origin "$NEW_VERSION" ||
   fail "Could not push $NEW_VERSION (remove local tag with: git tag -d $NEW_VERSION)."

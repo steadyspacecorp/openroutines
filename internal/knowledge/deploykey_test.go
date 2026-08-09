@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// originRepo is a repository whose only interesting property is its origin
+// A repository whose only interesting property is its origin
 // URL. `ls-remote --get-url` is git's own answer to "what would you connect
 // to", insteadOf rewriting included, and it touches no network.
 func originRepo(t *testing.T, origin string) string {

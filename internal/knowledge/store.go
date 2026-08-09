@@ -1,4 +1,4 @@
-// Package knowledge manages the agent's knowledge: a git worktree of the orphan
+// Manages the agent's knowledge: a git worktree of the orphan
 // `knowledge` branch, plus the staging pipeline that keeps model-directed
 // processes away from git entirely.
 package knowledge
@@ -11,7 +11,6 @@ import (
 	"strings"
 )
 
-// Knowledge is a dedicated directory backed by its own branch.
 const (
 	Dir        = "knowledge"
 	Branch     = "knowledge"
@@ -19,23 +18,23 @@ const (
 	maxEntries = 2000    // total staged file cap
 )
 
-// stateDirName is the supervisor-owned directory inside the worktree holding
+// The supervisor-owned directory inside the worktree holding
 // per-routine bookkeeping: scheduling state at its root, trigger baselines
 // and consumer cursors in subdirectories.
 const stateDirName = "state"
 
-// Store is one agent repository's knowledge. The handle binds the repository
+// One agent repository's knowledge. The handle binds the repository
 // root; every operation that reads or maintains the knowledge branch, its
 // worktree, and the supervisor-owned state inside it goes through here.
 type Store struct {
 	repoDir string
 }
 
-// NewStore binds the agent repository at repoDir. No I/O: the worktree may not be
+// Binds the agent repository at repoDir. No I/O: the worktree may not be
 // materialized yet (Status reports that; Ensure fixes it).
 func NewStore(repoDir string) *Store { return &Store{repoDir: repoDir} }
 
-// primitives are the framework-blessed shared knowledge files, seeded on init.
+// The framework-blessed shared knowledge files, seeded on init.
 // Each opens with a fenced example of its format: the file teaches its own
 // shape at the point of use, and the retention trimmer preserves everything
 // that isn't a record. Agents may reshape the headers in their own knowledge
@@ -63,22 +62,21 @@ var primitives = map[string]string{
 		"- YYYY-MM-DD <routine>: <the fact, and where it came from>\n```\n",
 }
 
-// supervisorOwned paths never travel into staging and are never touched by
+// Paths never travel into staging and are never touched by
 // import: routines cannot read or rewrite scheduling state or run records.
 var supervisorOwned = map[string]bool{
 	stateDirName: true,
 	"runs.jsonl": true,
 }
 
-// Worktree returns the materialized knowledge worktree path.
 func (store *Store) Worktree() string { return filepath.Join(store.repoDir, Dir) }
 
-// StateDir returns the supervisor-owned state directory inside the worktree.
+// Returns the supervisor-owned state directory inside the worktree.
 // Per-routine state lives at <StateDir>/<name>.json (scheduling) and
 // <StateDir>/<subdir>/<name>.json (trigger baselines, consumer cursors).
 func (store *Store) StateDir() string { return filepath.Join(store.Worktree(), stateDirName) }
 
-// Ensure materializes knowledge/ as a worktree of the knowledge branch,
+// Materializes knowledge/ as a worktree of the knowledge branch,
 // creating the orphan branch and seeding the primitives on first use.
 // Self-heals: safe to call every run.
 func (store *Store) Ensure() error {
@@ -155,7 +153,7 @@ func (store *Store) Ensure() error {
 	return nil
 }
 
-// Commit records the current worktree state on the knowledge branch.
+// Records the current worktree state on the knowledge branch.
 func (store *Store) Commit(message string) (string, error) {
 	wt := store.Worktree()
 	if _, err := git(wt, "add", "-A"); err != nil {
@@ -170,7 +168,7 @@ func (store *Store) Commit(message string) (string, error) {
 	return git(wt, "rev-parse", "--short", "HEAD")
 }
 
-// commitPaths commits only the named paths: a maintenance commit must not
+// Commits only the named paths: a maintenance commit must not
 // carry work that merely happened to be dirty when it fired. Missing paths
 // are skipped.
 func (store *Store) commitPaths(message string, paths ...string) (string, error) {
@@ -198,7 +196,7 @@ func (store *Store) commitPaths(message string, paths ...string) (string, error)
 	return git(wt, "rev-parse", "--short", "HEAD")
 }
 
-// RemoveRoutineState deletes every per-routine state file for name: the
+// Deletes every per-routine state file for name: the
 // scheduling state plus the entry in every state subdirectory. Filenames are
 // compared, never globbed, so name cannot alter the matching. Returns the
 // removed paths relative to the repository root; the caller commits.
@@ -236,7 +234,7 @@ func (store *Store) RemoveRoutineState(name string) ([]string, error) {
 	return removed, nil
 }
 
-// WorktreeStatus reports the knowledge worktree's state for `openroutines
+// Reports the knowledge worktree's state for `openroutines
 // status` -- root `git status` never shows knowledge churn, so this must.
 type WorktreeStatus struct {
 	Materialized    bool
@@ -247,7 +245,7 @@ type WorktreeStatus struct {
 	Behind          int    // commits on origin this worktree has not taken
 }
 
-// Status inspects the knowledge worktree; only RemoteKnowledge is set when not
+// Inspects the knowledge worktree; only RemoteKnowledge is set when not
 // yet materialized -- it distinguishes a fresh clone of a running agent
 // (adopt with sync) from an agent that has never run.
 func (store *Store) Status() WorktreeStatus {

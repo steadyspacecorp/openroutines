@@ -21,8 +21,6 @@ func writeMsg(t *testing.T, dir, name, content string) {
 	}
 }
 
-// sessionOf answers the capture surface with one session holding the given
-// message records.
 func sessionOf(t *testing.T, msgs ...string) opencodeExec {
 	t.Helper()
 	infos := make([]string, len(msgs))
@@ -34,16 +32,12 @@ func sessionOf(t *testing.T, msgs ...string) opencodeExec {
 	})
 }
 
-// captureVia fetches and captures in one step, the way the runner composes
-// them.
 func captureVia(t *testing.T, oc opencodeExec) Capture {
 	t.Helper()
 	exports, err := fetchSessions(oc, discardLog)
 	return captureSessions(exports, err, discardLog)
 }
 
-// exportVia fetches and exports in one step, the way the runner composes
-// them.
 func exportVia(t *testing.T, oc opencodeExec) string {
 	t.Helper()
 	exports, err := fetchSessions(oc, discardLog)
@@ -186,7 +180,7 @@ func TestCaptureJudgesTheMostRecentSession(t *testing.T) {
 	}
 }
 
-// truncatingOpencode wraps a stub so its first `count` answers to `args`
+// Wraps a stub so its first `count` answers to `args`
 // come back cut in half with a clean exit -- the shape of opencode's lossy
 // stdout (see completeJSON).
 func truncatingOpencode(oc opencodeExec, count int, args ...string) opencodeExec {
@@ -250,7 +244,7 @@ func TestPartialFetchEmptiesCaptureButStillExports(t *testing.T) {
 	}
 }
 
-// stubOpencode answers `session list` with the given ids and `export <id>`
+// Answers `session list` with the given ids and `export <id>`
 // from the exports map; a missing id is an export failure.
 func stubOpencode(t *testing.T, list string, exports map[string]string) opencodeExec {
 	t.Helper()

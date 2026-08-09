@@ -12,13 +12,13 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-// authFailurePattern matches provider authentication errors in the session
+// Matches provider authentication errors in the session
 // record's failure text, so a bad key reads as configuration instead of an
 // opaque crash. The `error:` forms cover bare status text passed through
 // verbatim ("... ended on an error: Unauthorized").
 var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key|error:\s*unauthorized|invalid bearer token`)
 
-// authHint adds what the provider's own message does not say: the resolved
+// Adds what the provider's own message does not say: the resolved
 // provider, the declared endpoint, and whether a credential was injected.
 func authHint(dir, model string, injected bool) string {
 	provider := strings.SplitN(model, "/", 2)[0]
@@ -35,7 +35,7 @@ func authHint(dir, model string, injected bool) string {
 	return fmt.Sprintf("provider authentication failed -- %s rejected the request and no %s credential is stored (openroutines credentials set %s)", endpoint, keyName, keyName)
 }
 
-// runSecrets is a run's resolved secret material: the environment to inject,
+// A run's resolved secret material: the environment to inject,
 // and cleanup for derived credentials. Redaction registers where values
 // materialize, not here.
 type runSecrets struct {
@@ -51,7 +51,7 @@ func (s *runSecrets) setEnv(name, value string) error {
 	return nil
 }
 
-// release disposes of derived material -- best-effort, once, at attempt end.
+// Disposes of derived material -- best-effort, once, at attempt end.
 func (s *runSecrets) release() {
 	for _, f := range s.cleanup {
 		f()
@@ -59,7 +59,7 @@ func (s *runSecrets) release() {
 	s.cleanup = nil
 }
 
-// resolveCredentials builds the routine's secret set: declared credentials
+// Builds the routine's secret set: declared credentials
 // plus the provider key for its model. Raw credentials inject verbatim under
 // their uppercase name; typed ones inject their derived surface -- the stored
 // root secret never enters the run. A failed resolve releases whatever it

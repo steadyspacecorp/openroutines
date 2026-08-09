@@ -46,7 +46,7 @@ func (s *Supervisor) syncOnce() {
 	}
 }
 
-// reportLoadFailures records in knowledge that a routine stopped loading and,
+// Records in knowledge that a routine stopped loading and,
 // later, that it loads again. Events rather than tasks: a broken file heals
 // by being edited, so there is nothing for a person to close. Unattributed
 // failures are left out -- abandonment already files a task for each.
@@ -96,7 +96,7 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	s.pushBestEffort()
 }
 
-// blockOnce records a blocking condition when it first appears, as a
+// Records a blocking condition when it first appears, as a
 // human-owned task -- only a person can clear it. The task id is date-scoped
 // so a restart doesn't re-record it, and the BLOCKED line announces the onset
 // once rather than every tick.
@@ -129,7 +129,7 @@ func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 	s.pushBestEffort()
 }
 
-// recover clears a blocker whose condition has healed: any open task-<kind>-*
+// Clears a blocker whose condition has healed: any open task-<kind>-*
 // is completed in place. Runs every healthy tick and matches by id prefix, so
 // it also heals blockers raised before a restart.
 func (s *Supervisor) recover(kind, msg string, warned *bool) {
@@ -149,7 +149,7 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	s.pushBestEffort()
 }
 
-// pushBestEffort publishes what the knowledge worktree carries. While sync is
+// Publishes what the knowledge worktree carries. While sync is
 // blocked the record goes to the supervisor-owned blocked ref instead; once
 // the branch carries the same state, the stranded copy is dropped.
 func (s *Supervisor) pushBestEffort() {
@@ -170,7 +170,7 @@ func (s *Supervisor) pushBestEffort() {
 	}
 }
 
-// strandBlocked publishes knowledge to the blocked ref on every blocked tick,
+// Publishes knowledge to the blocked ref on every blocked tick,
 // so a failed attempt is retried rather than dying with the log line that
 // announced it. Keyed on the tip: a tick that changed nothing pushes nothing.
 func (s *Supervisor) strandBlocked() {

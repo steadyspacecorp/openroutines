@@ -1,4 +1,4 @@
-// Package skill reads skills in the Agent Skills format: a directory per
+// Reads skills in the Agent Skills format: a directory per
 // skill containing SKILL.md with name + description frontmatter.
 package skill
 
@@ -16,18 +16,17 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/frontmatter"
 )
 
-// NamePattern is the Agent Skills name constraint: lowercase
+// The Agent Skills name constraint: lowercase
 // alphanumerics and hyphens, matching the directory name.
 var NamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-// Skill is one parsed SKILL.md: name, description, directory.
 type Skill struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 	Dir         string `yaml:"-"`
 }
 
-// Parse reads one SKILL.md's frontmatter.
+// Reads one SKILL.md's frontmatter.
 func Parse(path string) (*Skill, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -51,7 +50,7 @@ func Parse(path string) (*Skill, error) {
 	return &s, nil
 }
 
-// List reads every skill under dir, sorted by name. Missing dir is empty.
+// Reads every skill under dir, sorted by name. Missing dir is empty.
 func List(dir string) ([]*Skill, []error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -80,7 +79,7 @@ func List(dir string) ([]*Skill, []error) {
 	return skills, errs
 }
 
-// ListAgent reads agent-owned skills plus every installed plugin's
+// Reads agent-owned skills plus every installed plugin's
 // skills. Skill names are global because routine grants name them
 // without a path.
 func ListAgent(root string) ([]*Skill, []error) {
@@ -120,7 +119,7 @@ func ListAgent(root string) ([]*Skill, []error) {
 	return skills, errs
 }
 
-// Find returns one globally named skill from an agent repository.
+// Returns one globally named skill from an agent repository.
 func Find(root, name string) (*Skill, error) {
 	skills, errs := ListAgent(root)
 	for _, err := range errs {

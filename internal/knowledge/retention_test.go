@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// commitAt commits the worktree's current state with a specific timestamp,
+// Commits the worktree's current state with a specific timestamp,
 // so blame-based aging has something old to find.
 func commitAt(t *testing.T, wt string, at time.Time, msg string) {
 	t.Helper()

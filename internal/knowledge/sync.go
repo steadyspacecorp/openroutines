@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// SyncReport describes what happened when reconciling with origin.
 type SyncReport struct {
 	NoOrigin      bool   // repo has no origin remote (local mode)
 	RemoteMissing bool   // origin exists but has no knowledge branch yet
@@ -18,18 +17,17 @@ type SyncReport struct {
 	Detail        string // human-readable context for tasks/logs
 }
 
-// HasOrigin reports whether the repo has an origin remote configured.
 func (store *Store) HasOrigin() bool {
 	_, err := git(store.repoDir, "remote", "get-url", "origin")
 	return err == nil
 }
 
-// acceptedRef records, on origin, the last knowledge tip this agent accepted
+// Records, on origin, the last knowledge tip this agent accepted
 // -- what makes rewrite refusal durable across fetches and container
 // replacement. A force-push must also know to move this ref.
 const acceptedRef = "refs/openroutines/accepted"
 
-// AcceptedTip returns the last accepted knowledge tip recorded on origin, ""
+// Returns the last accepted knowledge tip recorded on origin, ""
 // when none has been recorded yet (pre-upgrade repos, first boot).
 func (store *Store) AcceptedTip() string {
 	if _, err := git(store.repoDir, "fetch", "--quiet", "origin", "+"+acceptedRef+":"+acceptedRef); err != nil {
@@ -39,7 +37,7 @@ func (store *Store) AcceptedTip() string {
 	return tip
 }
 
-// recordAccepted publishes tip as the new accepted baseline (best effort --
+// Publishes tip as the new accepted baseline (best effort --
 // the next sync simply re-verifies from the previous baseline).
 func (store *Store) recordAccepted(tip string) {
 	current, _ := git(store.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
@@ -51,7 +49,7 @@ func (store *Store) recordAccepted(tip string) {
 	}
 }
 
-// Sync reconciles the local knowledge branch with origin: fast-forward when
+// Reconciles the local knowledge branch with origin: fast-forward when
 // behind, rebase when diverged, refuse rewritten history and conflicts --
 // never resolve silently. The rewrite baseline is the durable accepted ref.
 func (store *Store) Sync() SyncReport {
@@ -111,7 +109,7 @@ func (store *Store) Sync() SyncReport {
 	}
 }
 
-// Push publishes the knowledge branch. Fast-forward only: rejections are
+// Publishes the knowledge branch. Fast-forward only: rejections are
 // reported, never forced. A successful push advances the accepted baseline:
 // origin's tip is now our own history.
 func (store *Store) Push() error {
@@ -128,21 +126,21 @@ func (store *Store) Push() error {
 	return nil
 }
 
-// BlockedRef is where the supervisor strands knowledge it cannot put on the
+// Where the supervisor strands knowledge it cannot put on the
 // branch: a blocked sync refuses the branch, which is also where the blocker
 // record lives, and a commit that never leaves the container dies with it.
 // Supervisor-owned and uncontended -- origin's branch stays as the human
 // left it.
 const BlockedRef = "refs/openroutines/blocked"
 
-// BlockedSnapshot is what a blocked supervisor left on origin. Tip is "" when
+// What a blocked supervisor left on origin. Tip is "" when
 // nothing is stranded.
 type BlockedSnapshot struct {
 	Tip  string
 	When string // when the supervisor stranded it, RFC3339
 }
 
-// PublishBlocked strands the committed knowledge state on the blocked ref as
+// Strands the committed knowledge state on the blocked ref as
 // a parentless snapshot -- pushing the local tip would drag along the very
 // lineage a rewrite may have just purged. Force is safe: the ref is the
 // supervisor's own, and each snapshot supersedes the last.
@@ -163,14 +161,14 @@ func (store *Store) PublishBlocked() error {
 	return err
 }
 
-// ClearBlocked drops the stranded ref, for the caller that has just published
+// Drops the stranded ref, for the caller that has just published
 // the same state on the branch itself. Best effort: a ref left behind costs
 // nothing but a second copy of what the branch already carries.
 func (store *Store) ClearBlocked() {
 	_, _ = git(store.repoDir, "push", "--quiet", "origin", ":"+BlockedRef)
 }
 
-// Blocked reports what a blocked supervisor stranded on origin. Fetching is
+// Reports what a blocked supervisor stranded on origin. Fetching is
 // part of the answer: the ref is outside the namespaces git replicates, so
 // nothing else in a checkout would ever show it.
 func (store *Store) Blocked() BlockedSnapshot {
@@ -208,12 +206,11 @@ const (
 	LeaseTTL = 30 * time.Minute
 )
 
-// leaseContent formats the heartbeat blob.
 func leaseContent(instanceID string, now time.Time) string {
 	return fmt.Sprintf("%s %s\n", instanceID, now.Format(time.RFC3339Nano))
 }
 
-// Lease is the current holder's heartbeat, plus the blob SHA used as the
+// The current holder's heartbeat, plus the blob SHA used as the
 // compare-and-swap token for atomic takeover.
 type Lease struct {
 	Holder string
@@ -221,7 +218,7 @@ type Lease struct {
 	SHA    string
 }
 
-// ReadLease fetches the current lease from origin; nil when none exists.
+// Fetches the current lease from origin; nil when none exists.
 func (store *Store) ReadLease() (*Lease, error) {
 	if _, lerr := git(store.repoDir, "fetch", "--quiet", "origin", "+"+leaseRef+":"+leaseRef); lerr != nil {
 		if strings.Contains(lerr.Error(), "couldn't find remote ref") {
@@ -259,7 +256,7 @@ func parseLeaseTime(value string) (time.Time, error) {
 	return time.Unix(unix, 0), nil
 }
 
-// WriteLease publishes this instance's heartbeat atomically: the push
+// Publishes this instance's heartbeat atomically: the push
 // succeeds only if origin's lease is still exactly expectedSHA (empty means
 // "must not exist"). Two instances racing for the same lease cannot both
 // win. Returns the new lease SHA for the next renewal's expectation.
@@ -275,7 +272,7 @@ func (store *Store) WriteLease(instanceID string, now time.Time, expectedSHA str
 	return blob, nil
 }
 
-// ReleaseLease removes this instance's lease (best effort), but only if it
+// Removes this instance's lease (best effort), but only if it
 // is still the one this instance last wrote -- unconditional deletion let a
 // stale instance delete the new holder's live lease. ownedSHA "" means this
 // instance never held it.
@@ -297,7 +294,7 @@ func gitStdin(dir, stdin string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// InstanceID identifies this supervisor process for the lease.
+// Identifies this supervisor process for the lease.
 func InstanceID() string {
 	host, _ := os.Hostname()
 	return fmt.Sprintf("%s-%d", host, os.Getpid())

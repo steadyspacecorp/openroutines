@@ -53,7 +53,6 @@ func TestWebAccessDeniedByDefault(t *testing.T) {
 	}
 }
 
-// Frontmatter opt-in flips the explicit rule to allow.
 func TestWebAccessOptIn(t *testing.T) {
 	fm := routine.Frontmatter{Webfetch: true, Websearch: true}
 	def := genDef(t, Attempt{RunID: "run_t"}, fm)

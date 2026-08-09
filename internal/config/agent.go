@@ -1,4 +1,4 @@
-// Package config loads and validates openroutines.yml -- the agent's identity:
+// Loads and validates openroutines.yml -- the agent's identity:
 // name, job description, owner, timezone, and routine defaults.
 package config
 
@@ -19,17 +19,17 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
-// FileName is the agent configuration file at the repository root --
+// The agent configuration file at the repository root --
 // named for the system that reads it, as opencode.json is named for the
 // harness, and spelled .yml like .openroutines/credentials.yml.enc (#50).
 const FileName = "openroutines.yml"
 
-// LegacyFileNames are earlier spellings, newest first. Still read, and
+// Earlier spellings, newest first. Still read, and
 // Save writes back to whichever file the agent actually has, so pinned
 // agents migrate on their own schedule; check nudges the rename.
 var LegacyFileNames = []string{"openroutines.yaml", "agent.yaml"}
 
-// Path returns the configuration file dir actually has, falling back to
+// Returns the configuration file dir actually has, falling back to
 // the first legacy name found, then FileName.
 func Path(dir string) string {
 	preferred := filepath.Join(dir, FileName)
@@ -45,24 +45,22 @@ func Path(dir string) string {
 	return preferred
 }
 
-// Owner identifies the human accountable for the agent.
 type Owner struct {
 	Name  string `yaml:"name"`
 	Email string `yaml:"email"`
 }
 
-// Defaults are agent-wide fallbacks that routine frontmatter overrides.
 type Defaults struct {
 	Model   string `yaml:"model"`
 	Timeout string `yaml:"timeout"`
 }
 
-// DefaultMaxTimeout is the run-length ceiling when max_timeout is not
+// The run-length ceiling when max_timeout is not
 // set: long enough for real work, short enough that a runaway run cannot
 // burn tokens for a day before anyone notices.
 const DefaultMaxTimeout = 6 * time.Hour
 
-// ScaffoldConcurrency is the run-slot count the scaffold template writes
+// The run-slot count the scaffold template writes
 // into new agents' openroutines.yml. Deliberately not a fallback the code
 // applies to agents that never wrote the key: every concurrent run is a
 // container plus live model spend, and an upgrade must not silently
@@ -70,14 +68,14 @@ const DefaultMaxTimeout = 6 * time.Hour
 // opts in.
 const ScaffoldConcurrency = 2
 
-// Knowledge holds knowledge-behavior settings; see design decision
+// Holds knowledge-behavior settings; see design decision
 // "Knowledge records events, tasks, and context" for the retention
 // window semantics.
 type Knowledge struct {
 	Retention string `yaml:"retention,omitempty"`
 }
 
-// Agent is the parsed configuration file. Description is the agent's job
+// The parsed configuration file. Description is the agent's job
 // description. Variables are non-secret values injected into every run's
 // environment (product_repo -> PRODUCT_REPO); secrets belong in credentials.
 // Credentials is optional per-credential metadata giving a stored credential
@@ -101,7 +99,7 @@ type Agent struct {
 	Memory *Knowledge `yaml:"memory,omitempty"`
 }
 
-// MaxRunTimeout is the agent-wide ceiling on a single attempt's effective
+// The agent-wide ceiling on a single attempt's effective
 // timeout. An unparseable max_timeout falls back to DefaultMaxTimeout
 // rather than failing open to unlimited; Problems reports the bad value
 // separately.
@@ -112,7 +110,7 @@ func (a *Agent) MaxRunTimeout() time.Duration {
 	return DefaultMaxTimeout
 }
 
-// RunSlots is how many routines may execute at once. Unset and 0 both
+// How many routines may execute at once. Unset and 0 both
 // mean serial -- parallelism is an opt-in an agent writes down (the
 // scaffold template opts new agents in at ScaffoldConcurrency).
 func (a *Agent) RunSlots() int {
@@ -122,12 +120,11 @@ func (a *Agent) RunSlots() int {
 	return 1
 }
 
-// MaxConcurrency bounds the reserved production UID pool. Each concurrent
+// Bounds the reserved production UID pool. Each concurrent
 // attempt needs a distinct identity; a finite ceiling keeps that security
 // boundary explicit in the image and configuration.
 const MaxConcurrency = 32
 
-// Retention returns the configured knowledge retention string ("" = default).
 func (a *Agent) Retention() string {
 	if a.Knowledge == nil {
 		return ""
@@ -135,7 +132,7 @@ func (a *Agent) Retention() string {
 	return a.Knowledge.Retention
 }
 
-// Load reads the configuration file from dir (FileName, or a
+// Reads the configuration file from dir (FileName, or a
 // LegacyFileNames fallback). Decoding is strict: a misspelled key is an
 // error, not silently ignored configuration.
 func Load(dir string) (*Agent, error) {
@@ -156,7 +153,7 @@ func Load(dir string) (*Agent, error) {
 	return &a, nil
 }
 
-// Save writes the configuration back to the file dir actually has -- a
+// Writes the configuration back to the file dir actually has -- a
 // legacy-named agent keeps its name until its operator renames it. Uses
 // two-space indentation to match the scaffold template (yaml.v3 defaults
 // to 4, which would reformat this hand-edited file on every write, #65).
@@ -173,12 +170,11 @@ func (a *Agent) Save(dir string) error {
 	return os.WriteFile(Path(dir), buf.Bytes(), 0o644)
 }
 
-// Reports whether a value is still a {{SCAFFOLD}} placeholder.
 func isPlaceholder(s string) bool {
 	return strings.Contains(s, "{{")
 }
 
-// Problems returns human-readable validation failures, empty when valid.
+// Returns human-readable validation failures, empty when valid.
 func (a *Agent) Problems() []string {
 	var out []string
 	if a.Name == "" || isPlaceholder(a.Name) {

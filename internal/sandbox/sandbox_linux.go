@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package sandbox applies the Landlock filesystem confinement to the model
+// Applies the Landlock filesystem confinement to the model
 // process (design decision "Runs are sandboxed"). Rules bind to the calling
 // process and its children, so the runner re-execs through
 // `openroutines sandbox-exec`, which applies the rules to itself and then
@@ -23,7 +23,7 @@ import (
 
 const identityReapTimeout = 5 * time.Second
 
-// DropIdentity moves the shim permanently to the attempt identity. The
+// Moves the shim permanently to the attempt identity. The
 // openroutines binary carries only CAP_SETUID/CAP_SETGID; the capless
 // opencode exec that follows cannot regain the supervisor identity.
 func DropIdentity(uid uint32) error {
@@ -48,7 +48,7 @@ func DropIdentity(uid uint32) error {
 	return nil
 }
 
-// ReapIdentity kills every live process still carrying an attempt UID and
+// Kills every live process still carrying an attempt UID and
 // proves the identity is empty before the supervisor returns it to the pool.
 // Process-group cleanup handles the ordinary tree; this catches descendants
 // that escaped into another session or process group.
@@ -126,7 +126,7 @@ func statusIdentity(file *os.File, uid uint32) (matches, zombie bool, err error)
 	return matches, zombie, scanner.Err()
 }
 
-// Apply restricts this process (and all its descendants) to read access on
+// Restricts this process (and all its descendants) to read access on
 // ro paths and read-write on rw paths. Returns a description of the ABI
 // level that took effect, plus any rw paths that don't exist and so were
 // dropped from the ruleset -- Landlock errors on nonexistent rule paths, so
@@ -148,7 +148,7 @@ func Apply(ro, rw []string) (string, []string, error) {
 	return "landlock v1", rwSkipped, nil
 }
 
-// ProtectProcess marks this process non-dumpable: a same-UID process can no
+// Marks this process non-dumpable: a same-UID process can no
 // longer read its /proc/<pid>/environ or mem, nor ptrace-attach, without
 // CAP_SYS_PTRACE. The supervisor calls this at boot, before any model
 // process exists -- its environment may carry the master and deploy keys,

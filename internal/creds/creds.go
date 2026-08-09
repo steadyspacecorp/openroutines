@@ -1,4 +1,4 @@
-// Package creds implements the Rails-style encrypted credentials store:
+// Implements the Rails-style encrypted credentials store:
 // one AES-256-GCM encrypted YAML file committed to the repo, one master key
 // kept out of it (master.key locally, OPENROUTINES_MASTER_KEY in production).
 package creds
@@ -30,15 +30,15 @@ const (
 	header           = "ORV1:"
 )
 
-// NamePattern constrains credential names: lowercase snake_case, so the
+// Constrains credential names: lowercase snake_case, so the
 // env-var mapping (slack_webhook -> SLACK_WEBHOOK) is always well-formed.
 var NamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// ReservedPrefix is never a valid credential name prefix: OPENROUTINES_*
+// Never a valid credential name prefix: OPENROUTINES_*
 // env vars are framework metadata, never secrets.
 const ReservedPrefix = "openroutines"
 
-// ReservedEnvName reports whether a name would shadow an env var the
+// Reports whether a name would shadow an env var the
 // framework constructs for a run (TZ, PATH, HOME, TMPDIR, XDG_*) or the
 // dynamic-linker LD_* family -- e.g. `ld_preload` becoming LD_PRELOAD.
 func ReservedEnvName(name string) bool {
@@ -49,7 +49,7 @@ func ReservedEnvName(name string) bool {
 	return strings.HasPrefix(name, "ld_") || strings.HasPrefix(name, "xdg_")
 }
 
-// GenerateKey mints a 32-byte master key, hex-encoded.
+// Mints a 32-byte master key, hex-encoded.
 func GenerateKey() string {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
@@ -58,7 +58,7 @@ func GenerateKey() string {
 	return hex.EncodeToString(buf)
 }
 
-// LoadKey resolves the master key, in order: the OPENROUTINES_MASTER_KEY_FILE
+// Resolves the master key, in order: the OPENROUTINES_MASTER_KEY_FILE
 // path (preferred in production -- a file never appears in /proc/pid/environ),
 // the OPENROUTINES_MASTER_KEY environment variable, then the gitignored
 // master.key file (local).
@@ -100,7 +100,7 @@ func LoadKey(dir string) ([]byte, error) {
 	return key, nil
 }
 
-// KeyValueInEnv reports whether the master key *value* is present in this
+// Reports whether the master key *value* is present in this
 // process's environment (visible to platform introspection, crash dumps,
 // anything running as root) rather than only reachable via a file path.
 // Checks the variable directly rather than which delivery LoadKey resolved,
@@ -153,7 +153,7 @@ func open(key []byte, encoded string) ([]byte, error) {
 	return plaintext, nil
 }
 
-// Read decrypts and parses the credentials file. A missing file is an
+// Decrypts and parses the credentials file. A missing file is an
 // empty store, not an error.
 func Read(dir string, key []byte) (map[string]string, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, FileName))
@@ -181,7 +181,7 @@ func Read(dir string, key []byte) (map[string]string, error) {
 	return out, nil
 }
 
-// Write encrypts and writes the credentials map.
+// Encrypts and writes the credentials map.
 func Write(dir string, key []byte, values map[string]string) error {
 	plaintext, err := yaml.Marshal(values)
 	if err != nil {
@@ -198,7 +198,7 @@ func Write(dir string, key []byte, values map[string]string) error {
 	return os.WriteFile(path, []byte(encoded+"\n"), 0o644)
 }
 
-// ProviderKeyName returns the reserved credential name for a model
+// Returns the reserved credential name for a model
 // provider, e.g. "anthropic" -> "anthropic_api_key". These are
 // auto-injected per the routine's declared model provider.
 func ProviderKeyName(provider string) string {

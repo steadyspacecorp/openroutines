@@ -1,4 +1,4 @@
-// Package sandbox confines model processes to declared filesystem paths
+// Confines model processes to declared filesystem paths
 // with Landlock on Linux; other platforms report ErrUnsupported.
 package sandbox
 
@@ -12,12 +12,12 @@ import (
 	"syscall"
 )
 
-// ErrUnsupported reports that Landlock does not exist on this platform.
+// Reports that Landlock does not exist on this platform.
 // Local runs are confined by the run container instead; native mode off
 // Linux is an explicit development opt-in.
 var ErrUnsupported = errors.New("landlock is unavailable on this platform")
 
-// AttemptUIDBase is the first identity in the reserved production attempt
+// The first identity in the reserved production attempt
 // pool. The supervisor's run slots use AttemptUIDBase through
 // AttemptUIDBase+concurrency-1; the identity one past the concurrency
 // ceiling is reserved for manual runs (`routines run` inside the container),
@@ -26,7 +26,7 @@ var ErrUnsupported = errors.New("landlock is unavailable on this platform")
 // identity's group.
 const AttemptUIDBase = 20000
 
-// EnsureAttemptGroups makes this process a member of every attempt group,
+// Makes this process a member of every attempt group,
 // joining the missing ones with the binary's cap_setgid. The image grants the membership via
 // useradd -G, but whether it reaches the process depends on the init that
 // booted the container: some call initgroups, others set only uid and gid
@@ -52,13 +52,13 @@ func EnsureAttemptGroups(identities int) error {
 	return nil
 }
 
-// HelperPath is the capless production re-exec target. The supervisor binary is
+// The capless production re-exec target. The supervisor binary is
 // executable only by the agent identity because it carries UID-switching
 // capabilities; attempts may execute this copy, but it carries no capability
 // with which to change identity.
 const HelperPath = "/usr/local/lib/openroutines/sandbox-exec"
 
-// EnvUnsafeOverride deliberately disables the fail-closed sandbox policy.
+// Deliberately disables the fail-closed sandbox policy.
 // The name is ugly on purpose.
 const EnvUnsafeOverride = "OPENROUTINES_UNSAFE_NO_SANDBOX"
 
@@ -70,7 +70,7 @@ const (
 	EnvAttemptUID = "OPENROUTINES_ATTEMPT_UID"
 )
 
-// Paths computes the rule sets for one attempt: read on the workspace, the OS,
+// Computes the rule sets for one attempt: read on the workspace, the OS,
 // and the opencode installation; read-write on the staged knowledge the
 // runner names, the run tmp, and the attempt's disposable HOME.
 //
@@ -98,7 +98,6 @@ func Paths(workspace, knowledgeDir, runTmp, home, attemptHome string) (ro, rw []
 	return ro, rw
 }
 
-// JoinPaths encodes a rule list for the environment.
 func JoinPaths(paths []string) string {
 	return strings.Join(paths, string(os.PathListSeparator))
 }

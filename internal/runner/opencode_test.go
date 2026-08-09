@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// fakeBin puts an executable named `name` on PATH for the test.
 func fakeBin(t *testing.T, name, script string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -18,7 +17,7 @@ func fakeBin(t *testing.T, name, script string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// reportEnv is a stand-in opencode that prints the environment it was
+// A stand-in opencode that prints the environment it was
 // handed instead of doing any work.
 const reportEnv = `#!/bin/sh
 echo "HOME=$HOME"
@@ -90,7 +89,7 @@ func TestHostCaptureRefusesAHomeInsideTheWorkspace(t *testing.T) {
 	}
 }
 
-// truncateOnPipe stands in for opencode's real defect: its CLI calls
+// Stands in for opencode's real defect: its CLI calls
 // process.exit() before an async stdout write drains, and stream writes to
 // a pipe are asynchronous, so a large payload through a pipe arrives cut
 // short with exit code 0 -- while writes to a file are synchronous and
@@ -122,7 +121,7 @@ func TestNativeCaptureSurvivesOpencodesLossyPipeWrites(t *testing.T) {
 	}
 }
 
-// fakeDocker stands in for the docker client: it records its arguments in
+// Stands in for the docker client: it records its arguments in
 // the workspace file the exec reads back -- the container's own stdout
 // route is a pipe, so nothing the exec returns may come from there -- and
 // says something on stdout to prove that stream is ignored.

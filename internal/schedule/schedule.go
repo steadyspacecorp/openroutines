@@ -1,4 +1,4 @@
-// Package schedule implements the durable two-phase scheduling model
+// Implements the durable two-phase scheduling model
 // (design decision "Scheduling"): per-routine state keyed by routine id -- a
 // watermark (latest cron occurrence fully accounted for) plus at most one
 // pending logical run that survives failed attempts under the same run_id.
@@ -14,7 +14,7 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// Spec is a cron expression bound to the agent's timezone. Binding matters
+// A cron expression bound to the agent's timezone. Binding matters
 // because a watermark round-tripped through the state file comes back in a
 // fabricated fixed-offset zone (time.Time.UnmarshalJSON does that whenever
 // the offset isn't time.Local's), and cron evaluates an unbound spec in
@@ -25,7 +25,7 @@ type Spec struct {
 	loc   *time.Location
 }
 
-// Parse parses a standard cron expression to be evaluated in loc, which the
+// Parses a standard cron expression to be evaluated in loc, which the
 // caller must resolve -- there is no ambient default to fall back to.
 func Parse(expr string, loc *time.Location) (*Spec, error) {
 	sched, err := cron.ParseStandard(expr)
@@ -35,12 +35,12 @@ func Parse(expr string, loc *time.Location) (*Spec, error) {
 	return &Spec{sched: sched, loc: loc}, nil
 }
 
-// Next returns the first firing strictly after t, in the spec's location.
+// Returns the first firing strictly after t, in the spec's location.
 func (s *Spec) Next(t time.Time) time.Time {
 	return s.sched.Next(t.In(s.loc))
 }
 
-// Pending is a logical run that exists durably before it is allowed to act.
+// A logical run that exists durably before it is allowed to act.
 type Pending struct {
 	RunID          string    `json:"run_id"`
 	ScheduledFor   time.Time `json:"scheduled_for"`
@@ -50,7 +50,7 @@ type Pending struct {
 	LastAttemptAt  time.Time `json:"last_attempt_at,omitzero"`
 }
 
-// State is one routine's durable scheduling record.
+// One routine's durable scheduling record.
 type State struct {
 	Routine   string    `json:"routine"`
 	Watermark time.Time `json:"watermark"`
@@ -64,7 +64,7 @@ type State struct {
 
 const breakerThreshold = 3
 
-// RecordAbandonment counts an abandoned run and, past the threshold, trips
+// Counts an abandoned run and, past the threshold, trips
 // the breaker: cool-down of 1h doubling per further abandonment, capped at
 // 24h. Returns the cool-down applied (zero when the breaker has not tripped).
 func (s *State) RecordAbandonment(now time.Time) time.Duration {
@@ -77,13 +77,13 @@ func (s *State) RecordAbandonment(now time.Time) time.Duration {
 	return cooldown
 }
 
-// RecordSuccess resets the breaker: one good run clears the history.
+// Resets the breaker: one good run clears the history.
 func (s *State) RecordSuccess() {
 	s.ConsecutiveAbandons = 0
 	s.CooldownUntil = time.Time{}
 }
 
-// CoolingDown reports whether the breaker currently blocks new runs.
+// Reports whether the breaker currently blocks new runs.
 func (s *State) CoolingDown(now time.Time) bool {
 	return now.Before(s.CooldownUntil)
 }
@@ -92,7 +92,7 @@ func statePath(stateDir, name string) string {
 	return filepath.Join(stateDir, name+".json")
 }
 
-// Load reads a routine's state; nil (no error) when none exists yet.
+// Reads a routine's state; nil (no error) when none exists yet.
 func Load(stateDir, name string) (*State, error) {
 	raw, err := os.ReadFile(statePath(stateDir, name))
 	if err != nil {
@@ -108,7 +108,6 @@ func Load(stateDir, name string) (*State, error) {
 	return &s, nil
 }
 
-// Save writes a routine's state.
 func (s *State) Save(stateDir string) error {
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		return err
@@ -120,7 +119,7 @@ func (s *State) Save(stateDir string) error {
 	return os.WriteFile(statePath(stateDir, s.Routine), append(raw, '\n'), 0o644)
 }
 
-// Occurrences returns the first and last cron firing times in (after, until],
+// Returns the first and last cron firing times in (after, until],
 // and how many there were. Multiple missed firings collapse into one run:
 // the caller uses first as scheduled_for and last as covered_through.
 func Occurrences(spec *Spec, after, until time.Time) (first, last time.Time, n int) {
@@ -139,7 +138,7 @@ func Occurrences(spec *Spec, after, until time.Time) (first, last time.Time, n i
 	return
 }
 
-// NextFires returns up to n firing times strictly after `after` and no
+// Returns up to n firing times strictly after `after` and no
 // later than `until`, in the spec's location.
 func NextFires(spec *Spec, after, until time.Time, n int) []time.Time {
 	var fires []time.Time
@@ -154,7 +153,7 @@ func NextFires(spec *Spec, after, until time.Time, n int) []time.Time {
 	return fires
 }
 
-// WindowEnd returns the spec's first firing on its next fire-day (in the
+// Returns the spec's first firing on its next fire-day (in the
 // spec's location). Later same-day firings (retry slots) are skipped: a
 // routine's window closes when it next runs fresh, not when it retries.
 // Zero when no such firing lands by `until`.
@@ -174,7 +173,7 @@ func WindowEnd(spec *Spec, after, until time.Time) time.Time {
 	return time.Time{}
 }
 
-// NextRetryAt implements attempt backoff: 1, 2, 4, 8... minutes after the
+// Implements attempt backoff: 1, 2, 4, 8... minutes after the
 // last attempt, capped at 16 minutes. A pending run with no attempts yet is
 // runnable immediately.
 func NextRetryAt(p *Pending) time.Time {

@@ -1,4 +1,4 @@
-// Package routine parses routine markdown files: YAML frontmatter declaring
+// Parses routine markdown files: YAML frontmatter declaring
 // the scope (schedule, grants) and a body that is the prompt.
 package routine
 
@@ -20,16 +20,16 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/trigger"
 )
 
-// NamePattern constrains routine names: the filename is the routine's
+// Constrains routine names: the filename is the routine's
 // identity, and names become filesystem paths (routines/<name>.md, lock
 // files, ledgers), so no separators, no dots, no way to spell an escape.
 var NamePattern = regexp.MustCompile(`^[a-z0-9]+([_-][a-z0-9]+)*$`)
 
-// DefaultURL is the canonical link supplied to routines that do not declare
+// The canonical link supplied to routines that do not declare
 // one of their own.
 const DefaultURL = "https://openroutines.dev"
 
-// Frontmatter is a routine's declared scope. Every field is optional except
+// A routine's declared scope. Every field is optional except
 // that at least one of Schedule and Trigger must be set; see design
 // decisions "Routines are markdown files" and "Triggers" for defaults.
 type Frontmatter struct {
@@ -48,7 +48,7 @@ type Frontmatter struct {
 	Websearch   bool          `yaml:"websearch,omitempty"` // grants the websearch tool (and enables its search backend)
 	MCP         []string      `yaml:"mcp,omitempty"`       // grants a configured MCP server's tools; third-party tool text is an injection vector, so none by default
 
-	// Events and Consumes are retired, replaced by Teamwork and Reports.
+	// And Consumes are retired, replaced by Teamwork and Reports.
 	// Parsed only so Parse can reject them with a migration message instead
 	// of a generic "unknown field" error.
 	Events   *bool  `yaml:"events,omitempty"`
@@ -64,14 +64,14 @@ const (
 	TeamworkOff    = "off"    // invisible to the team: checking in is not work
 )
 
-// IsActive applies the default: routines are active unless explicitly not.
+// Applies the default: routines are active unless explicitly not.
 func (f Frontmatter) IsActive() bool { return f.Active == nil || *f.Active }
 
-// RecordsEvents reports whether runs land in the shared record: every
+// Reports whether runs land in the shared record: every
 // teamwork tier except off.
 func (f Frontmatter) RecordsEvents() bool { return f.teamwork() != TeamworkOff }
 
-// FullTeamwork reports whether the routine participates fully in teamwork:
+// Reports whether the routine participates fully in teamwork:
 // its runs are recorded and its scheduled fires fill the schedule's tables
 // rather than its fact lines.
 func (f Frontmatter) FullTeamwork() bool { return f.teamwork() == TeamworkFull }
@@ -89,7 +89,7 @@ func (f Frontmatter) teamwork() string {
 	}
 }
 
-// EffectiveURL applies the framework default for external records that want
+// Applies the framework default for external records that want
 // a canonical link back to the routine's source or project.
 func (f Frontmatter) EffectiveURL() string {
 	if f.URL != "" {
@@ -98,7 +98,7 @@ func (f Frontmatter) EffectiveURL() string {
 	return DefaultURL
 }
 
-// Routine is one parsed routine file: identity, declared scope, prompt.
+// One parsed routine file: identity, declared scope, prompt.
 type Routine struct {
 	Name        string // filename without .md -- the human-readable name
 	Path        string
@@ -106,13 +106,13 @@ type Routine struct {
 	Body        string // the prompt
 }
 
-// Log returns the process logger with this routine's identity bound, so an
+// Returns the process logger with this routine's identity bound, so an
 // operator can filter one routine's output from concurrent runs sharing stdout.
 func (r *Routine) Log() *slog.Logger {
 	return slog.With("routine", r.Name)
 }
 
-// Parse reads one routine file. The file must begin with a "---" frontmatter
+// Reads one routine file. The file must begin with a "---" frontmatter
 // block; everything after the closing "---" is the prompt body. Errors name
 // the failure, not the file -- the caller already has the path and knows how
 // to attribute it for its own reader.
@@ -161,7 +161,7 @@ func Parse(path string) (*Routine, error) {
 	return &Routine{Name: name, Path: path, Frontmatter: fm, Body: body}, nil
 }
 
-// SetActive rewrites the `active:` frontmatter field in place, preserving the
+// Rewrites the `active:` frontmatter field in place, preserving the
 // rest of the file byte for byte -- both directions are explicit so each is
 // a visible diff.
 func SetActive(path string, active bool) error {
@@ -176,7 +176,7 @@ func SetActive(path string, active bool) error {
 	return os.WriteFile(path, out, 0o644)
 }
 
-// WithActive returns routine markdown with an explicit active field,
+// Returns routine markdown with an explicit active field,
 // preserving every other byte. Installers use it before a routine becomes
 // visible so an active-by-default source can never race a live supervisor.
 func WithActive(raw []byte, active bool) ([]byte, error) {
@@ -199,7 +199,7 @@ func WithActive(raw []byte, active bool) ([]byte, error) {
 	return doc.WithFrontmatter([]byte(head)), nil
 }
 
-// Error is a load failure attributed to the routine it concerns: the file
+// A load failure attributed to the routine it concerns: the file
 // that would not parse, or the name two files collide on. Attribution keeps
 // one broken file from being everyone's problem -- a healthy routine's run
 // can tell the error belongs to someone else.
@@ -218,7 +218,7 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.Err }
 
-// Concerns reports whether one LoadAgent error stands between the caller and
+// Reports whether one LoadAgent error stands between the caller and
 // routine name. An error attributed to another routine does not; an
 // unattributed one (e.g. an unreadable plugins directory, which could be
 // hiding this routine) concerns everyone -- fail closed. Pass a single
@@ -235,7 +235,7 @@ func Concerns(err error, name string) bool {
 	return true
 }
 
-// LoadDir parses every *.md routine in dir, sorted by name. A missing dir is
+// Parses every *.md routine in dir, sorted by name. A missing dir is
 // an empty agent, not an error.
 func LoadDir(dir string) ([]*Routine, []error) {
 	entries, err := os.ReadDir(dir)
@@ -263,7 +263,7 @@ func LoadDir(dir string) ([]*Routine, []error) {
 	return routines, errs
 }
 
-// LoadPlugins reads every installed plugin's routines. Names are global
+// Reads every installed plugin's routines. Names are global
 // identities across plugins, so duplicates are errors. The returned list
 // includes every parseable claim, including duplicates: LoadAgent applies
 // precedence and drops broken identities, while plugin installation uses the
@@ -296,7 +296,7 @@ func LoadPlugins(root string) ([]*Routine, []error) {
 	return routines, errs
 }
 
-// LoadAgent reads agent-owned routines plus every installed plugin's
+// Reads agent-owned routines plus every installed plugin's
 // routines. An agent-owned filename shadows the same filename from plugins;
 // duplicate names across plugins remain errors. Every routine it returns is
 // one a caller may run: a name any attributed error is about is dropped, and
@@ -347,12 +347,12 @@ func LoadAgent(root string) ([]*Routine, []error) {
 	return routines, errs
 }
 
-// ErrNotFound is the one Find failure that means the name is free. Every
+// The one Find failure that means the name is free. Every
 // other error means the name is spoken for by something the agent couldn't
 // read.
 var ErrNotFound = errors.New("no routine")
 
-// Find returns one globally named routine from an agent repository.
+// Returns one globally named routine from an agent repository.
 func Find(root, name string) (*Routine, error) {
 	routines, errs := LoadAgent(root)
 	// A routine that failed to load is missing from the list; report why

@@ -7,16 +7,16 @@ import (
 	"time"
 )
 
-// pipeDrainDeadline bounds how long waiting on the run's output pipes may
+// Bounds how long waiting on the run's output pipes may
 // outlast the process: a daemonized grandchild keeps the inherited pipe open
 // forever, and the wait for EOF must not hold the tick loop.
 const pipeDrainDeadline = 5 * time.Second
 
-// containerExitGrace is how long `docker run` gets to notice that its
+// How long `docker run` gets to notice that its
 // container is gone before the client itself is killed.
 const containerExitGrace = 5 * time.Second
 
-// killClient ends a container run after `docker stop` was asked to take the
+// Ends a container run after `docker stop` was asked to take the
 // container down: a client that does not follow it out is killed rather than
 // waited on forever. Waiting for Wait to return is not optional -- the caller
 // flushes the stream writers, and returning before Wait would race them.
@@ -30,7 +30,7 @@ func killClient(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.L
 	}
 }
 
-// signalTarget is the run's process group when it leads one. The guard
+// The run's process group when it leads one. The guard
 // matters: signaling -pid without Setpgid would reach the supervisor's own
 // group.
 func signalTarget(cmd *exec.Cmd) int {
@@ -40,7 +40,7 @@ func signalTarget(cmd *exec.Cmd) int {
 	return cmd.Process.Pid
 }
 
-// killGroup terminates the run's whole process group: SIGTERM, grace, SIGKILL.
+// Terminates the run's whole process group: SIGTERM, grace, SIGKILL.
 // The waits are bounded by the command's WaitDelay, not by the group's
 // willingness to exit.
 func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Logger) {
@@ -55,7 +55,7 @@ func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Lo
 	}
 }
 
-// reapGroup kills what the model process left running after exiting. It runs
+// Kills what the model process left running after exiting. It runs
 // after the leader was waited on, so the group id could in principle have
 // been recycled -- an accepted race; the import re-checks staging at open
 // time and does not depend on this having worked.

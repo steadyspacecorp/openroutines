@@ -23,13 +23,13 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
-// effortPattern loosely constrains reasoning-effort values -- providers
+// Loosely constrains reasoning-effort values -- providers
 // define the real vocabulary; this just catches obvious mistakes.
 var effortPattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 const checkUsage = "usage: openroutines check"
 
-// cmdCheck validates the agent repository: openroutines.yml, every routine's
+// Validates the agent repository: openroutines.yml, every routine's
 // frontmatter, skill references, credential names, and deploy prerequisites.
 // Exit code 1 on any failure -- made for CI.
 func cmdCheck(args []string) int {

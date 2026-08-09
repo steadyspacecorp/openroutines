@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// deliveryFixture inits an agent repo with a materialized knowledge worktree.
 func deliveryFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -91,7 +90,7 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 	}
 }
 
-// trimFixture appends one event, commits it, then trims and commits the trim
+// Appends one event, commits it, then trims and commits the trim
 // the way the supervisor does. Returns the commit the event landed in.
 func trimFixture(t *testing.T, dir string) string {
 	t.Helper()

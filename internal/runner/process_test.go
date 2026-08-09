@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// discardLog is the logger tests hand to code that only logs on a failure
+// The logger tests hand to code that only logs on a failure
 // path they aren't asserting on -- there is no log-capture harness in this
 // package, so tests that do care about a specific line read it from
 // behavior (a returned value, a file on disk), not from log output.

@@ -27,7 +27,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
-// triggerServer is a mutable poll target: set() changes the served value,
+// A mutable poll target: set() changes the served value,
 // which is what a trigger observes.
 type triggerServer struct {
 	*httptest.Server

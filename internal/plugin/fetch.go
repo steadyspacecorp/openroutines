@@ -2,7 +2,7 @@ package plugin
 
 import "github.com/steadyspacecorp/openroutines/internal/source"
 
-// Fetch acquires a plugin source: a local directory, a git URL, or an
+// Acquires a plugin source: a local directory, a git URL, or an
 // owner/repo GitHub shorthand. Both go through a temporary clone, so the
 // returned bundle root always corresponds to the recorded provenance.
 // revision pins the checkout; empty means the clone's head.

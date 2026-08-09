@@ -1,4 +1,4 @@
-// Package source acquires a contained, revision-pinned tree from Git.
+// Acquires a contained, revision-pinned tree from Git.
 package source
 
 import (
@@ -19,14 +19,14 @@ const (
 	gitDrainDeadline = 5 * time.Second
 )
 
-// Provenance identifies the repository content returned by Fetch.
+// Identifies the repository content returned by Fetch.
 type Provenance struct {
 	Repository string
 	Path       string
 	Revision   string
 }
 
-// Fetch clones a source reference and returns its contained subpath at revision.
+// Clones a source reference and returns its contained subpath at revision.
 func Fetch(sourceRef, subPath, revision string) (root string, provenance Provenance, cleanup func(), err error) {
 	cleanup = func() {}
 	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
@@ -101,7 +101,7 @@ func Fetch(sourceRef, subPath, revision string) (root string, provenance Provena
 	return root, Provenance{Repository: repository, Path: subPath, Revision: revision}, cleanup, nil
 }
 
-// ResolvePath resolves subPath while refusing traversal and symlink escapes.
+// Resolves subPath while refusing traversal and symlink escapes.
 func ResolvePath(root, subPath string) (string, error) {
 	clean := filepath.Clean(subPath)
 	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {

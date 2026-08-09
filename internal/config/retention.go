@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// DefaultRetention is the knowledge working-set window when none is configured.
+// The knowledge working-set window when none is configured.
 const DefaultRetention = 30 * 24 * time.Hour
 
-// ParseRetention accepts days such as 30d or a positive Go duration.
+// Accepts days such as 30d or a positive Go duration.
 func ParseRetention(value string) (time.Duration, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {

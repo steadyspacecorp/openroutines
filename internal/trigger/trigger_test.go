@@ -56,7 +56,6 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-// pollServer serves a body (mutable) and counts conditional hits.
 type pollServer struct {
 	body   string
 	etag   string

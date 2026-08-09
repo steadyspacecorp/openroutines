@@ -148,7 +148,6 @@ func TestConfigureLevel(t *testing.T) {
 	}
 }
 
-// field pulls one logfmt value out of a line.
 func field(t *testing.T, line, key string) string {
 	t.Helper()
 	for _, pair := range strings.Fields(strings.TrimSpace(line)) {

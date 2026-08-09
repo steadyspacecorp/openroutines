@@ -23,8 +23,6 @@ defaults:
   model: fake/model
 `
 
-// statusAgent builds an agent directory with the given routines, keyed by
-// name -> frontmatter+body.
 func statusAgent(t *testing.T, routines map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,7 +40,6 @@ func statusAgent(t *testing.T, routines map[string]string) string {
 	return dir
 }
 
-// saveState writes what the supervisor would have written for a routine.
 func saveState(t *testing.T, dir string, st *schedule.State) {
 	t.Helper()
 	if err := st.Save(knowledge.NewStore(dir).StateDir()); err != nil {
@@ -50,7 +47,6 @@ func saveState(t *testing.T, dir string, st *schedule.State) {
 	}
 }
 
-// writeRunLog writes the settlement records the supervisor would have appended.
 func writeRunLog(t *testing.T, dir string, lines ...string) {
 	t.Helper()
 	path := filepath.Join(knowledge.NewStore(dir).Worktree(), "runs.jsonl")
@@ -59,7 +55,6 @@ func writeRunLog(t *testing.T, dir string, lines ...string) {
 	}
 }
 
-// capture runs a command from dir and returns everything it printed.
 func capture(t *testing.T, dir string, run func()) string {
 	t.Helper()
 	t.Chdir(dir)

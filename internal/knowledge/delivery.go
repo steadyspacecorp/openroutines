@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// Cursor records how far one consumer has processed knowledge history. Cursors
+// Records how far one consumer has processed knowledge history. Cursors
 // are supervisor-owned bookkeeping (under state/, never staged into a run)
 // and travel with the knowledge branch like the rest of scheduling state.
 type Cursor struct {
@@ -27,7 +27,7 @@ type Cursor struct {
 	At              time.Time `json:"at"`
 }
 
-// CursorFile is the cursor's branch-relative path -- what diagnostics name,
+// The cursor's branch-relative path -- what diagnostics name,
 // because repair means editing this file on the knowledge branch.
 func CursorFile(consumer string) string {
 	return path.Join(stateDirName, "cursors", consumer+".json")
@@ -37,7 +37,7 @@ func (store *Store) cursorPath(consumer string) string {
 	return filepath.Join(store.Worktree(), CursorFile(consumer))
 }
 
-// LoadCursor returns nil when the consumer has no cursor yet (first run).
+// Returns nil when the consumer has no cursor yet (first run).
 func (store *Store) LoadCursor(consumer string) (*Cursor, error) {
 	raw, err := os.ReadFile(store.cursorPath(consumer))
 	if os.IsNotExist(err) {
@@ -59,10 +59,9 @@ func (store *Store) LoadCursor(consumer string) (*Cursor, error) {
 	return &c, nil
 }
 
-// shaPattern matches an abbreviated or full hex commit SHA.
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
-// SaveCursor writes the cursor into the worktree; the caller's next Commit
+// Writes the cursor into the worktree; the caller's next Commit
 // carries it, so consumption is recorded in the run's completion commit.
 func (store *Store) SaveCursor(consumer string, c Cursor) error {
 	p := store.cursorPath(consumer)
@@ -76,7 +75,7 @@ func (store *Store) SaveCursor(consumer string, c Cursor) error {
 	return os.WriteFile(p, raw, 0o644)
 }
 
-// Cursors lists every consumer with a cursor, for `openroutines status`.
+// Lists every consumer with a cursor, for `openroutines status`.
 func (store *Store) Cursors() (map[string]Cursor, error) {
 	dir := filepath.Join(store.StateDir(), "cursors")
 	entries, err := os.ReadDir(dir)
@@ -99,13 +98,13 @@ func (store *Store) Cursors() (map[string]Cursor, error) {
 	return out, nil
 }
 
-// Head returns the knowledge branch's current commit: the fixed `through`
+// Returns the knowledge branch's current commit: the fixed `through`
 // boundary a change set is prepared against.
 func (store *Store) Head() (string, error) {
 	return git(store.Worktree(), "rev-parse", "HEAD")
 }
 
-// CommitChange is one knowledge commit's model-facing changes.
+// One knowledge commit's model-facing changes.
 type CommitChange struct {
 	SHA     string
 	Date    string // committer date, YYYY-MM-DD
@@ -113,24 +112,24 @@ type CommitChange struct {
 	Files   []FileDelta
 }
 
-// FileDelta is one file's added and removed lines within a commit.
+// One file's added and removed lines within a commit.
 type FileDelta struct {
 	Path    string
 	Added   []string
 	Removed []string
 }
 
-// deliveryExcludes are paths a consumer never sees: framework bookkeeping
+// Paths a consumer never sees: framework bookkeeping
 // (scheduling state, cursors, run records) and routine-private ledgers.
 var deliveryExcludes = []string{":(exclude)state", ":(exclude)runs.jsonl", ":(exclude)ledgers"}
 
-// ErrCursorUnreachable reports a cursor that no longer names a commit on the
+// Reports a cursor that no longer names a commit on the
 // knowledge branch -- a repaired history, a hand-edited cursor file. The range
 // cannot be walked until a person fixes the cursor, so callers should treat
 // it as a failure to diagnose rather than one to retry.
 var ErrCursorUnreachable = errors.New("consumer cursor is not on the knowledge branch")
 
-// reachable checks that the cursor commit exists and the boundary descends
+// Checks that the cursor commit exists and the boundary descends
 // from it -- a commit left behind by a repaired history is still in the
 // object store, and walking from it would deliver a change set nobody made.
 // Only git's own "no" (exit 1) counts; anything else is git failing to
@@ -156,7 +155,7 @@ func (store *Store) reachable(from, through string) error {
 	return nil
 }
 
-// Changes walks every commit in (from, through], returning per-commit line
+// Walks every commit in (from, through], returning per-commit line
 // additions and removals. Commit-by-commit, never a net endpoint diff: an
 // event added and later pruned by retention must still reach a consumer that
 // hasn't seen it.
@@ -233,15 +232,14 @@ func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 	return commits, nil
 }
 
-// ChangesFileName is the read-only change set injected into a reporting
-// routine's workspace; ConsumeMarker is the file the routine creates to
-// consume the whole change set.
 const (
+	// Injected read-only into a reporting routine's workspace.
 	ChangesFileName = "changes.md"
-	ConsumeMarker   = "CONSUMED"
+	// Created by the routine to consume the whole change set.
+	ConsumeMarker = "CONSUMED"
 )
 
-// RenderChanges formats the pending change set as the markdown a reporting
+// Formats the pending change set as the markdown a reporting
 // run reads. Pure data: consume instructions live in the generated definition.
 func RenderChanges(consumer, from, through string, changes []CommitChange) string {
 	var b strings.Builder

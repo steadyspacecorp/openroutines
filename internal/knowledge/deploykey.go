@@ -10,7 +10,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// EnvDeployKey delivers the SSH private key that lets a deployed agent push
+// Delivers the SSH private key that lets a deployed agent push
 // its knowledge branch. Scope the key to the one repository. EnvDeployKeyFile
 // is the preferred production delivery: a path to the key, so the key value
 // itself never appears in /proc/pid/environ.
@@ -19,15 +19,15 @@ const (
 	EnvDeployKeyFile = "OPENROUTINES_DEPLOY_KEY_FILE"
 )
 
-// sshCommand, when set, is exported as GIT_SSH_COMMAND on every git
+// When set, is exported as GIT_SSH_COMMAND on every git
 // invocation so pushes and fetches authenticate with the deploy key.
 var sshCommand string
 
-// originRewrite, when set, is passed as -c url.<ssh>.insteadOf=<https> on
+// When set, is passed as -c url.<ssh>.insteadOf=<https> on
 // every git invocation so an HTTPS origin authenticates with the deploy key.
 var originRewrite []string
 
-// ConfigureDeployKey materializes OPENROUTINES_DEPLOY_KEY (if present) as a
+// Materializes OPENROUTINES_DEPLOY_KEY (if present) as a
 // supervisor-only key file and routes all git SSH through it. Returns whether
 // a key was configured. Host keys are trusted on first use (accept-new);
 // pinning is tracked in the hardening backlog.
@@ -72,7 +72,7 @@ func ConfigureDeployKey() (bool, error) {
 	return true, nil
 }
 
-// registerDeployKey puts the key material in the scrub registry the moment
+// Puts the key material in the scrub registry the moment
 // it enters the process. The key is multi-line and redaction is line by
 // line, so each substantial line registers as its own value.
 func registerDeployKey(key string) {
@@ -86,7 +86,7 @@ func registerDeployKey(key string) {
 	scrub.Register(values)
 }
 
-// ConfigureOriginRewrite routes an HTTPS origin through SSH so the deploy
+// Routes an HTTPS origin through SSH so the deploy
 // key can authenticate it -- the container has no HTTPS credential. Left
 // alone: SSH origins, origins with credentials, non-default ports.
 func ConfigureOriginRewrite(repoDir string) bool {

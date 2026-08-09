@@ -17,7 +17,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
-// warnKeyDelivery says once at boot that the master key value is in this
+// Says once at boot that the master key value is in this
 // process's environment -- the weaker delivery, and boot is the only moment
 // anyone is told. Fires on a leftover variable too: unset, it still publishes
 // the value.
@@ -39,7 +39,7 @@ func verifyAttemptGroups(groups []int, slots int) error {
 	return nil
 }
 
-// verifySandbox enforces the fail-closed policy at boot, not mid-run.
+// Enforces the fail-closed policy at boot, not mid-run.
 func (s *Supervisor) verifySandbox() error {
 	switch mode.Current() {
 	case mode.DeployedContainer:

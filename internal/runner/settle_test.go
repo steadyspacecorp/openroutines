@@ -56,7 +56,7 @@ func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
 	}
 }
 
-// settleFixture builds a real agent repo with a materialized knowledge worktree:
+// Builds a real agent repo with a materialized knowledge worktree:
 // Settle's commit step needs actual git.
 func settleFixture(t *testing.T) string {
 	t.Helper()

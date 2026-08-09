@@ -1,4 +1,4 @@
-// Package supervisor is the long-running scheduler: the container entrypoint.
+// The long-running scheduler: the container entrypoint.
 // Every tick re-reads frontmatter, reconciles knowledge with origin, and
 // dispatches due routines into a bounded pool -- the durable two-phase run
 // model: a logical run exists durably before it acts, failed attempts retry
@@ -29,15 +29,13 @@ const (
 	attemptUIDBase = sandbox.AttemptUIDBase
 )
 
-// Schedulable reports whether a tick will act on a routine at all. Exported
+// Reports whether a tick will act on a routine at all. Exported
 // because reporting has to agree with dispatch -- a surface that disagrees
 // promises a retry that cannot happen.
 func Schedulable(r *routine.Routine) bool {
 	return r.Frontmatter.IsActive() && (r.Frontmatter.Schedule != "" || r.Frontmatter.Trigger != nil)
 }
 
-// Supervisor is the tick loop: it re-reads routines, mints and dispatches
-// runs, and syncs knowledge with origin.
 type Supervisor struct {
 	Dir string
 
@@ -47,7 +45,7 @@ type Supervisor struct {
 	retention time.Duration
 	lastTrim  time.Time
 
-	// knowledgeMu serializes every knowledge-worktree critical section: tick
+	// Serializes every knowledge-worktree critical section: tick
 	// bookkeeping, each attempt's reserve-and-stage, each settlement.
 	// Kernel-backed, so a manual `routines run` serializes through it too.
 	knowledgeMu sync.Locker
@@ -84,7 +82,6 @@ type triggerTracker struct {
 	pollFailed map[string]bool
 }
 
-// New builds a supervisor for the agent repository at dir.
 func New(dir string) (*Supervisor, error) {
 	agent, err := config.Load(dir)
 	if err != nil {
@@ -139,10 +136,10 @@ func New(dir string) (*Supervisor, error) {
 
 func (s *Supervisor) stateDir() string { return s.store.StateDir() }
 
-// InstanceID returns the identity used to own the distributed lease.
+// Returns the identity used to own the distributed lease.
 func (s *Supervisor) InstanceID() string { return s.lease.instanceID }
 
-// Run is the supervise loop: startup, then one Tick per minute until ctx is
+// The supervise loop: startup, then one Tick per minute until ctx is
 // canceled, then shutdown (final commit and push, lease release).
 func (s *Supervisor) Run(ctx context.Context) error {
 	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
@@ -204,7 +201,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 }
 
-// Tick performs one scheduling pass at the given time. Exported so tests can
+// Performs one scheduling pass at the given time. Exported so tests can
 // drive the supervisor with synthetic clocks. The pass has two halves: plan
 // holds the knowledge lock and reconciles state; dispatch launches the due
 // attempts into the bounded pool and returns without waiting for them.
@@ -282,9 +279,6 @@ func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
 	s.pool.slots <- uid
 	return true
 }
-
-// dueRun is one due routine and the scheduling state its attempt owns
-// until it settles.
 
 func (s *Supervisor) shutdown() {
 	s.knowledgeMu.Lock()

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// gitPassthrough is everything a git child inherits from this process --
+// Everything a git child inherits from this process --
 // what git and ssh need to work at all.
 var gitPassthrough = []string{
 	"PATH",          // git's own subcommands, ssh, credential helpers
@@ -26,14 +26,13 @@ var gitPassthrough = []string{
 	"GIT_SSL_CAINFO", "GIT_PROXY_SSL_CAINFO",
 }
 
-// gitCmd is a git invocation together with the deadline that bounds it.
 type gitCmd struct {
 	*exec.Cmd
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-// newGitCmd builds a git invocation with a constructed environment and no
+// Builds a git invocation with a constructed environment and no
 // system or global config. Inheriting the environment would publish
 // OPENROUTINES_MASTER_KEY in the child's /proc/<pid>/environ -- non-dumpable
 // does not survive execve.
@@ -59,7 +58,7 @@ func newGitCmd(dir string, args []string) *gitCmd {
 	return &gitCmd{Cmd: cmd, ctx: ctx, cancel: cancel}
 }
 
-// killGitGroup ends a timed-out invocation's process group: SIGTERM, grace,
+// Ends a timed-out invocation's process group: SIGTERM, grace,
 // SIGKILL. The grace matters: git releases its lock files on SIGTERM but not
 // SIGKILL, and a stranded lock fails every later invocation.
 func killGitGroup(pid int) error {
@@ -77,7 +76,7 @@ func killGitGroup(pid int) error {
 	return nil
 }
 
-// fail wraps a failed invocation, naming the deadline when it was the cause
+// Wraps a failed invocation, naming the deadline when it was the cause
 // ("signal: killed" on a fetch would read as a supervisor bug, not an origin
 // gone dark). An abandoned drain is a failure even though git exited cleanly:
 // the output is truncated and callers parse it. Only the last case keeps the
@@ -103,7 +102,7 @@ var (
 	gitDrainDeadline = 5 * time.Second
 )
 
-// hermeticConfig is the -c configuration every git invocation carries: no
+// The -c configuration every git invocation carries: no
 // hooks, a fixed commit identity, no auto-gc (a detached gc keeps writing
 // .git/objects after the command returns), and low-speed bounds so a quiet
 // transfer is abandoned rather than parked forever.
@@ -121,7 +120,7 @@ var hermeticConfig = []string{
 	"-c", "http.lowSpeedTime=60",
 }
 
-// git runs a git command against the repo with hermetic configuration:
+// Runs a git command against the repo with hermetic configuration:
 // no system/global config leaks in.
 func git(dir string, args ...string) (string, error) {
 	cmd := newGitCmd(dir, append(hermeticConfig, args...))
@@ -133,7 +132,7 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// gitExitCode reports the status git exited with, or -1 when it never got to
+// Reports the status git exited with, or -1 when it never got to
 // exit -- "git answered no" versus "git could not answer".
 func gitExitCode(err error) int {
 	var exit *exec.ExitError
@@ -142,5 +141,3 @@ func gitExitCode(err error) int {
 	}
 	return -1
 }
-
-// Worktree returns the knowledge worktree location inside the agent repo.

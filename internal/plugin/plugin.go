@@ -1,4 +1,4 @@
-// Package plugin reads, installs, and updates grouped bundles of routines,
+// Reads, installs, and updates grouped bundles of routines,
 // skills, and knowledge-ledger stubs described by a PLUGIN.md manifest (see
 // design decision "Plugins"). Validation is all-or-nothing over the whole payload
 // before anything is copied, and violation is refusal, not a skipped file.
@@ -23,22 +23,21 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
-// FileName is the plugin manifest at the bundle root.
 const FileName = "PLUGIN.md"
 
-// SourceFileName records the upstream identity of an installed plugin.
+// Records the upstream identity of an installed plugin.
 const SourceFileName = ".openroutines-source.yaml"
 
 var revisionPattern = regexp.MustCompile(`^[0-9a-f]{40,64}$`)
 
-// Source is framework-owned provenance stored beside a vendored plugin.
+// Framework-owned provenance stored beside a vendored plugin.
 type Source struct {
 	Repository string `yaml:"repository"`
 	Path       string `yaml:"path,omitempty"`
 	Revision   string `yaml:"revision"`
 }
 
-// Credential is one required credential: a description for the person who
+// One required credential: a description for the person who
 // will fill it in, and for typed credentials the derived type to declare in
 // openroutines.yml. Never a value -- secrets are not part of a plugin.
 type Credential struct {
@@ -46,12 +45,12 @@ type Credential struct {
 	Type        string `yaml:"type,omitempty"`
 }
 
-// Variable is one required non-secret configuration value.
+// One required non-secret configuration value.
 type Variable struct {
 	Description string `yaml:"description"`
 }
 
-// MCPServer is one MCP server the bundle's routines grant. A declaration of
+// One MCP server the bundle's routines grant. A declaration of
 // need, never configuration: the server is defined in the agent's
 // opencode.json by a person, because an MCP entry is an endpoint plus auth
 // headers -- exactly what a plugin must not be able to write or update
@@ -63,7 +62,6 @@ type MCPServer struct {
 	Credential  string `yaml:"credential,omitempty"` // manifest credential its auth header references
 }
 
-// Manifest is PLUGIN.md's frontmatter.
 type Manifest struct {
 	Name        string                `yaml:"name"`
 	Description string                `yaml:"description"`
@@ -72,7 +70,7 @@ type Manifest struct {
 	MCP         map[string]MCPServer  `yaml:"mcp,omitempty"`
 }
 
-// Plugin is a validated bundle, ready to summarize and install.
+// A validated bundle, ready to summarize and install.
 type Plugin struct {
 	Manifest Manifest
 	Body     string // manifest body: the plugin's README, shown at install
@@ -82,14 +80,14 @@ type Plugin struct {
 	Stubs    []string // knowledge/ledgers/<name>.md, relative to Dir
 }
 
-// benignRoot are repository housekeeping files tolerated (never copied) at
+// Repository housekeeping files tolerated (never copied) at
 // the bundle root, so a standalone plugin repo can exist on a forge.
 var benignRoot = map[string]bool{
 	"README.md": true, "LICENSE": true, "LICENSE.md": true,
 	"LICENSE.txt": true, ".gitignore": true, SourceFileName: true,
 }
 
-// forbidden are agent- or harness-owned files a plugin must never ship;
+// Agent- or harness-owned files a plugin must never ship;
 // naming them gets a sharper refusal than the generic allow-list one.
 var forbidden = map[string]string{
 	"opencode.json":     "opencode.json is the agent's harness config -- a plugin granting itself permissions or endpoints is exactly what the allow-list exists to stop",
@@ -101,7 +99,7 @@ var forbidden = map[string]string{
 	"master.key":        "a plugin must never carry key material",
 }
 
-// Load parses and validates the plugin at dir. agentSkills are skill names
+// Parses and validates the plugin at dir. agentSkills are skill names
 // already present in the installing agent, for consistency checking. The
 // returned error aggregates every problem found -- nothing is partially ok.
 func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
@@ -123,7 +121,6 @@ func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
 	return p, nil
 }
 
-// parseManifestFile splits PLUGIN.md into frontmatter and body.
 func parseManifestFile(path string) (*Manifest, string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -151,7 +148,7 @@ func parseManifestFile(path string) (*Manifest, string, error) {
 	return &m, strings.TrimSpace(string(doc.Body)), nil
 }
 
-// agentNamespace returns the installed plugin routine namespace and the
+// Returns the installed plugin routine namespace and the
 // global skill namespace, or an error if the agent does not load cleanly.
 // Agent-owned routines deliberately do not participate in plugin collisions:
 // they shadow same-named plugin routines. Plugin routines are loaded directly
@@ -166,7 +163,7 @@ func agentNamespace(agentDir string) ([]*routine.Routine, []*skill.Skill, error)
 	return routines, skills, nil
 }
 
-// Summary renders the grant summary: every authority the bundle asks for,
+// Renders the grant summary: every authority the bundle asks for,
 // stated before anything is copied. Review is the only gate, so this is it.
 func (p *Plugin) Summary() string {
 	var b strings.Builder
@@ -248,7 +245,7 @@ func (p *Plugin) Summary() string {
 	return b.String()
 }
 
-// ReadSource strictly decodes an installed plugin's provenance.
+// Strictly decodes an installed plugin's provenance.
 func ReadSource(dir string) (Source, error) {
 	var source Source
 	raw, err := os.ReadFile(filepath.Join(dir, SourceFileName))
@@ -263,7 +260,7 @@ func ReadSource(dir string) (Source, error) {
 	return source, source.validate()
 }
 
-// validate reports whether provenance is usable: a repository, a full commit
+// Reports whether provenance is usable: a repository, a full commit
 // hash, and a path that stays inside the source repository. Both ReadSource
 // and PrepareInstall enforce it, so the recorded identity means the same
 // thing whether it was just written or read back later.

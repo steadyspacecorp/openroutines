@@ -17,7 +17,7 @@ type leaseKeeper struct {
 	warned     bool
 }
 
-// acquireLease enforces "exactly one instance": a fresh foreign lease means
+// Enforces "exactly one instance": a fresh foreign lease means
 // another supervisor is alive, so this one waits. The write is a
 // compare-and-swap on the lease ref -- two racing instances cannot both win.
 func (s *Supervisor) acquireLease(ctx context.Context) error {

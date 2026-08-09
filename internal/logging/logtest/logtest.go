@@ -1,4 +1,4 @@
-// Package logtest captures the process log for tests. Capture redirects
+// Captures the process log for tests. Capture redirects
 // the log stream -- slog records and the opencode passthrough alike --
 // into a test-scoped buffer, and the Log it returns makes "the expected
 // thing was logged" a single assertion. Tests never touch the logging
@@ -14,7 +14,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/logging"
 )
 
-// Capture redirects the process log into a fresh Log until the test ends,
+// Redirects the process log into a fresh Log until the test ends,
 // then restores the real destination.
 func Capture(t *testing.T) *Log {
 	t.Helper()
@@ -25,7 +25,7 @@ func Capture(t *testing.T) *Log {
 	return l
 }
 
-// Log is the captured stream. The lock is what makes assertions safe
+// The captured stream. The lock is what makes assertions safe
 // while a run's goroutines are still logging.
 type Log struct {
 	t   *testing.T
@@ -39,7 +39,7 @@ func (l *Log) Write(p []byte) (int, error) {
 	return l.buf.Write(p)
 }
 
-// String returns everything logged so far, for the assertions Expect and
+// Returns everything logged so far, for the assertions Expect and
 // Reject don't cover -- counting occurrences, walking lines.
 func (l *Log) String() string {
 	l.mu.Lock()
@@ -47,7 +47,7 @@ func (l *Log) String() string {
 	return l.buf.String()
 }
 
-// Reset discards what was captured so far, so a test asserting in phases
+// Discards what was captured so far, so a test asserting in phases
 // reads each phase alone.
 func (l *Log) Reset() {
 	l.mu.Lock()
@@ -55,7 +55,6 @@ func (l *Log) Reset() {
 	l.buf.Reset()
 }
 
-// Expect fails the test unless every substring was logged.
 func (l *Log) Expect(substrs ...string) {
 	l.t.Helper()
 	got := l.String()
@@ -66,7 +65,6 @@ func (l *Log) Expect(substrs ...string) {
 	}
 }
 
-// Reject fails the test if any substring was logged.
 func (l *Log) Reject(substrs ...string) {
 	l.t.Helper()
 	got := l.String()

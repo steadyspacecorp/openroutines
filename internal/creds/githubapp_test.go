@@ -27,7 +27,7 @@ func testKeyPEM(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 }
 
-// githubStub serves the three-call mint flow plus revocation. installations
+// Serves the three-call mint flow plus revocation. installations
 // is mutable so tests can present zero, one, or two installations;
 // failBotLookup makes the post-mint identity call fail.
 type githubStub struct {

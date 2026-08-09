@@ -10,7 +10,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// Spec declares how a stored credential is materialized into a run
+// Declares how a stored credential is materialized into a run
 // (design decision "Credentials have types"). A credential with no Spec is raw --
 // injected verbatim under its uppercase name. A typed credential is
 // transformed by the trusted runner at spawn; the routine receives the
@@ -24,7 +24,7 @@ type Spec struct {
 	InjectAs string `yaml:"inject_as,omitempty"` // oauth2_client
 }
 
-// Derived is short-lived material minted from a stored root secret: the
+// Short-lived material minted from a stored root secret: the
 // environment to inject into a run, the bearer value (when the type
 // produces one), and cleanup that disposes of anything revocable. Derive
 // registers the bearer with the scrub registry and Cleanup releases that
@@ -38,17 +38,16 @@ type Derived struct {
 
 var appIDPattern = regexp.MustCompile(`^[0-9]+$`)
 
-// DerivedTypes are the derived credential types the framework implements.
+// The derived credential types the framework implements.
 // Every validator that names the set consults this list -- two hardcoded
 // copies drifted once already (the plugin validator missed oauth2_client).
 var DerivedTypes = []string{"github_app", "oauth2_client"}
 
-// KnownType reports whether t is an implemented derived credential type.
 func KnownType(t string) bool {
 	return slices.Contains(DerivedTypes, t)
 }
 
-// SpecProblems returns human-readable validation failures for one
+// Returns human-readable validation failures for one
 // credential metadata entry, empty when valid. Fields another type owns are rejected,
 // not ignored -- silently dead configuration is what strict decoding exists
 // to prevent.
@@ -91,7 +90,7 @@ func SpecProblems(name string, s Spec) []string {
 	return out
 }
 
-// InjectionDescription explains what a run actually receives when it
+// Explains what a run actually receives when it
 // declares this credential -- the credential's own uppercase name for a raw credential, or the
 // derived surface for a typed one. CLI output must not assume every
 // credential is raw (issue #66): a github_app or oauth2_client entry
@@ -107,7 +106,7 @@ func InjectionDescription(name string, s Spec) string {
 	}
 }
 
-// ValidateStored reports whether a stored value can serve its declared
+// Reports whether a stored value can serve its declared
 // type, judged from the value alone -- no network. A github_app value must
 // parse as an RSA private key: a truncated paste otherwise decrypts cleanly,
 // passes every name check, and first fails in a production run trying to
@@ -120,7 +119,7 @@ func ValidateStored(s Spec, stored string) error {
 	return nil
 }
 
-// Derive materializes one typed credential. Providers are built into the
+// Materializes one typed credential. Providers are built into the
 // framework -- agent repositories cannot supply derivation code, which would
 // otherwise be a privileged plugin boundary on the trusted side. The minted
 // bearer registers with the scrub registry here, the one door every

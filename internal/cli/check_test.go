@@ -21,7 +21,6 @@ defaults:
   model: fake/model
 `
 
-// checkOutput runs check against dir and returns everything it printed.
 func checkOutput(t *testing.T, dir string) string {
 	t.Helper()
 	t.Chdir(dir)
