@@ -89,10 +89,9 @@ func pluginAdd(args []string) int {
 	if !interactive && !yes {
 		return fail(fmt.Errorf("stdin is not interactive; review the bundle above, then rerun with --yes to install"))
 	}
+	reader := bufio.NewReader(os.Stdin)
 	if interactive && !yes {
-		fmt.Print("Install? [y/N] ")
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(line)) != "y" {
+		if !confirm(reader, os.Stdout, "Install? ") {
 			fmt.Println("Nothing installed.")
 			return 0
 		}
@@ -117,7 +116,6 @@ func pluginAdd(args []string) int {
 			return fail(err)
 		}
 		defined := oc.MCPServers()
-		reader := bufio.NewReader(os.Stdin)
 		for _, name := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
 			if slices.Contains(defined, name) {
 				fmt.Printf("  mcp server %q is already defined in opencode.json -- left untouched; review that it matches the plugin's declaration\n", name)
@@ -125,9 +123,8 @@ func pluginAdd(args []string) int {
 				continue
 			}
 			m := p.Manifest.MCP[name]
-			fmt.Printf("Define mcp server %q in opencode.json? This connects runs that grant it to an external endpoint.\n  %s\n  [y/N] ", name, config.MCPSnippet(name, m.URL, m.Credential))
-			line, _ := reader.ReadString('\n')
-			if strings.TrimSpace(strings.ToLower(line)) != "y" {
+			fmt.Printf("Define mcp server %q in opencode.json? This connects runs that grant it to an external endpoint.\n  %s\n", name, config.MCPSnippet(name, m.URL, m.Credential))
+			if !confirm(reader, os.Stdout, "  ") {
 				continue // stays a printed next step
 			}
 			if err := config.AddMCPServer(".", name, m.URL, m.Credential); err != nil {
@@ -259,9 +256,7 @@ func pluginUpdate(args []string) int {
 		return fail(fmt.Errorf("stdin is not interactive; review the bundle above, then rerun with --yes to update"))
 	}
 	if interactive && !yes {
-		fmt.Print("Update? [y/N] ")
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(line)) != "y" {
+		if !confirm(bufio.NewReader(os.Stdin), os.Stdout, "Update? ") {
 			fmt.Println("Nothing updated.")
 			return 0
 		}
