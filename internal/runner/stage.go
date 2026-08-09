@@ -115,10 +115,10 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Attempt, mu
 	if err := buildWorkspace(dir, workspace, r.Name); err != nil {
 		return nil, err
 	}
-	if err := copyDeclaredSkills(dir, workspace, r.FM.Skills); err != nil {
+	if err := copyDeclaredSkills(dir, workspace, r.Frontmatter.Skills); err != nil {
 		return nil, err
 	}
-	if err := applyDeclaredMCP(workspace, r.FM.MCP); err != nil {
+	if err := applyDeclaredMCP(workspace, r.Frontmatter.MCP); err != nil {
 		return nil, err
 	}
 	// Under the knowledge lock: one worktree read becomes both the run's
@@ -136,7 +136,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Attempt, mu
 		if err := knowledge.CloneTree(staging.BaseDir, staging.KnowledgeDir); err != nil {
 			return err
 		}
-		if r.FM.Reports {
+		if r.Frontmatter.Reports {
 			through, firstRun, err := prepareChanges(dir, workspace, r.Name)
 			if err != nil {
 				return fmt.Errorf("delivery changes: %w", err)
@@ -184,7 +184,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Attempt, mu
 	if !meta.ScheduledFor.IsZero() {
 		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor.Format(time.RFC3339))
 	}
-	if r.FM.Websearch {
+	if r.Frontmatter.Websearch {
 		// Registers the search backend; the permission rule in the generated
 		// definition is the actual gate. Exa works keyless, and a granted
 		// exa_api_key lands as EXA_API_KEY for keyed use.
@@ -211,8 +211,8 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Attempt, mu
 		"--print-logs", "--log-level=" + logging.Level.Level().String(),
 		"run", "--agent", "routine", "-m", model,
 	}
-	if r.FM.Effort != "" {
-		ocArgs = append(ocArgs, "--variant", r.FM.Effort)
+	if r.Frontmatter.Effort != "" {
+		ocArgs = append(ocArgs, "--variant", r.Frontmatter.Effort)
 	}
 	ocArgs = append(ocArgs, r.Body)
 
@@ -237,7 +237,7 @@ func frameworkEnv(timezone string, r *routine.Routine, meta Attempt) []string {
 		"TZ=" + timezone,
 		"OPENROUTINES_RUN_ID=" + meta.RunID,
 		"OPENROUTINES_ATTEMPT_ID=" + meta.ID(),
-		"OPENROUTINES_URL=" + r.FM.EffectiveURL(),
+		"OPENROUTINES_URL=" + r.Frontmatter.EffectiveURL(),
 	}
 }
 
@@ -326,7 +326,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *AttemptResult, returnedSt
 	errOut.Flush()
 	oclog.Flush()
 	res.Model = model
-	res.Effort = r.FM.Effort
+	res.Effort = r.Frontmatter.Effort
 	// opencode exits 0 even when its agent loop died mid-turn; the session
 	// record decides whether the run actually finished.
 	sessions, fetchErr := fetchSessions(oc.exec, attemptLog)

@@ -100,10 +100,10 @@ func (f Frontmatter) EffectiveURL() string {
 
 // Routine is one parsed routine file: identity, declared scope, prompt.
 type Routine struct {
-	Name string // filename without .md -- the human-readable name
-	Path string
-	FM   Frontmatter
-	Body string // the prompt
+	Name        string // filename without .md -- the human-readable name
+	Path        string
+	Frontmatter Frontmatter
+	Body        string // the prompt
 }
 
 // Log returns the process logger with this routine's identity bound, so an
@@ -158,7 +158,7 @@ func Parse(path string) (*Routine, error) {
 	}
 	body := strings.TrimSpace(string(doc.Body))
 	name := strings.TrimSuffix(filepath.Base(path), ".md")
-	return &Routine{Name: name, Path: path, FM: fm, Body: body}, nil
+	return &Routine{Name: name, Path: path, Frontmatter: fm, Body: body}, nil
 }
 
 // SetActive rewrites the `active:` frontmatter field in place, preserving the

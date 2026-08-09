@@ -12,7 +12,7 @@ import (
 // defines two MCP servers.
 func genDefWithMCP(t *testing.T, meta Attempt, fm routine.Frontmatter) string {
 	t.Helper()
-	r := &routine.Routine{Name: "x", FM: fm}
+	r := &routine.Routine{Name: "x", Frontmatter: fm}
 	def, err := renderDefinition(&config.Agent{Name: "a", Description: "d"}, r, []string{"slack", "steady"}, meta)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestNoMCPConfigNoRules(t *testing.T) {
 // to validate never existed in its output.
 func TestRenderDefinitionCoversMCPRules(t *testing.T) {
 	agent := &config.Agent{Name: "a", Description: "d"}
-	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{MCP: []string{"steady"}}}
+	r := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{MCP: []string{"steady"}}}
 	def, err := RenderDefinition(agent, r, []string{"slack", "steady"})
 	if err != nil {
 		t.Fatal(err)

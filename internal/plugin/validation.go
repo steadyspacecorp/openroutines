@@ -196,17 +196,17 @@ func (v *pluginValidator) validateContents() {
 		shipped[shippedSkill.Name] = true
 	}
 	for _, pluginRoutine := range p.Routines {
-		for _, skillName := range pluginRoutine.FM.Skills {
+		for _, skillName := range pluginRoutine.Frontmatter.Skills {
 			if !shipped[skillName] && !v.agentSkills[skillName] {
 				v.badf("routine %s declares skill %q, which neither the plugin nor the agent has", pluginRoutine.Name, skillName)
 			}
 		}
-		for _, credential := range pluginRoutine.FM.Credentials {
+		for _, credential := range pluginRoutine.Frontmatter.Credentials {
 			if _, declared := p.Manifest.Credentials[credential]; !declared {
 				v.badf("routine %s declares credential %q, missing from the PLUGIN.md credentials block", pluginRoutine.Name, credential)
 			}
 		}
-		for _, server := range pluginRoutine.FM.MCP {
+		for _, server := range pluginRoutine.Frontmatter.MCP {
 			if _, declared := p.Manifest.MCP[server]; !declared {
 				v.badf("routine %s grants mcp server %q, missing from the PLUGIN.md mcp block", pluginRoutine.Name, server)
 			}

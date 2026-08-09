@@ -176,38 +176,38 @@ func (p *Plugin) Summary() string {
 		w("Routines:\n")
 		for _, r := range p.Routines {
 			w("  %s", r.Name)
-			if r.FM.Schedule != "" {
-				w("  schedule %q", r.FM.Schedule)
+			if r.Frontmatter.Schedule != "" {
+				w("  schedule %q", r.Frontmatter.Schedule)
 			}
-			if r.FM.Model != "" {
-				w("  model %s", r.FM.Model)
+			if r.Frontmatter.Model != "" {
+				w("  model %s", r.Frontmatter.Model)
 			}
-			if r.FM.Reports {
+			if r.Frontmatter.Reports {
 				w("  reports")
 			}
 			w("\n")
-			if len(r.FM.Credentials) > 0 {
-				w("    credentials: %s\n", strings.Join(r.FM.Credentials, ", "))
+			if len(r.Frontmatter.Credentials) > 0 {
+				w("    credentials: %s\n", strings.Join(r.Frontmatter.Credentials, ", "))
 			}
-			if len(r.FM.Skills) > 0 {
-				w("    skills: %s\n", strings.Join(r.FM.Skills, ", "))
+			if len(r.Frontmatter.Skills) > 0 {
+				w("    skills: %s\n", strings.Join(r.Frontmatter.Skills, ", "))
 			}
-			if len(r.FM.MCP) > 0 {
-				w("    mcp: %s\n", strings.Join(r.FM.MCP, ", "))
+			if len(r.Frontmatter.MCP) > 0 {
+				w("    mcp: %s\n", strings.Join(r.Frontmatter.MCP, ", "))
 			}
 			// Web access is a grant like any other, and the one a reviewer of an
 			// unfamiliar bundle most wants named: it is how untrusted text gets in.
 			var web []string
-			if r.FM.Webfetch {
+			if r.Frontmatter.Webfetch {
 				web = append(web, "webfetch")
 			}
-			if r.FM.Websearch {
+			if r.Frontmatter.Websearch {
 				web = append(web, "websearch")
 			}
 			if len(web) > 0 {
 				w("    web access: %s\n", strings.Join(web, ", "))
 			}
-			if t := r.FM.Trigger; t != nil {
+			if t := r.Frontmatter.Trigger; t != nil {
 				w("    trigger: polls %s", t.Poll)
 				if t.Credential != "" {
 					w(" with credential %s as a bearer token", t.Credential)

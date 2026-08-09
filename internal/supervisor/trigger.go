@@ -19,7 +19,7 @@ import (
 // (persisting it would dirty the knowledge worktree on every poll), so a
 // restart costs one early poll.
 func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
-	spec := *r.FM.Trigger
+	spec := *r.Frontmatter.Trigger
 	interval, _ := spec.IntervalDuration() // validated by the caller
 
 	log := r.Log()
@@ -66,7 +66,7 @@ func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 		r.Log().Warn("could not refresh the trigger baseline", "error", err)
 		return
 	}
-	res, ok := s.poll(r, *r.FM.Trigger, prior, now)
+	res, ok := s.poll(r, *r.Frontmatter.Trigger, prior, now)
 	if !ok || (prior != nil && !res.Changed) {
 		return
 	}
@@ -86,7 +86,7 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 		// The rule `check` errors on, enforced again at the point that
 		// materializes the value: a poll uses a credential only when the
 		// routine's own credentials list grants it.
-		if !slices.Contains(r.FM.Credentials, spec.Credential) {
+		if !slices.Contains(r.Frontmatter.Credentials, spec.Credential) {
 			if !s.triggers.pollFailed[r.Name] {
 				s.triggers.pollFailed[r.Name] = true
 				log.Warn("trigger credential is not listed in the routine's credentials", "credential", spec.Credential)

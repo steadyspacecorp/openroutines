@@ -142,7 +142,7 @@ type ManualOptions struct {
 
 // EffectiveModel resolves frontmatter over agent defaults.
 func EffectiveModel(agent *config.Agent, r *routine.Routine) (string, error) {
-	model := r.FM.Model
+	model := r.Frontmatter.Model
 	if model == "" {
 		model = agent.Defaults.Model
 	}
@@ -170,7 +170,7 @@ func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 // every declared value parsed clean, so Stage can warn about what it dropped.
 func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Duration, badValue string) {
 	timeout = 5 * time.Minute
-	for _, t := range []string{agent.Defaults.Timeout, r.FM.Timeout} {
+	for _, t := range []string{agent.Defaults.Timeout, r.Frontmatter.Timeout} {
 		if t == "" {
 			continue
 		}

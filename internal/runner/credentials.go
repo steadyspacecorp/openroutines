@@ -75,7 +75,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 
 	key, keyErr := creds.LoadKey(dir)
 	if keyErr != nil {
-		if len(r.FM.Credentials) > 0 {
+		if len(r.Frontmatter.Credentials) > 0 {
 			return nil, fmt.Errorf("routine declares credentials but %w", keyErr)
 		}
 		// No store: opencode may still have its own auth for the provider.
@@ -85,7 +85,7 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range r.FM.Credentials {
+	for _, name := range r.Frontmatter.Credentials {
 		v, present := store[name]
 		if !present {
 			return nil, fmt.Errorf("routine declares credential %q, not present in %s", name, creds.FileName)

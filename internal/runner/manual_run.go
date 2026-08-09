@@ -65,11 +65,11 @@ func Run(dir, name string, options ManualOptions) (result *ManualResult, err err
 		if options.Fixture != "" {
 			// Grants are stripped at the source so the existing pipeline
 			// enforces the absence.
-			rr.FM.Credentials = nil
-			rr.FM.MCP = nil
-			rr.FM.Skills = nil
-			rr.FM.Webfetch = false
-			rr.FM.Websearch = false
+			rr.Frontmatter.Credentials = nil
+			rr.Frontmatter.MCP = nil
+			rr.Frontmatter.Skills = nil
+			rr.Frontmatter.Webfetch = false
+			rr.Frontmatter.Websearch = false
 			rr.Body = fixturePreamble + r.Body
 		} else {
 			rr.Body = livePreamble + r.Body

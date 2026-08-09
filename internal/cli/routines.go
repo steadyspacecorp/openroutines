@@ -389,7 +389,7 @@ func routinesList() int {
 	}
 	fmt.Printf("%-20s %-16s %-8s %s\n", "NAME", "SCHEDULE", "ACTIVE", "GRANTS")
 	for _, r := range routines {
-		fmt.Printf("%-20s %-16s %-8v %s\n", r.Name, scheduleSummary(r), r.FM.IsActive(), strings.Join(grantSummary(r), " "))
+		fmt.Printf("%-20s %-16s %-8v %s\n", r.Name, scheduleSummary(r), r.Frontmatter.IsActive(), strings.Join(grantSummary(r), " "))
 	}
 	return 0
 }
@@ -398,19 +398,19 @@ func routinesList() int {
 // servers, and web access are all grants.
 func grantSummary(r *routine.Routine) []string {
 	var grants []string
-	if n := len(r.FM.Skills); n > 0 {
+	if n := len(r.Frontmatter.Skills); n > 0 {
 		grants = append(grants, fmt.Sprintf("skills:%d", n))
 	}
-	if n := len(r.FM.Credentials); n > 0 {
+	if n := len(r.Frontmatter.Credentials); n > 0 {
 		grants = append(grants, fmt.Sprintf("creds:%d", n))
 	}
-	if n := len(r.FM.MCP); n > 0 {
+	if n := len(r.Frontmatter.MCP); n > 0 {
 		grants = append(grants, fmt.Sprintf("mcp:%d", n))
 	}
-	if r.FM.Webfetch {
+	if r.Frontmatter.Webfetch {
 		grants = append(grants, "webfetch")
 	}
-	if r.FM.Websearch {
+	if r.Frontmatter.Websearch {
 		grants = append(grants, "websearch")
 	}
 	return grants
@@ -418,11 +418,11 @@ func grantSummary(r *routine.Routine) []string {
 
 func scheduleSummary(r *routine.Routine) string {
 	switch {
-	case r.FM.Schedule != "" && r.FM.Trigger != nil:
-		return r.FM.Schedule + " +trigger"
-	case r.FM.Trigger != nil:
+	case r.Frontmatter.Schedule != "" && r.Frontmatter.Trigger != nil:
+		return r.Frontmatter.Schedule + " +trigger"
+	case r.Frontmatter.Trigger != nil:
 		return "trigger"
 	default:
-		return r.FM.Schedule
+		return r.Frontmatter.Schedule
 	}
 }

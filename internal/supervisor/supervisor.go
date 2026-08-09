@@ -45,7 +45,7 @@ const (
 // because reporting has to agree with dispatch -- a surface that disagrees
 // promises a retry that cannot happen.
 func Schedulable(r *routine.Routine) bool {
-	return r.FM.IsActive() && (r.FM.Schedule != "" || r.FM.Trigger != nil)
+	return r.Frontmatter.IsActive() && (r.Frontmatter.Schedule != "" || r.Frontmatter.Trigger != nil)
 }
 
 // Supervisor is the tick loop: it re-reads routines, mints and dispatches
@@ -364,7 +364,7 @@ func (s *Supervisor) plan(now time.Time) ([]dueRun, bool) {
 func (s *Supervisor) reconcile(r *routine.Routine, now time.Time) *dueRun {
 	log := r.Log()
 	if !Schedulable(r) {
-		if !r.FM.IsActive() {
+		if !r.Frontmatter.IsActive() {
 			log.Debug("skipped", "reason", "inactive")
 		} else {
 			log.Debug("skipped", "reason", "no schedule or trigger")
@@ -377,16 +377,16 @@ func (s *Supervisor) reconcile(r *routine.Routine, now time.Time) *dueRun {
 	}
 
 	var spec *schedule.Spec
-	if r.FM.Schedule != "" {
+	if r.Frontmatter.Schedule != "" {
 		var err error
-		spec, err = schedule.Parse(r.FM.Schedule, s.loc)
+		spec, err = schedule.Parse(r.Frontmatter.Schedule, s.loc)
 		if err != nil {
-			log.Warn("bad schedule", "schedule", r.FM.Schedule, "error", err)
+			log.Warn("bad schedule", "schedule", r.Frontmatter.Schedule, "error", err)
 			return nil
 		}
 	}
-	if r.FM.Trigger != nil {
-		if err := r.FM.Trigger.Validate(); err != nil {
+	if r.Frontmatter.Trigger != nil {
+		if err := r.Frontmatter.Trigger.Validate(); err != nil {
 			log.Warn("invalid trigger", "error", err)
 			return nil
 		}
@@ -448,12 +448,12 @@ func (s *Supervisor) mintPending(r *routine.Routine, st *schedule.State, spec *s
 			if n > 1 {
 				log.Info("missed firings collapse into one run", "firings", n, "run_id", st.Pending.RunID)
 			}
-			if r.FM.Trigger != nil {
+			if r.Frontmatter.Trigger != nil {
 				s.refreshTriggerBaseline(r, now)
 			}
 		}
 	}
-	if st.Pending == nil && r.FM.Trigger != nil && s.evaluateTrigger(r, now) {
+	if st.Pending == nil && r.Frontmatter.Trigger != nil && s.evaluateTrigger(r, now) {
 		st.Pending = &schedule.Pending{
 			RunID:          run.NewID(),
 			ScheduledFor:   now,
