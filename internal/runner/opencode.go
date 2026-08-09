@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
@@ -35,7 +36,7 @@ type opencode interface {
 // opencode picks the attempt's deployment mode and checks its prerequisites.
 func (sr *StagedRun) opencode() (opencode, error) {
 	switch {
-	case nativeMode() && os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
+	case nativeMode() && mode.Current().Container:
 		if _, err := exec.LookPath("opencode"); err != nil {
 			return nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
 		}
@@ -85,7 +86,8 @@ func (sr *StagedRun) opencode() (opencode, error) {
 // container: inside the production image (which ships opencode), or when a
 // contributor explicitly opts out with OPENROUTINES_NATIVE=1.
 func nativeMode() bool {
-	return os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" || os.Getenv("OPENROUTINES_NATIVE") == "1"
+	current := mode.Current()
+	return current.Container || current.Native
 }
 
 // hostOpencode is production: opencode from the image's PATH, the run

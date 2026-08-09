@@ -17,6 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
@@ -64,7 +65,7 @@ func GenerateKey() string {
 func LoadKey(dir string) ([]byte, error) {
 	keyHex := ""
 	if path := os.Getenv(EnvMasterKeyFile); path != "" {
-		if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+		if mode.Current().Container {
 			info, err := os.Stat(path)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", EnvMasterKeyFile, err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/lock"
+	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/run"
 	"os"
@@ -43,7 +44,7 @@ Follow the routine below exactly, under these restraints.
 // identity, so it can never share a uid with a supervisor slot.
 func Run(dir, name string, options ManualOptions) (result *ManualResult, err error) {
 	meta := Attempt{RunID: run.NewID(), Number: 1, Rehearsal: options.Fixture}
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+	if mode.Current().Container {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
 		if err != nil {
 			return nil, err
