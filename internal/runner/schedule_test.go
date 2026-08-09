@@ -12,14 +12,14 @@ func boolPtr(v bool) *bool { return &v }
 
 func scheduleFixture() []*routine.Routine {
 	return []*routine.Routine{
-		{Name: "steady-check-in", FM: routine.Frontmatter{Schedule: "0 7,8 * * 1-5", Reports: true}},
-		{Name: "steady-inbox", FM: routine.Frontmatter{Schedule: "45 8-17/3 * * 1-5", Teamwork: routine.TeamworkOff}},
-		{Name: "announcements", FM: routine.Frontmatter{Schedule: "30 8 * * 2", Teamwork: routine.TeamworkEvents}},
-		{Name: "doc-drift", FM: routine.Frontmatter{Schedule: "0 9 * * 1-5"}},
-		{Name: "roadmap-groomer", FM: routine.Frontmatter{Schedule: "0 17 * * 2"}},
-		{Name: "a11y-sweep", FM: routine.Frontmatter{Schedule: "30 9 * * 3"}},
-		{Name: "release-notes", FM: routine.Frontmatter{Schedule: "0 21 * * 1"}},
-		{Name: "retired", FM: routine.Frontmatter{Schedule: "0 9 * * *", Active: boolPtr(false)}},
+		{Name: "steady-check-in", Frontmatter: routine.Frontmatter{Schedule: "0 7,8 * * 1-5", Reports: true}},
+		{Name: "steady-inbox", Frontmatter: routine.Frontmatter{Schedule: "45 8-17/3 * * 1-5", Teamwork: routine.TeamworkOff}},
+		{Name: "announcements", Frontmatter: routine.Frontmatter{Schedule: "30 8 * * 2", Teamwork: routine.TeamworkEvents}},
+		{Name: "doc-drift", Frontmatter: routine.Frontmatter{Schedule: "0 9 * * 1-5"}},
+		{Name: "roadmap-groomer", Frontmatter: routine.Frontmatter{Schedule: "0 17 * * 2"}},
+		{Name: "a11y-sweep", Frontmatter: routine.Frontmatter{Schedule: "30 9 * * 3"}},
+		{Name: "release-notes", Frontmatter: routine.Frontmatter{Schedule: "0 21 * * 1"}},
+		{Name: "retired", Frontmatter: routine.Frontmatter{Schedule: "0 9 * * *", Active: boolPtr(false)}},
 	}
 }
 
@@ -41,7 +41,7 @@ func TestRenderScheduleWindowSplit(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
 	}
-	if !all[2].FM.RecordsEvents() {
+	if !all[2].Frontmatter.RecordsEvents() {
 		t.Fatal("teamwork: events must not disable event recording")
 	}
 
@@ -71,7 +71,7 @@ func TestRenderScheduleWindowSplit(t *testing.T) {
 // A trigger-only or unscheduled self gets facts, not a window.
 func TestRenderScheduleDegradesWithoutSelfSchedule(t *testing.T) {
 	all := scheduleFixture()
-	unscheduled := &routine.Routine{Name: "on-demand", FM: routine.Frontmatter{}}
+	unscheduled := &routine.Routine{Name: "on-demand", Frontmatter: routine.Frontmatter{}}
 	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
 	got := renderSchedule(all, unscheduled, now, time.UTC)
 	if strings.Contains(got, "window:") || strings.Contains(got, "in-window") {
@@ -85,7 +85,7 @@ func TestRenderScheduleDegradesWithoutSelfSchedule(t *testing.T) {
 // An inactive self (a manually-run probe) still anchors a window: its
 // schedule is the stand-in for the routine it mirrors.
 func TestRenderScheduleInactiveSelfKeepsWindow(t *testing.T) {
-	probe := &routine.Routine{Name: "check-in-probe", FM: routine.Frontmatter{
+	probe := &routine.Routine{Name: "check-in-probe", Frontmatter: routine.Frontmatter{
 		Schedule: "0 7 * * 1-5", Active: boolPtr(false), Teamwork: routine.TeamworkOff,
 	}}
 	all := append(scheduleFixture(), probe)

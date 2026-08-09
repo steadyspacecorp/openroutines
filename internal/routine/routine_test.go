@@ -24,13 +24,13 @@ func TestParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.FM.Schedule != "0 9 * * 1" || r.Body != "Do the thing." {
-		t.Fatalf("unexpected parse: %+v body=%q", r.FM, r.Body)
+	if r.Frontmatter.Schedule != "0 9 * * 1" || r.Body != "Do the thing." {
+		t.Fatalf("unexpected parse: %+v body=%q", r.Frontmatter, r.Body)
 	}
-	if !r.FM.IsActive() || !r.FM.RecordsEvents() || !r.FM.FullTeamwork() {
+	if !r.Frontmatter.IsActive() || !r.Frontmatter.RecordsEvents() || !r.Frontmatter.FullTeamwork() {
 		t.Fatal("defaults should be active=true teamwork=full")
 	}
-	if got := r.FM.EffectiveURL(); got != "https://example.com/agent" {
+	if got := r.Frontmatter.EffectiveURL(); got != "https://example.com/agent" {
 		t.Fatalf("effective URL = %q, want declared URL", got)
 	}
 }
@@ -75,7 +75,7 @@ func TestFrontmatterURLDefaultsAndRejectsInvalidValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := r.FM.EffectiveURL(); got != DefaultURL {
+	if got := r.Frontmatter.EffectiveURL(); got != DefaultURL {
 		t.Fatalf("effective URL = %q, want %q", got, DefaultURL)
 	}
 
@@ -92,19 +92,19 @@ func TestParseTriggerFrontmatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr := r.FM.Trigger
+	tr := r.Frontmatter.Trigger
 	if tr == nil || tr.Poll != "https://example.com/cursor" || tr.Credential != "steady_token" ||
 		tr.Select != "/cursor" || tr.Interval != "2m" {
 		t.Fatalf("unexpected trigger parse: %+v", tr)
 	}
-	if r.FM.Schedule != "" {
-		t.Fatalf("schedule should be empty for a trigger-only routine: %q", r.FM.Schedule)
+	if r.Frontmatter.Schedule != "" {
+		t.Fatalf("schedule should be empty for a trigger-only routine: %q", r.Frontmatter.Schedule)
 	}
 
 	// No trigger declared: the field stays nil.
 	r, err = Parse(writeTemp(t, "---\nschedule: \"* * * * *\"\n---\nBody.\n"))
-	if err != nil || r.FM.Trigger != nil {
-		t.Fatalf("trigger should be nil when undeclared: %+v err=%v", r.FM.Trigger, err)
+	if err != nil || r.Frontmatter.Trigger != nil {
+		t.Fatalf("trigger should be nil when undeclared: %+v err=%v", r.Frontmatter.Trigger, err)
 	}
 }
 
@@ -126,7 +126,7 @@ func TestSetActiveTogglesInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.FM.IsActive() {
+	if r.Frontmatter.IsActive() {
 		t.Fatal("expected inactive")
 	}
 	raw, _ := os.ReadFile(p)
@@ -136,7 +136,7 @@ func TestSetActiveTogglesInPlace(t *testing.T) {
 	if err := SetActive(p, true); err != nil {
 		t.Fatal(err)
 	}
-	if r, _ = Parse(p); !r.FM.IsActive() {
+	if r, _ = Parse(p); !r.Frontmatter.IsActive() {
 		t.Fatal("expected active again")
 	}
 }

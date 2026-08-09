@@ -89,14 +89,14 @@ func cmdStatus(args []string) int {
 		st, stErr := schedule.Load(stateDir, r.Name)
 		state := "inactive"
 		next := ""
-		if r.FM.IsActive() {
+		if r.Frontmatter.IsActive() {
 			state = "active"
 			// A routine in cool-down doesn't fire at its next occurrence, so
 			// don't print a time that won't happen; the cool-down's end is on
 			// the breaker line below instead.
 			if st != nil && st.CoolingDown(now) {
 				next = " -- cooling down"
-			} else if spec, err := schedule.Parse(r.FM.Schedule, loc); err == nil {
+			} else if spec, err := schedule.Parse(r.Frontmatter.Schedule, loc); err == nil {
 				next = " -- next " + stamp(spec.Next(now), now, loc)
 			}
 		}

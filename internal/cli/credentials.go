@@ -89,7 +89,7 @@ func credentialsList() int {
 	declaredBy := map[string][]string{}
 	routines, _ := routine.LoadAgent(".")
 	for _, r := range routines {
-		for _, c := range r.FM.Credentials {
+		for _, c := range r.Frontmatter.Credentials {
 			declaredBy[c] = append(declaredBy[c], r.Name)
 		}
 	}
@@ -221,7 +221,7 @@ func credentialsRemove(args []string) int {
 	routines, _ := routine.LoadAgent(".")
 	var holders []string
 	for _, r := range routines {
-		for _, c := range r.FM.Credentials {
+		for _, c := range r.Frontmatter.Credentials {
 			if c == name {
 				holders = append(holders, r.Name)
 			}

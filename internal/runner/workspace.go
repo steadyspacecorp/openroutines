@@ -188,7 +188,7 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	for _, w := range []struct {
 		tool    string
 		granted bool
-	}{{"webfetch", r.FM.Webfetch}, {"websearch", r.FM.Websearch}} {
+	}{{"webfetch", r.Frontmatter.Webfetch}, {"websearch", r.Frontmatter.Websearch}} {
 		action := "deny"
 		if w.granted {
 			action = "allow"
@@ -199,14 +199,14 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 	// configured server closes or opens its whole surface.
 	for _, server := range servers {
 		action := "deny"
-		if slices.Contains(r.FM.MCP, server) {
+		if slices.Contains(r.Frontmatter.MCP, server) {
 			action = "allow"
 		}
 		fmt.Fprintf(&b, "  %q: %s\n", server+"_*", action)
 	}
 	b.WriteString("  skill:\n")
 	b.WriteString("    \"*\": deny\n") // order matters: last matching rule wins
-	for _, s := range r.FM.Skills {
+	for _, s := range r.Frontmatter.Skills {
 		fmt.Fprintf(&b, "    %q: allow\n", s)
 	}
 	b.WriteString("---\n\n")
@@ -216,8 +216,8 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 		Description:   strings.TrimSpace(agent.Description),
 		RoutineName:   r.Name,
 		RunID:         meta.RunID,
-		RecordsEvents: r.FM.RecordsEvents(),
-		Reports:       r.FM.Reports,
+		RecordsEvents: r.Frontmatter.RecordsEvents(),
+		Reports:       r.Frontmatter.Reports,
 		Changes:       knowledge.ChangesFileName,
 		Marker:        knowledge.ConsumeMarker,
 		Variables:     variablesLine(agent),

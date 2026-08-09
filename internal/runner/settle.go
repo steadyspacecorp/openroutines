@@ -76,7 +76,7 @@ func Settle(dir string, r *routine.Routine, staging *AttemptWorkspace, res *Atte
 // normally. Reports whether such a change was discarded.
 func importKnowledge(dir string, r *routine.Routine, staging *AttemptWorkspace) (discarded bool, conflicted []knowledge.Conflict, err error) {
 	store := knowledge.NewStore(dir)
-	if !r.FM.RecordsEvents() {
+	if !r.Frontmatter.RecordsEvents() {
 		if discarded, err = knowledge.RestoreFile(staging.KnowledgeDir, staging.BaseDir, "events.md"); err != nil {
 			return false, nil, err
 		}
@@ -119,7 +119,7 @@ func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
 // together. Exception to the marker rule: a successful first run's change set
 // is empty by construction, so completion establishes the starting cursor.
 func advanceConsumer(dir string, r *routine.Routine, staging *AttemptWorkspace, runID string) {
-	if !r.FM.Reports || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
+	if !r.Frontmatter.Reports || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
 		return
 	}
 	if err := knowledge.NewStore(dir).SaveCursor(r.Name, knowledge.Cursor{

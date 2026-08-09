@@ -196,8 +196,8 @@ func cmdCheck(args []string) int {
 		prefixes[strings.SplitN(agent.Defaults.Model, "/", 2)[0]] = true
 	}
 	for _, r := range routines {
-		if r.FM.Model != "" {
-			prefixes[strings.SplitN(r.FM.Model, "/", 2)[0]] = true
+		if r.Frontmatter.Model != "" {
+			prefixes[strings.SplitN(r.Frontmatter.Model, "/", 2)[0]] = true
 		}
 	}
 	for _, w := range oc.Drift(slices.Sorted(maps.Keys(prefixes))) {
@@ -241,7 +241,7 @@ func checkCredentials(dir string, agent *config.Agent, routines []*routine.Routi
 	providerNeeds := map[string][]string{}
 	if agent != nil {
 		for _, r := range routines {
-			if !r.FM.IsActive() {
+			if !r.Frontmatter.IsActive() {
 				continue
 			}
 			model, err := runner.EffectiveModel(agent, r)
@@ -274,7 +274,7 @@ func checkCredentials(dir string, agent *config.Agent, routines []*routine.Routi
 		}
 	}
 	for _, r := range routines {
-		for _, credential := range r.FM.Credentials {
+		for _, credential := range r.Frontmatter.Credentials {
 			if _, ok := store[credential]; !ok {
 				report.failf("%s declares credential %q, not present in %s", r.Name, credential, creds.FileName)
 			}
@@ -303,33 +303,33 @@ func checkCredentials(dir string, agent *config.Agent, routines []*routine.Routi
 
 func checkRoutine(dir string, agent *config.Agent, oc *config.OpenCode, r *routine.Routine, report *checkReport) {
 	var errs []string
-	if r.FM.Schedule == "" && r.FM.Trigger == nil {
+	if r.Frontmatter.Schedule == "" && r.Frontmatter.Trigger == nil {
 		errs = append(errs, "needs a schedule or a trigger")
 	}
-	if r.FM.Schedule != "" {
-		if _, err := cron.ParseStandard(r.FM.Schedule); err != nil {
-			errs = append(errs, fmt.Sprintf("schedule %q: %v", r.FM.Schedule, err))
+	if r.Frontmatter.Schedule != "" {
+		if _, err := cron.ParseStandard(r.Frontmatter.Schedule); err != nil {
+			errs = append(errs, fmt.Sprintf("schedule %q: %v", r.Frontmatter.Schedule, err))
 		}
 	}
-	if trigger := r.FM.Trigger; trigger != nil {
+	if trigger := r.Frontmatter.Trigger; trigger != nil {
 		if err := trigger.Validate(); err != nil {
 			errs = append(errs, err.Error())
 		} else if strings.HasPrefix(trigger.Poll, "http://") {
 			report.warnf("%s: trigger polls over plain http -- the bearer credential and response travel unencrypted", r.Name)
 		}
-		if trigger.Credential != "" && !slices.Contains(r.FM.Credentials, trigger.Credential) {
+		if trigger.Credential != "" && !slices.Contains(r.Frontmatter.Credentials, trigger.Credential) {
 			errs = append(errs, fmt.Sprintf("trigger credential %q must also be listed in credentials", trigger.Credential))
 		}
 		if interval, err := trigger.IntervalDuration(); err == nil && interval < time.Minute {
 			report.warnf("%s: trigger interval %q is below the 1m tick -- polls can't happen more often than the tick", r.Name, trigger.Interval)
 		}
-		if r.FM.Schedule == "" {
+		if r.Frontmatter.Schedule == "" {
 			report.warnf("%s: trigger with no schedule heartbeat -- a missed wake-up has no backstop", r.Name)
 		}
 	}
-	if r.FM.Timeout != "" {
-		if _, err := time.ParseDuration(r.FM.Timeout); err != nil {
-			errs = append(errs, fmt.Sprintf("timeout %q is not a valid duration", r.FM.Timeout))
+	if r.Frontmatter.Timeout != "" {
+		if _, err := time.ParseDuration(r.Frontmatter.Timeout); err != nil {
+			errs = append(errs, fmt.Sprintf("timeout %q is not a valid duration", r.Frontmatter.Timeout))
 		}
 	}
 	if agent != nil {
@@ -337,13 +337,13 @@ func checkRoutine(dir string, agent *config.Agent, oc *config.OpenCode, r *routi
 			report.warnf("%s: timeout %s exceeds the agent's %s ceiling, so attempts are capped at %s -- raise max_timeout in %s or split the work into shorter runs", r.Name, declared, ceiling, ceiling, config.FileName)
 		}
 	}
-	if r.FM.Model != "" && !strings.Contains(r.FM.Model, "/") {
-		errs = append(errs, fmt.Sprintf("model %q must be provider/model", r.FM.Model))
+	if r.Frontmatter.Model != "" && !strings.Contains(r.Frontmatter.Model, "/") {
+		errs = append(errs, fmt.Sprintf("model %q must be provider/model", r.Frontmatter.Model))
 	}
-	if r.FM.Effort != "" && !effortPattern.MatchString(r.FM.Effort) {
-		errs = append(errs, fmt.Sprintf("effort %q should be a simple token like low, medium, high, or xhigh", r.FM.Effort))
+	if r.Frontmatter.Effort != "" && !effortPattern.MatchString(r.Frontmatter.Effort) {
+		errs = append(errs, fmt.Sprintf("effort %q should be a simple token like low, medium, high, or xhigh", r.Frontmatter.Effort))
 	}
-	for _, credential := range r.FM.Credentials {
+	for _, credential := range r.Frontmatter.Credentials {
 		switch {
 		case !creds.NamePattern.MatchString(credential):
 			errs = append(errs, fmt.Sprintf("credential name %q must be lowercase snake_case", credential))
@@ -353,7 +353,7 @@ func checkRoutine(dir string, agent *config.Agent, oc *config.OpenCode, r *routi
 			errs = append(errs, fmt.Sprintf("credential name %q would shadow the %s environment variable in the run", credential, strings.ToUpper(credential)))
 		}
 	}
-	for _, skillName := range r.FM.Skills {
+	for _, skillName := range r.Frontmatter.Skills {
 		if !skill.NamePattern.MatchString(skillName) {
 			errs = append(errs, fmt.Sprintf("skill name %q is not a valid Agent Skills name", skillName))
 			continue
@@ -362,7 +362,7 @@ func checkRoutine(dir string, agent *config.Agent, oc *config.OpenCode, r *routi
 			errs = append(errs, err.Error())
 		}
 	}
-	for _, server := range r.FM.MCP {
+	for _, server := range r.Frontmatter.MCP {
 		if !slices.Contains(oc.MCPServers(), server) {
 			errs = append(errs, fmt.Sprintf("mcp server %q is not defined in opencode.json's mcp block", server))
 		}
@@ -384,7 +384,7 @@ func checkRoutine(dir string, agent *config.Agent, oc *config.OpenCode, r *routi
 		}
 		return
 	}
-	if r.FM.IsActive() {
+	if r.Frontmatter.IsActive() {
 		report.okf("%s (%s, active)", r.Name, scheduleSummary(r))
 	} else {
 		report.inactivef("%s (%s, inactive)", r.Name, scheduleSummary(r))

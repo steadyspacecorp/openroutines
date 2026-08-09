@@ -116,7 +116,7 @@ func skillsList() int {
 	usedBy := map[string][]string{}
 	routines, _ := routine.LoadAgent(".")
 	for _, r := range routines {
-		for _, s := range r.FM.Skills {
+		for _, s := range r.Frontmatter.Skills {
 			usedBy[s] = append(usedBy[s], r.Name)
 		}
 	}
@@ -158,7 +158,7 @@ func skillsRemove(args []string) int {
 	routines, _ := routine.LoadAgent(".")
 	var holders []string
 	for _, r := range routines {
-		for _, s := range r.FM.Skills {
+		for _, s := range r.Frontmatter.Skills {
 			if s == name {
 				holders = append(holders, r.Name)
 			}

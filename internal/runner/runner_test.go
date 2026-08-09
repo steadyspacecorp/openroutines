@@ -56,7 +56,7 @@ func genDef(t *testing.T, meta Attempt, fm ...routine.Frontmatter) string {
 	if len(fm) > 0 {
 		front = fm[0]
 	}
-	r := &routine.Routine{Name: "x", FM: front}
+	r := &routine.Routine{Name: "x", Frontmatter: front}
 	if err := writeAgentDefinition(ws, agent, r, nil, meta); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestTimeoutIsCappedAtTheAgentCeiling(t *testing.T) {
 	}
 
 	agent.MaxTimeout = ""
-	week := &routine.Routine{Name: "week", FM: routine.Frontmatter{Timeout: "168h"}}
+	week := &routine.Routine{Name: "week", Frontmatter: routine.Frontmatter{Timeout: "168h"}}
 	if got := EffectiveTimeout(agent, week); got != config.DefaultMaxTimeout {
 		t.Fatalf("effective timeout = %s, want the %s default ceiling", got, config.DefaultMaxTimeout)
 	}
@@ -95,11 +95,11 @@ func TestTimeoutIsCappedAtTheAgentCeiling(t *testing.T) {
 
 func TestFrameworkEnvIncludesEffectiveRoutineURL(t *testing.T) {
 	meta := Attempt{RunID: "run_t", Number: 1}
-	r := &routine.Routine{FM: routine.Frontmatter{}}
+	r := &routine.Routine{Frontmatter: routine.Frontmatter{}}
 	if got := strings.Join(frameworkEnv("America/New_York", r, meta), "\n"); !strings.Contains(got, "OPENROUTINES_URL=https://openroutines.dev") {
 		t.Fatalf("default framework env missing URL:\n%s", got)
 	}
-	r.FM.URL = "https://example.com/agent"
+	r.Frontmatter.URL = "https://example.com/agent"
 	if got := strings.Join(frameworkEnv("America/New_York", r, meta), "\n"); !strings.Contains(got, "OPENROUTINES_URL=https://example.com/agent") {
 		t.Fatalf("declared framework env missing URL:\n%s", got)
 	}
@@ -332,7 +332,7 @@ func TestResolveCredentialsScope(t *testing.T) {
 	}
 
 	agent := &config.Agent{}
-	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"slack_webhook"}}}
+	r := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{Credentials: []string{"slack_webhook"}}}
 	got, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5")
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +347,7 @@ func TestResolveCredentialsScope(t *testing.T) {
 		}
 	}
 
-	r.FM.Credentials = []string{"missing_cred"}
+	r.Frontmatter.Credentials = []string{"missing_cred"}
 	if _, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5"); err == nil {
 		t.Fatal("declaring an absent credential must fail the run, not proceed without it")
 	}
@@ -361,7 +361,7 @@ func TestInstructionRendering(t *testing.T) {
 	render := func(fm routine.Frontmatter) string {
 		t.Helper()
 		ws := t.TempDir()
-		r := &routine.Routine{Name: "sample", FM: fm}
+		r := &routine.Routine{Name: "sample", Frontmatter: fm}
 		if err := writeAgentDefinition(ws, agent, r, nil, Attempt{RunID: "run_x"}); err != nil {
 			t.Fatal(err)
 		}
@@ -447,7 +447,7 @@ func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
 	}
 
 	dir, staging := setup(t)
-	r := &routine.Routine{Name: "quiet", FM: routine.Frontmatter{Teamwork: routine.TeamworkOff}}
+	r := &routine.Routine{Name: "quiet", Frontmatter: routine.Frontmatter{Teamwork: routine.TeamworkOff}}
 	discarded, _, err := importKnowledge(dir, r, staging)
 	if err != nil || !discarded {
 		t.Fatalf("discarded=%v err=%v, want true nil", discarded, err)
@@ -461,7 +461,7 @@ func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
 	}
 
 	dir, staging = setup(t)
-	r = &routine.Routine{Name: "loud", FM: routine.Frontmatter{}}
+	r = &routine.Routine{Name: "loud", Frontmatter: routine.Frontmatter{}}
 	discarded, _, err = importKnowledge(dir, r, staging)
 	if err != nil || discarded {
 		t.Fatalf("discarded=%v err=%v, want false nil", discarded, err)
@@ -514,7 +514,7 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 		}
 		return s
 	}
-	r := &routine.Routine{Name: "slack-report", FM: routine.Frontmatter{Reports: true}}
+	r := &routine.Routine{Name: "slack-report", Frontmatter: routine.Frontmatter{Reports: true}}
 	if _, err := Settle(dir, r, stage(true, through), &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_first", Number: 1}, "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +547,7 @@ func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
 	staging := &AttemptWorkspace{KnowledgeDir: t.TempDir()}
 	os.WriteFile(filepath.Join(staging.KnowledgeDir, ".gitignore"), []byte("x"), 0o644)
 
-	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{}}
+	r := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{}}
 	settlement, err := Settle(dir, r, staging, &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_reject", Number: 1}, "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -581,7 +581,7 @@ func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 	os.WriteFile(filepath.Join(staging.KnowledgeDir, "ledgers", "x.md"), []byte("worked\n"), 0o644)
 
 	staged := false
-	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{}}
+	r := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{}}
 	settlement, err := Settle(dir, r, staging, &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_ok", Number: 1}, "", func(fin *Settlement) {
 		staged = fin.Outcome == Completed
 		os.WriteFile(filepath.Join(store.StateDir(), "x.json"), []byte("{}\n"), 0o644)
@@ -672,7 +672,7 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 		t.Fatal("marker in staged knowledge not honored")
 	}
 	// It is a receipt for the runtime, not knowledge content: import drops it.
-	r := &routine.Routine{Name: "report", FM: routine.Frontmatter{Reports: true}}
+	r := &routine.Routine{Name: "report", Frontmatter: routine.Frontmatter{Reports: true}}
 	if _, _, err := importKnowledge(dir, r, staging); err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +706,7 @@ func TestResolveCredentialsRaw(t *testing.T) {
 	}
 	agent := &config.Agent{Credentials: map[string]creds.Spec{"gh_key": {Type: "github_app", AppID: "1"}}}
 
-	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"steady_token"}}}
+	r := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{Credentials: []string{"steady_token"}}}
 	s, err := resolveCredentials(dir, agent, r, "openai/gpt")
 	if err != nil {
 		t.Fatal(err)
@@ -719,7 +719,7 @@ func TestResolveCredentialsRaw(t *testing.T) {
 		t.Fatalf("stored credential not registered for redaction: %q", got)
 	}
 
-	typed := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"gh_key"}}}
+	typed := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{Credentials: []string{"gh_key"}}}
 	// A run with the typed credential fails at derivation (bad key)
 	// rather than injecting the stored root secret.
 	if _, err = resolveCredentials(dir, agent, typed, "openai/gpt"); err == nil {
@@ -752,7 +752,7 @@ func TestResolveCredentialsReleasesDerivedMaterialOnFailure(t *testing.T) {
 	agent := &config.Agent{Credentials: map[string]creds.Spec{
 		"desk": {Type: "oauth2_client", TokenURL: server.URL, ClientID: "c", InjectAs: "desk_token"},
 	}}
-	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{Credentials: []string{"desk", "missing_cred"}}}
+	r := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{Credentials: []string{"desk", "missing_cred"}}}
 
 	if _, err := resolveCredentials(dir, agent, r, "openai/gpt"); err == nil {
 		t.Fatal("declaring an absent credential must fail the run")

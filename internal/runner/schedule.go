@@ -59,26 +59,26 @@ func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time
 	until := now.AddDate(0, 0, scheduleHorizonDays)
 
 	var windowEnd time.Time
-	if self != nil && self.FM.Schedule != "" {
-		if spec, err := schedule.Parse(self.FM.Schedule, loc); err == nil {
+	if self != nil && self.Frontmatter.Schedule != "" {
+		if spec, err := schedule.Parse(self.Frontmatter.Schedule, loc); err == nil {
 			windowEnd = schedule.WindowEnd(spec, now, until)
 		}
 	}
 
 	var rows []scheduleRow
 	for _, r := range all {
-		if r.FM.Schedule == "" || !r.FM.IsActive() {
+		if r.Frontmatter.Schedule == "" || !r.Frontmatter.IsActive() {
 			continue
 		}
-		spec, err := schedule.Parse(r.FM.Schedule, loc)
+		spec, err := schedule.Parse(r.Frontmatter.Schedule, loc)
 		if err != nil {
 			continue
 		}
 		rows = append(rows, scheduleRow{
 			name:  r.Name,
-			spec:  r.FM.Schedule,
+			spec:  r.Frontmatter.Schedule,
 			fires: schedule.NextFires(spec, now, until, scheduleFireCount),
-			full:  r.FM.FullTeamwork(),
+			full:  r.Frontmatter.FullTeamwork(),
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return firstFire(rows[i]).Before(firstFire(rows[j])) })
