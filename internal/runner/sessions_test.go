@@ -63,6 +63,7 @@ func TestCaptureUsage(t *testing.T) {
 	u := captureVia(t, oc).Usage
 	if u == nil {
 		t.Fatal("expected usage")
+		return
 	}
 	if u.Input != 150 || u.Output != 30 || u.Reasoning != 5 || u.CacheRead != 7 || u.CacheWrite != 3 {
 		t.Fatalf("sums wrong: %+v", u)

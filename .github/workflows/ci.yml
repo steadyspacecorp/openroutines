@@ -29,10 +29,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: lint
+      - name: install golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
           version-file: .tool-versions
+          install-only: true
+
+      - name: lint
+        run: make lint
 
       # Without this the action picks a gitleaks version of its own, which
       # drifts from the one `make check-secrets` runs locally.

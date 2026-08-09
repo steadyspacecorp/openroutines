@@ -16,6 +16,7 @@ LINT := golangci-lint run
 
 lint:
 	$(LINT)
+	$(LINT) --tests=false --enable-only unused
 
 fix:
 	$(LINT) --fix
