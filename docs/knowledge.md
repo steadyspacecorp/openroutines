@@ -1,6 +1,6 @@
 # Knowledge
 
-An ORA's knowledge is not the "remembers your preferences" memory of a chat assistant. It's a work record: what happened, what someone must do, what's worth keeping -- versioned in git, reviewed like code. The [teamwork loop](teamwork.md) reports this record; it doesn't own it.
+An ORA's knowledge is not the "remembers your preferences" memory of a chat assistant. It's a work record: what happened, what someone must do, what's worth keeping -- versioned in git, reviewed like code. The [teamwork primitives](teamwork.md) report this record; they don't own it.
 
 ## What the agent records
 

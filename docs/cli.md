@@ -93,8 +93,8 @@ When a refusal happens, sync also says whether the deployed agent stranded knowl
 ```
 openroutines routines new <name>         create a routine (inactive until you activate it)
 openroutines routines list               names, schedules, grants
-openroutines routines run <name> [--write-knowledge]
-                                         run once now, knowledge writes discarded; --write-knowledge settles them
+openroutines routines run <name> [--write-knowledge] [--rehearse [scenario]]
+                                         run once now; optionally settle knowledge or rehearse
 openroutines routines edit <name>        open in $EDITOR, validate on close
 openroutines routines activate <name>    set active: true
 openroutines routines deactivate <name>  set active: false
