@@ -7,7 +7,6 @@ package runner
 
 import (
 	"context"
-	"crypto/rand"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -33,6 +32,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/lock"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/run"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
@@ -173,19 +173,6 @@ type Result struct {
 	Hint        string               // classified failure cause, when one was recognized
 	SessionsDir string               // the run's exported sessions, "" when no session dir is designated
 	Conflicted  []knowledge.Conflict // semantic edits preserved outside the canonical file
-}
-
-const runIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
-
-func newRunID() string {
-	buf := make([]byte, 10)
-	if _, err := rand.Read(buf); err != nil {
-		panic(err)
-	}
-	for i, b := range buf {
-		buf[i] = runIDAlphabet[int(b)%len(runIDAlphabet)]
-	}
-	return "run_" + string(buf)
 }
 
 // EffectiveModel resolves frontmatter over agent defaults.
@@ -585,7 +572,7 @@ Follow the routine below exactly, under these restraints.
 // In the production container a manual run reserves the manual attempt
 // identity, so it can never share a uid with a supervisor slot.
 func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result *Result, err error) {
-	meta := Meta{RunID: newRunID(), AttemptID: "attempt_01", Rehearsal: fixture}
+	meta := Meta{RunID: run.NewID(), AttemptID: "attempt_01", Rehearsal: fixture}
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
 		if err != nil {
@@ -792,34 +779,16 @@ func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID str
 // per attempt (spend happens per attempt; retries would double-count a
 // run-level figure) and absent means the runtime didn't report, never zero.
 func recordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, manual bool) string {
-	fields := map[string]any{
-		"run_id":          meta.RunID,
-		"routine":         r.Name,
-		"attempt":         attempt,
-		"outcome":         res.Outcome,
-		"recorded_at":     timestamp(),
-		"duration_ms":     res.Duration.Milliseconds(),
-		"exit_code":       res.ExitCode,
-		"scheduled_for":   meta.ScheduledFor,
-		"covered_through": meta.CoveredThrough,
-		"manual":          manual,
-	}
-	if res.Model != "" {
-		fields["model"] = res.Model
-	}
-	if res.Effort != "" {
-		fields["effort"] = res.Effort
-	}
-	// `status` and the check-in routine read the hint from here.
-	if res.Hint != "" {
-		fields["hint"] = res.Hint
+	record := run.Record{
+		RunID: meta.RunID, Routine: r.Name, Attempt: attempt, Outcome: string(res.Outcome),
+		RecordedAt: timestamp(), DurationMS: res.Duration.Milliseconds(), ExitCode: res.ExitCode,
+		ScheduledFor: meta.ScheduledFor, CoveredThrough: meta.CoveredThrough, Manual: manual,
+		Model: res.Model, Effort: res.Effort, Hint: res.Hint, Tokens: res.Usage,
 	}
 	if res.Usage != nil {
-		fields["tokens"] = res.Usage
-		fields["cost_reported"] = res.Usage.CostReported
+		record.CostReported = res.Usage.CostReported
 	}
-	record, _ := json.Marshal(fields)
-	return string(record)
+	return record.JSON()
 }
 
 // runSecrets is a run's resolved secret material: the environment to inject,

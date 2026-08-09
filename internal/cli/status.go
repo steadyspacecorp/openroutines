@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -15,6 +14,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/run"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 	"github.com/steadyspacecorp/openroutines/internal/supervisor"
@@ -244,12 +244,8 @@ func settledAttempts(dir string) map[string]bool {
 		return nil
 	}
 	settled := map[string]bool{}
-	for line := range strings.SplitSeq(string(raw), "\n") {
-		var rec struct {
-			RunID   string `json:"run_id"`
-			Attempt int    `json:"attempt"`
-		}
-		if json.Unmarshal([]byte(line), &rec) != nil || rec.RunID == "" {
+	for _, rec := range run.ParseRecords(raw) {
+		if rec.RunID == "" {
 			continue
 		}
 		settled[attemptKey(rec.RunID, rec.Attempt)] = true
