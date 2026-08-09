@@ -10,7 +10,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/filetree"
 	"github.com/steadyspacecorp/openroutines/internal/frontmatter"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
-	sourcepkg "github.com/steadyspacecorp/openroutines/internal/source"
+	"github.com/steadyspacecorp/openroutines/internal/source"
 )
 
 // Vendors a skill from a git repository into skills/<name>, recording
@@ -30,9 +30,9 @@ func skillsAdd(args []string) int {
 	if len(rest) != 1 {
 		return fail(fmt.Errorf("%s", skillsAddUsage))
 	}
-	source := rest[0]
+	sourceRef := rest[0]
 	subPath := flags["--path"]
-	root, provenance, cleanup, err := sourcepkg.Fetch(source, subPath, "")
+	root, provenance, cleanup, err := source.Fetch(sourceRef, subPath, "")
 	if err != nil {
 		return fail(fmt.Errorf("fetch skill: %w", err))
 	}
@@ -62,11 +62,11 @@ func skillsAdd(args []string) int {
 		return fail(err)
 	}
 
-	if err := stampProvenance(filepath.Join(dest, "SKILL.md"), source, provenance.Revision); err != nil {
+	if err := stampProvenance(filepath.Join(dest, "SKILL.md"), sourceRef, provenance.Revision); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not record provenance: %v\n", err)
 	}
 
-	fmt.Printf("Vendored %q -> %s (from %s @ %s)\n", s.Name, dest, source, provenance.Revision)
+	fmt.Printf("Vendored %q -> %s (from %s @ %s)\n", s.Name, dest, sourceRef, provenance.Revision)
 	fmt.Printf("  %s\n\n", firstLine(s.Description))
 	fmt.Println("A skill is instructions -- and sometimes code -- your agent will follow")
 	fmt.Println("unattended. Review the diff like a dependency before committing, then")
@@ -110,7 +110,7 @@ func findSkillDir(root string) (string, error) {
 
 // Records source and revision in the SKILL.md frontmatter's metadata block
 // (string key-values, allowed by the Agent Skills spec).
-func stampProvenance(path, source, revision string) error {
+func stampProvenance(path, sourceRef, revision string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -119,7 +119,7 @@ func stampProvenance(path, source, revision string) error {
 	if err != nil {
 		return err
 	}
-	stamp := fmt.Sprintf("%smetadata:%s  source: %q%s  revision: %q", doc.LineEnding(), doc.LineEnding(), source, doc.LineEnding(), revision)
+	stamp := fmt.Sprintf("%smetadata:%s  source: %q%s  revision: %q", doc.LineEnding(), doc.LineEnding(), sourceRef, doc.LineEnding(), revision)
 	frontmatter := append([]byte(nil), doc.Frontmatter...)
 	frontmatter = append(frontmatter, stamp...)
 	return os.WriteFile(path, doc.WithFrontmatter(frontmatter), 0o644)

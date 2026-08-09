@@ -20,16 +20,16 @@ type Provenance struct {
 	Revision   string
 }
 
-// Fetch clones source and returns its contained subpath at revision.
-func Fetch(source, subPath, revision string) (root string, provenance Provenance, cleanup func(), err error) {
+// Fetch clones a source reference and returns its contained subpath at revision.
+func Fetch(sourceRef, subPath, revision string) (root string, provenance Provenance, cleanup func(), err error) {
 	cleanup = func() {}
 	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 	defer cancel()
 
-	repository := source
+	repository := sourceRef
 	cloneURL := ""
-	if fi, statErr := os.Stat(source); statErr == nil && fi.IsDir() {
-		abs, err := filepath.Abs(source)
+	if fi, statErr := os.Stat(sourceRef); statErr == nil && fi.IsDir() {
+		abs, err := filepath.Abs(sourceRef)
 		if err != nil {
 			return "", Provenance{}, cleanup, err
 		}
