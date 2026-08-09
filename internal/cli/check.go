@@ -47,194 +47,214 @@ func cmdCheck(args []string) int {
 
 	dir := "."
 	report := &checkReport{}
-	failf, warnf, okf := report.failf, report.warnf, report.okf
+	checkBinaryVersion(dir, report)
+	agent, opencode := checkConfiguration(dir, report)
+	agentSkills := checkSkills(dir, report)
+	checkPlugins(dir, agentSkills, report)
+	routines := checkRoutines(dir, agent, opencode, report)
+	checkRehearsals(dir, routines, report)
+	checkCredentials(dir, agent, routines, report)
+	checkOpenCodeDrift(agent, routines, opencode, report)
+	checkKnowledgeTasks(dir, report)
+	checkDeploy(dir, report)
+	return report.print()
+}
 
+func checkBinaryVersion(dir string, report *checkReport) {
 	// A binary that doesn't match the agent's pinned framework version reads
-	// the repo through the wrong schema, so every divergence below surfaces
-	// as a confusing field-level error. Name the real problem first, before
-	// any of those can. Source builds are exempt: development runs against
-	// pinned agents on purpose.
-	if pin, err := readVersionPin(dir); err == nil {
-		if pin != version.Version && !strings.Contains(version.Version, "-dev") {
-			report.section("binary")
-			failf("this binary is %s but the agent pins %s -- every finding below is suspect until they match: update the binary (curl -fsSL https://get.openroutines.dev/install.sh | bash) or the agent (openroutines update)", version.Version, pin)
-		}
+	// the repo through the wrong schema, so name the real problem before any
+	// field-level errors. Source builds intentionally run against pinned agents.
+	if pin, err := readVersionPin(dir); err == nil && pin != version.Version && !strings.Contains(version.Version, "-dev") {
+		report.section("binary")
+		report.failf("this binary is %s but the agent pins %s -- every finding below is suspect until they match: update the binary (curl -fsSL https://get.openroutines.dev/install.sh | bash) or the agent (openroutines update)", version.Version, pin)
 	}
+}
 
+func checkConfiguration(dir string, report *checkReport) (*config.Agent, *config.OpenCode) {
 	configName := filepath.Base(config.Path(dir))
 	report.section(configName)
-	// opencode.json is loaded alongside: routine MCP grants are validated
-	// against its server names, so a file opencode itself could not parse
-	// must fail here, not surface as every grant looking undefined.
-	oc, err := config.LoadOpenCode(dir)
+	// Routine MCP grants are validated against opencode.json server names, so
+	// a file opencode itself could not parse must fail here.
+	opencode, err := config.LoadOpenCode(dir)
 	if err != nil {
-		failf("%v", err)
-	} else if oc.Missing {
-		warnf("%s is missing -- runs fall back to opencode's defaults (session-title agent on, question tool allowed); scaffold ships a baseline, restore it", config.OpenCodeFileName)
+		report.failf("%v", err)
+	} else if opencode.Missing {
+		report.warnf("%s is missing -- runs fall back to opencode's defaults (session-title agent on, question tool allowed); scaffold ships a baseline, restore it", config.OpenCodeFileName)
 	}
 	agent, err := config.Load(dir)
 	if err != nil {
-		failf("%v", err)
+		report.failf("%v", err)
 	} else if problems := agent.Problems(); len(problems) > 0 {
-		for _, p := range problems {
-			failf("%s", p)
+		for _, problem := range problems {
+			report.failf("%s", problem)
 		}
 	} else {
-		okf("valid (%s, %s)", agent.Name, agent.Timezone)
+		report.okf("valid (%s, %s)", agent.Name, agent.Timezone)
 		if configName != config.FileName {
-			warnf("%s is a legacy configuration name -- rename it to %s (git mv %s %s); all spellings are read, and the rename is a one-line diff",
+			report.warnf("%s is a legacy configuration name -- rename it to %s (git mv %s %s); all spellings are read, and the rename is a one-line diff",
 				configName, config.FileName, configName, config.FileName)
 		}
 	}
+	return agent, opencode
+}
 
-	// Skills -- checked first because plugin validation reads the agent's
-	// skill names. A duplicate global name is dropped from the list rather
-	// than returned, so the namespace errors have to be reported here or
-	// nothing downstream will ever mention them.
+func checkSkills(dir string, report *checkReport) map[string]bool {
+	// Checked before plugins because plugin validation reads the agent's skill
+	// names. Duplicate global names are reported here because ListAgent drops
+	// them from its result.
 	report.section("skills/")
-	allSkills, skillErrs := skill.ListAgent(dir)
-	for _, e := range skillErrs {
-		failf("%v", e)
+	skills, errs := skill.ListAgent(dir)
+	for _, err := range errs {
+		report.failf("%v", err)
 	}
-	agentSkills := map[string]bool{}
-	for _, s := range allSkills {
-		agentSkills[s.Name] = true
+	names := map[string]bool{}
+	for _, skill := range skills {
+		names[skill.Name] = true
 	}
-	if len(skillErrs) == 0 {
-		if len(allSkills) == 0 {
-			okf("no skills")
+	if len(errs) == 0 {
+		if len(skills) == 0 {
+			report.okf("no skills")
 		} else {
-			okf("%d skill(s), globally unique", len(allSkills))
+			report.okf("%d skill(s), globally unique", len(skills))
 		}
 	}
+	return names
+}
 
-	// Plugins
+func checkPlugins(dir string, agentSkills map[string]bool, report *checkReport) {
 	report.section(".openroutines/plugins/")
-	pluginEntries, pluginDirErr := os.ReadDir(filepath.Join(dir, ".openroutines", "plugins"))
-	if pluginDirErr != nil && !os.IsNotExist(pluginDirErr) {
-		failf("%v", pluginDirErr)
+	entries, err := os.ReadDir(filepath.Join(dir, ".openroutines", "plugins"))
+	if err != nil && !os.IsNotExist(err) {
+		report.failf("%v", err)
 	}
-	pluginCount := 0
-	for _, entry := range pluginEntries {
+	count := 0
+	for _, entry := range entries {
 		if !entry.IsDir() {
-			failf(".openroutines/plugins/%s is not a plugin directory", entry.Name())
+			report.failf(".openroutines/plugins/%s is not a plugin directory", entry.Name())
 			continue
 		}
-		pluginCount++
+		count++
 		pluginDir := filepath.Join(dir, ".openroutines", "plugins", entry.Name())
-		p, err := plugin.Load(pluginDir, agentSkills)
+		installed, err := plugin.Load(pluginDir, agentSkills)
 		if err != nil {
-			failf("%s: %v", entry.Name(), err)
+			report.failf("%s: %v", entry.Name(), err)
 			continue
 		}
-		if p.Manifest.Name != entry.Name() {
-			failf("%s: manifest name is %q", entry.Name(), p.Manifest.Name)
+		if installed.Manifest.Name != entry.Name() {
+			report.failf("%s: manifest name is %q", entry.Name(), installed.Manifest.Name)
 		}
 		source, err := plugin.ReadSource(pluginDir)
 		if err != nil {
-			failf("%s: %v", entry.Name(), err)
+			report.failf("%s: %v", entry.Name(), err)
 		} else {
-			okf("%s (%s @ %s)", entry.Name(), source.Repository, shortRevision(source.Revision))
+			report.okf("%s (%s @ %s)", entry.Name(), source.Repository, shortRevision(source.Revision))
 		}
 	}
-	if pluginCount == 0 {
-		okf("no plugins installed")
+	if count == 0 {
+		report.okf("no plugins installed")
 	}
+}
 
-	// Routines
+func checkRoutines(dir string, agent *config.Agent, opencode *config.OpenCode, report *checkReport) []*routine.Routine {
 	report.section("routines/")
 	routines, parseErrs := routine.LoadAgent(dir)
 	pluginRoutines, _ := routine.LoadPlugins(dir)
 	pluginPaths := map[string][]string{}
-	for _, r := range pluginRoutines {
-		rel, err := filepath.Rel(dir, r.Path)
+	for _, routine := range pluginRoutines {
+		rel, err := filepath.Rel(dir, routine.Path)
 		if err == nil {
-			pluginPaths[r.Name] = append(pluginPaths[r.Name], rel)
+			pluginPaths[routine.Name] = append(pluginPaths[routine.Name], rel)
 		}
 	}
-	for _, e := range parseErrs {
-		failf("%v", e)
+	for _, err := range parseErrs {
+		report.failf("%v", err)
 	}
-	for _, r := range routines {
-		if r.Path == filepath.Join(dir, "routines", r.Name+".md") {
-			for _, shadowed := range pluginPaths[r.Name] {
-				okf("%s overrides %s", r.Name, shadowed)
+	for _, routine := range routines {
+		if routine.Path == filepath.Join(dir, "routines", routine.Name+".md") {
+			for _, shadowed := range pluginPaths[routine.Name] {
+				report.okf("%s overrides %s", routine.Name, shadowed)
 			}
 		}
-		checkRoutine(dir, agent, oc, r, report)
+		checkRoutine(dir, agent, opencode, routine, report)
 	}
 	if len(routines) == 0 && len(parseErrs) == 0 {
-		warnf("no routines defined")
+		report.warnf("no routines defined")
 	}
+	return routines
+}
 
-	// Rehearsal fixtures are bound to routines by name; an orphan is the
-	// drift this convention exists to catch -- a routine renamed or removed
-	// out from under the fixture that rehearses it.
-	routineNames := map[string]bool{}
-	for _, r := range routines {
-		routineNames[r.Name] = true
+func checkRehearsals(dir string, routines []*routine.Routine, report *checkReport) {
+	// Fixtures are bound to routines by name; an orphan usually means the
+	// routine was renamed or removed without its rehearsal.
+	names := map[string]bool{}
+	for _, routine := range routines {
+		names[routine.Name] = true
 	}
-	if entries, err := os.ReadDir(filepath.Join(dir, "rehearsals")); err == nil {
-		for _, entry := range entries {
-			stem, isMD := strings.CutSuffix(entry.Name(), ".md")
-			switch {
-			case entry.IsDir() && !routineNames[entry.Name()]:
-				warnf("rehearsals/%s/ matches no routine -- orphaned fixtures", entry.Name())
-			case !entry.IsDir() && isMD && !routineNames[stem]:
-				warnf("rehearsals/%s matches no routine -- orphaned fixture", entry.Name())
-			}
+	entries, err := os.ReadDir(filepath.Join(dir, "rehearsals"))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		stem, isMarkdown := strings.CutSuffix(entry.Name(), ".md")
+		switch {
+		case entry.IsDir() && !names[entry.Name()]:
+			report.warnf("rehearsals/%s/ matches no routine -- orphaned fixtures", entry.Name())
+		case !entry.IsDir() && isMarkdown && !names[stem]:
+			report.warnf("rehearsals/%s matches no routine -- orphaned fixture", entry.Name())
 		}
 	}
+}
 
-	checkCredentials(dir, agent, routines, report)
-
+func checkOpenCodeDrift(agent *config.Agent, routines []*routine.Routine, opencode *config.OpenCode, report *checkReport) {
 	// opencode.json belongs to the harness and update never rewrites it, so
-	// framework concerns that creep in stay until flagged; the schema
-	// knowledge of what counts as drift lives with config.OpenCode.
-	prefixes := map[string]bool{}
+	// framework concerns that creep in stay until check flags them.
+	providers := map[string]bool{}
 	if agent != nil && agent.Defaults.Model != "" {
-		prefixes[strings.SplitN(agent.Defaults.Model, "/", 2)[0]] = true
+		providers[strings.SplitN(agent.Defaults.Model, "/", 2)[0]] = true
 	}
-	for _, r := range routines {
-		if r.Frontmatter.Model != "" {
-			prefixes[strings.SplitN(r.Frontmatter.Model, "/", 2)[0]] = true
+	for _, routine := range routines {
+		if routine.Frontmatter.Model != "" {
+			providers[strings.SplitN(routine.Frontmatter.Model, "/", 2)[0]] = true
 		}
 	}
-	for _, w := range oc.Drift(slices.Sorted(maps.Keys(prefixes))) {
-		warnf("%s", w)
+	for _, warning := range opencode.Drift(slices.Sorted(maps.Keys(providers))) {
+		report.warnf("%s", warning)
 	}
+}
 
-	// Knowledge hygiene: task discipline is convention, not schema -- warn, never
-	// rewrite. The supervisor does not interpret model-authored knowledge.
-	if raw, err := os.ReadFile(filepath.Join(knowledge.NewStore(dir).Worktree(), "tasks.md")); err == nil {
-		for _, task := range knowledge.ParseTaskEntries(string(raw)) {
-			if !strings.HasPrefix(task.ID, "task-") {
-				warnf("tasks.md entry without a stable `task-...` id: %.60s", task.Text)
-			}
+func checkKnowledgeTasks(dir string, report *checkReport) {
+	// Task discipline is convention, not schema -- warn, never rewrite.
+	path := filepath.Join(knowledge.NewStore(dir).Worktree(), "tasks.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, task := range knowledge.ParseTaskEntries(string(raw)) {
+		if !strings.HasPrefix(task.ID, "task-") {
+			report.warnf("tasks.md entry without a stable `task-...` id: %.60s", task.Text)
 		}
 	}
+}
 
-	// Deploy prerequisites
+func checkDeploy(dir string, report *checkReport) {
 	report.section("deploy")
 	if out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output(); err != nil {
-		warnf("no git origin -- required before deploy (knowledge needs a durable home)")
+		report.warnf("no git origin -- required before deploy (knowledge needs a durable home)")
 	} else {
-		okf("origin %s", strings.TrimSpace(string(out)))
+		report.okf("origin %s", strings.TrimSpace(string(out)))
 	}
 	if pin, err := readVersionPin(dir); err == nil {
 		if strings.Contains(pin, "-dev") {
-			warnf("pinned %s -- a source-build version; no release exists for it, so this agent cannot deploy until the pin points at a release", pin)
+			report.warnf("pinned %s -- a source-build version; no release exists for it, so this agent cannot deploy until the pin points at a release", pin)
 		}
-		if dockerfile, derr := os.ReadFile(filepath.Join(dir, "Dockerfile")); derr != nil {
-			failf("Dockerfile: %v", derr)
+		if dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile")); err != nil {
+			report.failf("Dockerfile: %v", err)
 		} else if !dockerfileUsesVersion(dockerfile, pin) {
-			failf("Dockerfile version pin does not match .openroutines/version %s", pin)
+			report.failf("Dockerfile version pin does not match .openroutines/version %s", pin)
 		} else {
-			okf("Dockerfile version pin matches %s", pin)
+			report.okf("Dockerfile version pin matches %s", pin)
 		}
 	}
-
-	return report.print()
 }
 
 func checkCredentials(dir string, agent *config.Agent, routines []*routine.Routine, report *checkReport) {
