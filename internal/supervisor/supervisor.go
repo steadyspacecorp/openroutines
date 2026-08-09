@@ -51,8 +51,7 @@ func Schedulable(r *routine.Routine) bool {
 // Supervisor is the tick loop: it re-reads routines, mints and dispatches
 // runs, and syncs knowledge with origin.
 type Supervisor struct {
-	Dir        string
-	InstanceID string
+	Dir string
 
 	mem       *knowledge.Store
 	noOrigin  bool
@@ -63,44 +62,45 @@ type Supervisor struct {
 	// memMu serializes every knowledge-worktree critical section: tick
 	// bookkeeping, each attempt's reserve-and-stage, each settlement.
 	// Kernel-backed, so a manual `routines run` serializes through it too.
-	// Everything below through pollFailed is touched only under memMu or
-	// only by the tick goroutine.
 	memMu sync.Locker
 
-	// leaseMu guards the lease heartbeat state. Lease git operations do not
-	// take memMu -- they touch only the lease ref, never the worktree.
-	leaseMu      sync.Mutex
-	leaseSHA     string        // CAS token: the lease blob we last wrote
-	leaseTTL     time.Duration // how long a lease survives without a heartbeat
-	leaseRenewed time.Time     // wall clock of the last accepted heartbeat
-	leaseWarned  bool          // dispatch pause already announced for the current lease problem
+	lease    leaseKeeper
+	pool     runPool
+	blockers blockerTracker
+	triggers triggerTracker
+}
 
-	// Bounded parallelism: slots caps concurrent attempts, inFlight keeps a
-	// routine's next dispatch off state its executing attempt still owns,
-	// runs lets shutdown wait for every settlement.
+type leaseKeeper struct {
+	instanceID string
+	mu         sync.Mutex
+	sha        string
+	ttl        time.Duration
+	renewed    time.Time
+	warned     bool
+}
+
+type runPool struct {
 	slots          chan uint32
 	runs           sync.WaitGroup
 	inFlightMu     sync.Mutex
 	inFlight       map[string]bool
-	waitLogged     map[string]bool // pool-full wait already announced (tick only)
-	cooldownWarned map[string]bool // circuit-breaker cool-down already announced (tick only)
-	fatal          chan error      // fail-closed production invariant violation
+	waitLogged     map[string]bool
+	cooldownWarned map[string]bool
+	fatal          chan error
 	reap           func(uint32) error
+}
 
-	syncBlocked   bool // rewritten-history or conflict: stop adopting/pushing
-	syncWarned    bool // blocker already raised for the current sync problem
+type blockerTracker struct {
+	syncBlocked   bool
+	syncWarned    bool
 	unreachWarned bool
-	originWarned  bool // origin unreachable: blocker already raised for this outage
-	// blockedTip is the knowledge tip this instance stranded on the blocked
-	// ref -- only this instance's: a ref left by a previous container is the
-	// only copy of its blocker and must outlive it.
-	blockedTip   string
-	commitWarned bool              // intent commit failing: dispatch is halted, someone must look
-	loadFailed   map[string]string // routine name -> the load failure already recorded
+	originWarned  bool
+	blockedTip    string
+	commitWarned  bool
+	loadFailed    map[string]string
+}
 
-	// Trigger bookkeeping that is deliberately not durable: last-poll times
-	// (persisting them would dirty the knowledge worktree every tick) and
-	// poll-error dedup (log on transition, not per tick).
+type triggerTracker struct {
 	lastPolled map[string]time.Time
 	pollFailed map[string]bool
 }
@@ -132,26 +132,36 @@ func New(dir string) (*Supervisor, error) {
 		slots <- uint32(attemptUIDBase + i)
 	}
 	return &Supervisor{
-		Dir:            dir,
-		InstanceID:     knowledge.InstanceID(),
-		mem:            mem,
-		memMu:          memMu,
-		leaseTTL:       knowledge.LeaseTTL,
-		loc:            loc,
-		retention:      retention,
-		noOrigin:       !mem.HasOrigin(),
-		slots:          slots,
-		inFlight:       map[string]bool{},
-		waitLogged:     map[string]bool{},
-		cooldownWarned: map[string]bool{},
-		fatal:          make(chan error, 1),
-		reap:           sandbox.ReapIdentity,
-		lastPolled:     map[string]time.Time{},
-		pollFailed:     map[string]bool{},
+		Dir:       dir,
+		mem:       mem,
+		memMu:     memMu,
+		loc:       loc,
+		retention: retention,
+		noOrigin:  !mem.HasOrigin(),
+		lease: leaseKeeper{
+			instanceID: knowledge.InstanceID(),
+			ttl:        knowledge.LeaseTTL,
+		},
+		pool: runPool{
+			slots:          slots,
+			inFlight:       map[string]bool{},
+			waitLogged:     map[string]bool{},
+			cooldownWarned: map[string]bool{},
+			fatal:          make(chan error, 1),
+			reap:           sandbox.ReapIdentity,
+		},
+		blockers: blockerTracker{loadFailed: map[string]string{}},
+		triggers: triggerTracker{
+			lastPolled: map[string]time.Time{},
+			pollFailed: map[string]bool{},
+		},
 	}, nil
 }
 
 func (s *Supervisor) stateDir() string { return s.mem.StateDir() }
+
+// InstanceID returns the identity used to own the distributed lease.
+func (s *Supervisor) InstanceID() string { return s.lease.instanceID }
 
 // Run is the supervise loop: startup, then one Tick per minute until ctx is
 // canceled, then shutdown (final commit and push, lease release).
@@ -185,9 +195,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		if err := s.acquireLease(ctx); err != nil {
 			return err
 		}
-		defer func() { s.mem.ReleaseLease(s.leaseSHA) }()
+		defer func() { s.mem.ReleaseLease(s.lease.sha) }()
 	}
-	slog.Info("supervising", "dir", s.Dir, "instance", s.InstanceID, "tick", TickInterval)
+	slog.Info("supervising", "dir", s.Dir, "instance", s.lease.instanceID, "tick", TickInterval)
 	if err := s.verifySandbox(); err != nil {
 		return err
 	}
@@ -202,12 +212,12 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			// Wait for in-flight settlements before the final commit, or the
 			// shutdown push races the records it exists to carry.
-			s.runs.Wait()
+			s.pool.runs.Wait()
 			s.shutdown()
 			return nil
-		case err := <-s.fatal:
+		case err := <-s.pool.fatal:
 			cancelRuns()
-			s.runs.Wait()
+			s.pool.runs.Wait()
 			s.shutdown()
 			return err
 		case <-ticker.C:
@@ -249,23 +259,23 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		}
 		var attemptUID uint32
 		select {
-		case attemptUID = <-s.slots:
+		case attemptUID = <-s.pool.slots:
 		default:
 			release()
 			// warn, not info: due work parked behind a full pool looks idle
 			// from outside.
-			if !s.waitLogged[d.r.Name] {
-				s.waitLogged[d.r.Name] = true
+			if !s.pool.waitLogged[d.r.Name] {
+				s.pool.waitLogged[d.r.Name] = true
 				d.r.Log().Warn("all run slots busy -- waiting for a free one",
-					"slots", cap(s.slots), "run_id", d.st.Pending.RunID)
+					"slots", cap(s.pool.slots), "run_id", d.st.Pending.RunID)
 			}
 			continue
 		}
-		delete(s.waitLogged, d.r.Name)
+		delete(s.pool.waitLogged, d.r.Name)
 		s.setRunning(d.r.Name, true)
-		s.runs.Add(1)
+		s.pool.runs.Add(1)
 		go func(d dispatch, uid uint32, release func()) {
-			defer s.runs.Done()
+			defer s.pool.runs.Done()
 			defer release()
 			defer s.setRunning(d.r.Name, false)
 			cleanupErr := s.execute(ctx, d.r, d.st, now, uid)
@@ -279,18 +289,18 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
 	err := cleanupErr
 	if mode.Current().Container {
-		err = errors.Join(err, s.reap(uid))
+		err = errors.Join(err, s.pool.reap(uid))
 	}
 	if err != nil {
 		fatal := fmt.Errorf("attempt uid %d cleanup failed -- refusing to reuse identity: %w", uid, err)
 		slog.Error("attempt uid cleanup failed -- refusing to reuse identity", "uid", uid, "error", err)
 		select {
-		case s.fatal <- fatal:
+		case s.pool.fatal <- fatal:
 		default:
 		}
 		return false // poisoned: never return this identity to the pool
 	}
-	s.slots <- uid
+	s.pool.slots <- uid
 	return true
 }
 
@@ -317,7 +327,7 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 		if !s.renewLease() {
 			return nil, false
 		}
-		if s.syncBlocked {
+		if s.blockers.syncBlocked {
 			// Rewritten history or a conflict needs a human; dispatching
 			// anyway would re-run external actions as duplicates after
 			// container replacement.
@@ -394,14 +404,14 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 			if st.CoolingDown(now) {
 				// A tripped breaker looks idle from outside for up to 24h --
 				// announce once, not every tick.
-				if !s.cooldownWarned[r.Name] {
-					s.cooldownWarned[r.Name] = true
+				if !s.pool.cooldownWarned[r.Name] {
+					s.pool.cooldownWarned[r.Name] = true
 					log.Warn("circuit breaker cooling down -- no new runs",
 						"until", st.CooldownUntil, "consecutive_abandons", st.ConsecutiveAbandons)
 				}
 				continue // circuit breaker: no new runs until the cool-down ends
 			}
-			delete(s.cooldownWarned, r.Name)
+			delete(s.pool.cooldownWarned, r.Name)
 			minted := false
 			if spec != nil {
 				first, last, n := schedule.Occurrences(spec, st.Watermark, now)
@@ -460,7 +470,7 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 		due = append(due, dispatch{r, st})
 	}
 
-	slog.Debug("tick", "due", len(due), "routines", len(routines), "slots_free", len(s.slots))
+	slog.Debug("tick", "due", len(due), "routines", len(routines), "slots_free", len(s.pool.slots))
 
 	// This tick's own bookkeeping -- minted pending records, refreshed trigger
 	// baselines, abandonments -- has to be durable before anything acts on it.
@@ -472,18 +482,18 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 
 // isRunning reports whether a routine has an attempt executing right now.
 func (s *Supervisor) isRunning(name string) bool {
-	s.inFlightMu.Lock()
-	defer s.inFlightMu.Unlock()
-	return s.inFlight[name]
+	s.pool.inFlightMu.Lock()
+	defer s.pool.inFlightMu.Unlock()
+	return s.pool.inFlight[name]
 }
 
 func (s *Supervisor) setRunning(name string, v bool) {
-	s.inFlightMu.Lock()
-	defer s.inFlightMu.Unlock()
+	s.pool.inFlightMu.Lock()
+	defer s.pool.inFlightMu.Unlock()
 	if v {
-		s.inFlight[name] = true
+		s.pool.inFlight[name] = true
 	} else {
-		delete(s.inFlight, name)
+		delete(s.pool.inFlight, name)
 	}
 }
 
@@ -495,19 +505,19 @@ func (s *Supervisor) commitIntent(message string) bool {
 	if err != nil {
 		// A supervisor that cannot record what it is about to do must not
 		// do it.
-		s.blockOnce("commit", "intent commit failed -- runs held", err, &s.commitWarned)
+		s.blockOnce("commit", "intent commit failed -- runs held", err, &s.blockers.commitWarned)
 		return false
 	}
-	s.recover("commit", "intent commit recovered -- runs resumed", &s.commitWarned)
-	if s.noOrigin || s.syncBlocked || sha == "" {
+	s.recover("commit", "intent commit recovered -- runs resumed", &s.blockers.commitWarned)
+	if s.noOrigin || s.blockers.syncBlocked || sha == "" {
 		return true
 	}
 	if err := s.mem.Push(); err != nil {
 		// An identity that isn't durable is how duplicates happen.
-		s.blockOnce("push", "intent push failed -- runs held until origin is reachable", err, &s.unreachWarned)
+		s.blockOnce("push", "intent push failed -- runs held until origin is reachable", err, &s.blockers.unreachWarned)
 		return false
 	}
-	s.recover("push", "push to origin recovered -- runs resumed", &s.unreachWarned)
+	s.recover("push", "push to origin recovered -- runs resumed", &s.blockers.unreachWarned)
 	return true
 }
 
@@ -728,25 +738,25 @@ func (s *Supervisor) syncOnce() {
 	rep := s.mem.Sync()
 	switch {
 	case rep.Rewritten:
-		s.syncBlocked = true
-		s.blockOnce("sync", "knowledge branch history rewritten on origin -- sync stopped, running on local state", errors.New(rep.Detail), &s.syncWarned)
+		s.blockers.syncBlocked = true
+		s.blockOnce("sync", "knowledge branch history rewritten on origin -- sync stopped, running on local state", errors.New(rep.Detail), &s.blockers.syncWarned)
 		s.strandBlocked()
 	case rep.Conflict:
-		s.syncBlocked = true
-		s.blockOnce("sync", "knowledge sync conflict -- sync stopped, running on local state", errors.New(rep.Detail), &s.syncWarned)
+		s.blockers.syncBlocked = true
+		s.blockOnce("sync", "knowledge sync conflict -- sync stopped, running on local state", errors.New(rep.Detail), &s.blockers.syncWarned)
 		s.strandBlocked()
 	case rep.Unreachable:
 		// Recorded locally, published when origin returns -- an outage whose
 		// only trace is a log line in a replaced container is no trace.
-		s.blockOnce("origin", "origin unreachable -- knowledge is not durable and no new runs start until it returns", errors.New(rep.Detail), &s.originWarned)
+		s.blockOnce("origin", "origin unreachable -- knowledge is not durable and no new runs start until it returns", errors.New(rep.Detail), &s.blockers.originWarned)
 	case rep.Detail != "":
 		// Sync could not even read the local worktree; an open blocker must
 		// not be resolved on the strength of it.
 		slog.Warn("knowledge sync did not run", "detail", rep.Detail)
 	default:
-		s.syncBlocked = false
-		s.recover("sync", "knowledge sync with origin recovered", &s.syncWarned)
-		s.recover("origin", "origin reachable again -- knowledge sync resumed", &s.originWarned)
+		s.blockers.syncBlocked = false
+		s.recover("sync", "knowledge sync with origin recovered", &s.blockers.syncWarned)
+		s.recover("origin", "origin reachable again -- knowledge sync resumed", &s.blockers.originWarned)
 		if rep.Adopted {
 			slog.Info("knowledge: adopted remote commits")
 		}
@@ -776,17 +786,17 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 
 	var news []string
 	for _, name := range slices.Sorted(maps.Keys(failing)) {
-		if s.loadFailed[name] != failing[name] {
+		if s.blockers.loadFailed[name] != failing[name] {
 			slog.Warn("routine load error", "routine", name, "error", failing[name])
 			news = append(news, fmt.Sprintf("routine %s does not load (%s) -- it will not run until the file is fixed", name, failing[name]))
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(s.loadFailed)) {
+	for _, name := range slices.Sorted(maps.Keys(s.blockers.loadFailed)) {
 		if _, still := failing[name]; !still {
 			news = append(news, fmt.Sprintf("routine %s loads again", name))
 		}
 	}
-	s.loadFailed = failing
+	s.blockers.loadFailed = failing
 	if len(news) == 0 {
 		return
 	}
@@ -866,7 +876,7 @@ func (s *Supervisor) pushBestEffort() {
 	if s.noOrigin {
 		return
 	}
-	if s.syncBlocked {
+	if s.blockers.syncBlocked {
 		s.strandBlocked()
 		return
 	}
@@ -874,8 +884,8 @@ func (s *Supervisor) pushBestEffort() {
 		slog.Warn("knowledge push failed (will retry)", "error", err)
 		return
 	}
-	if s.blockedTip != "" {
-		s.blockedTip = ""
+	if s.blockers.blockedTip != "" {
+		s.blockers.blockedTip = ""
 		s.mem.ClearBlocked()
 	}
 }
@@ -889,14 +899,14 @@ func (s *Supervisor) strandBlocked() {
 		slog.Error("could not read the knowledge tip -- blocked knowledge not stranded to origin", "error", err)
 		return
 	}
-	if tip == s.blockedTip {
+	if tip == s.blockers.blockedTip {
 		return
 	}
 	if err := s.mem.PublishBlocked(); err != nil {
 		slog.Error("publishing blocked knowledge to origin failed (will retry)", "error", err)
 		return
 	}
-	s.blockedTip = tip
+	s.blockers.blockedTip = tip
 	slog.Error("knowledge: stranded until sync is repaired", "ref", knowledge.BlockedRef)
 }
 
@@ -937,7 +947,7 @@ func (s *Supervisor) verifySandbox() error {
 		if err != nil {
 			return fmt.Errorf("attempt group check: %w", err)
 		}
-		if err := verifyAttemptGroups(groups, cap(s.slots)); err != nil {
+		if err := verifyAttemptGroups(groups, cap(s.pool.slots)); err != nil {
 			return err
 		}
 		// Constructed environment, like every other child; TMPDIR is the
@@ -967,7 +977,7 @@ func (s *Supervisor) verifySandbox() error {
 			if err := hold.Start(); err != nil {
 				return fmt.Errorf("attempt uid cleanup probe start: %w", err)
 			}
-			if err := s.reap(attemptUIDBase); err != nil {
+			if err := s.pool.reap(attemptUIDBase); err != nil {
 				_ = hold.Process.Kill()
 				_ = hold.Wait()
 				return fmt.Errorf("attempt uid cleanup probe: %w", err)
@@ -1017,15 +1027,15 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 		eligible := lease == nil
 		if lease != nil {
 			expected = lease.SHA
-			eligible = lease.Holder == s.InstanceID || time.Since(lease.At) > s.leaseTTL
+			eligible = lease.Holder == s.lease.instanceID || time.Since(lease.At) > s.lease.ttl
 		}
 		if eligible {
 			now := time.Now()
-			sha, werr := s.mem.WriteLease(s.InstanceID, now, expected)
+			sha, werr := s.mem.WriteLease(s.lease.instanceID, now, expected)
 			if werr == nil {
-				s.leaseMu.Lock()
+				s.lease.mu.Lock()
 				s.holdLease(sha, now)
-				s.leaseMu.Unlock()
+				s.lease.mu.Unlock()
 				return nil
 			}
 			// CAS lost: someone else moved first. Loop and re-evaluate.
@@ -1045,8 +1055,8 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 // means another live instance holds it and dispatch pauses. Wall-clock time,
 // not the tick's: staleness is judged against a real clock.
 func (s *Supervisor) renewLease() bool {
-	s.leaseMu.Lock()
-	defer s.leaseMu.Unlock()
+	s.lease.mu.Lock()
+	defer s.lease.mu.Unlock()
 	return s.renewLeaseLocked()
 }
 
@@ -1054,9 +1064,9 @@ func (s *Supervisor) renewLease() bool {
 // TTL: in-flight runs heartbeat independently, and the freshness gate
 // collapses them into one push per cadence (worst-case staleness: half a TTL).
 func (s *Supervisor) tryRenewLease() bool {
-	s.leaseMu.Lock()
-	defer s.leaseMu.Unlock()
-	if time.Since(s.leaseRenewed) < s.leaseTTL/4 {
+	s.lease.mu.Lock()
+	defer s.lease.mu.Unlock()
+	if time.Since(s.lease.renewed) < s.lease.ttl/4 {
 		return true
 	}
 	return s.renewLeaseLocked()
@@ -1065,27 +1075,27 @@ func (s *Supervisor) tryRenewLease() bool {
 // leaseExpired reports whether the last accepted heartbeat is older than the
 // TTL -- past it, this instance can no longer prove it is the only writer.
 func (s *Supervisor) leaseExpired() bool {
-	s.leaseMu.Lock()
-	defer s.leaseMu.Unlock()
-	return time.Since(s.leaseRenewed) > s.leaseTTL
+	s.lease.mu.Lock()
+	defer s.lease.mu.Unlock()
+	return time.Since(s.lease.renewed) > s.lease.ttl
 }
 
 func (s *Supervisor) renewLeaseLocked() bool {
 	now := time.Now()
-	if sha, err := s.mem.WriteLease(s.InstanceID, now, s.leaseSHA); err == nil {
+	if sha, err := s.mem.WriteLease(s.lease.instanceID, now, s.lease.sha); err == nil {
 		s.holdLease(sha, now)
 		return true
 	}
 	lease, err := s.mem.ReadLease()
-	if err == nil && lease != nil && lease.Holder != s.InstanceID && time.Since(lease.At) <= s.leaseTTL {
+	if err == nil && lease != nil && lease.Holder != s.lease.instanceID && time.Since(lease.At) <= s.lease.ttl {
 		return s.leaseLost(fmt.Sprintf("lease held by %s (last heartbeat %s ago, expires in %s) -- pausing dispatch",
-			lease.Holder, time.Since(lease.At).Round(time.Second), (s.leaseTTL - time.Since(lease.At)).Round(time.Second)))
+			lease.Holder, time.Since(lease.At).Round(time.Second), (s.lease.ttl - time.Since(lease.At)).Round(time.Second)))
 	}
 	expected := ""
 	if lease != nil {
 		expected = lease.SHA
 	}
-	if sha, werr := s.mem.WriteLease(s.InstanceID, now, expected); werr == nil {
+	if sha, werr := s.mem.WriteLease(s.lease.instanceID, now, expected); werr == nil {
 		s.holdLease(sha, now)
 		return true
 	}
@@ -1102,7 +1112,7 @@ func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.Cance
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(s.leaseTTL / 4)
+		ticker := time.NewTicker(s.lease.ttl / 4)
 		defer ticker.Stop()
 		for {
 			select {
@@ -1132,26 +1142,26 @@ func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.Cance
 // lease -- another instance may already be dispatching.
 func (s *Supervisor) foreignLeaseLive() bool {
 	lease, err := s.mem.ReadLease()
-	return err == nil && lease != nil && lease.Holder != s.InstanceID && time.Since(lease.At) <= s.leaseTTL
+	return err == nil && lease != nil && lease.Holder != s.lease.instanceID && time.Since(lease.At) <= s.lease.ttl
 }
 
 // holdLease records a successful heartbeat, announcing recovery in the same
 // RECOVERED shape as recover() so one grep finds every healed blocker.
 func (s *Supervisor) holdLease(sha string, at time.Time) {
-	if s.leaseWarned {
-		s.leaseWarned = false
+	if s.lease.warned {
+		s.lease.warned = false
 		slog.Error("RECOVERED", "kind", "lease", "reason", "lease heartbeat recovered -- dispatch resumed")
 	}
-	s.leaseSHA = sha
-	s.leaseRenewed = at
+	s.lease.sha = sha
+	s.lease.renewed = at
 }
 
 // leaseLost pauses dispatch and says why, once. Unlike blockOnce it records
 // nothing in knowledge -- an instance that cannot prove it is the writer must
 // not write.
 func (s *Supervisor) leaseLost(msg string) bool {
-	if !s.leaseWarned {
-		s.leaseWarned = true
+	if !s.lease.warned {
+		s.lease.warned = true
 		slog.Error("BLOCKED", "kind", "lease", "reason", msg)
 	}
 	return false
