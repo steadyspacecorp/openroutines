@@ -1526,7 +1526,7 @@ func TestBootRunsUnconfinedWhenTheOperatorDisablesTheSandbox(t *testing.T) {
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
 	t.Setenv(sandbox.EnvDisable, "1")
 
-	if err := (&Supervisor{}).verifyIsolation(); err != nil {
+	if err := verifyIsolation(); err != nil {
 		t.Fatalf("the hatch should let a supervisor start where nothing can confine a run: %v", err)
 	}
 	logs.Expect("WARN", sandbox.EnvDisable)
