@@ -45,7 +45,7 @@ Follow the routine below exactly, under these restraints.
 // identity, so it can never share a uid with a supervisor slot.
 func RunManual(dir, name string, options ManualOptions) (result *ManualResult, err error) {
 	attempt := Attempt{RunID: run.NewID(), Number: 1, Rehearsal: options.Fixture}
-	if mode.Current().Container {
+	if mode.Current() == mode.DeployedContainer {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
 		if err != nil {
 			return nil, err

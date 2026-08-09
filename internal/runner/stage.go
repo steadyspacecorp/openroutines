@@ -64,7 +64,7 @@ const attemptHomeName = ".home"
 // resolution can spend seconds on the network. On error, everything Stage
 // acquired is already released.
 func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt, knowledgeLock sync.Locker) (prepared *PreparedAttempt, err error) {
-	if mode.Current().Container && attempt.AttemptUID == 0 {
+	if mode.Current() == mode.DeployedContainer && attempt.AttemptUID == 0 {
 		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
 	}
 	model, err := EffectiveModel(agent, r)
@@ -167,7 +167,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt,
 		return nil, err
 	}
 	attemptHome := filepath.Join(workspaceRoot, attemptHomeName)
-	if attempt.AttemptUID != 0 && mode.Current().Container {
+	if attempt.AttemptUID != 0 && mode.Current() == mode.DeployedContainer {
 		// An attempt identity's gid equals its uid (template Dockerfile).
 		if err := prepareWorkspaceAccess(attempt.AttemptUID, workspaceRoot); err != nil {
 			return nil, fmt.Errorf("preparing read-only attempt workspace: %w", err)

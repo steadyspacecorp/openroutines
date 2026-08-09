@@ -36,8 +36,8 @@ type attemptRuntime interface {
 // runtime picks the attempt's deployment mode and checks its prerequisites.
 func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 	currentMode := mode.Current()
-	switch {
-	case currentMode.Container:
+	switch currentMode {
+	case mode.DeployedContainer:
 		if _, err := exec.LookPath("opencode"); err != nil {
 			return nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
 		}
@@ -48,7 +48,7 @@ func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 			uid:          p.attempt.AttemptUID,
 			env:          p.env,
 		}, nil
-	case currentMode.Native:
+	case mode.LocalNative:
 		if _, err := exec.LookPath("opencode"); err != nil {
 			return nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
 		}

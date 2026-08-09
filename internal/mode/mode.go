@@ -3,6 +3,7 @@ package mode
 
 import "os"
 
+// Deployment modes.
 const (
 	// EnvContainer marks a process running inside the deployed agent container.
 	EnvContainer = "OPENROUTINES_IN_CONTAINER"
@@ -10,16 +11,26 @@ const (
 	EnvNative = "OPENROUTINES_NATIVE"
 )
 
-// Mode is the process's current deployment mode.
-type Mode struct {
-	Container bool
-	Native    bool
-}
+// Deployment identifies where model processes execute.
+type Deployment uint8
+
+const (
+	// LocalContainer runs opencode in a per-attempt container on the local host.
+	LocalContainer Deployment = iota
+	// LocalNative runs the developer's local opencode without confinement.
+	LocalNative
+	// DeployedContainer runs opencode inside the deployed agent container.
+	DeployedContainer
+)
 
 // Current reads the deployment mode from the process environment.
-func Current() Mode {
-	return Mode{
-		Container: os.Getenv(EnvContainer) == "1",
-		Native:    os.Getenv(EnvNative) == "1",
+func Current() Deployment {
+	switch {
+	case os.Getenv(EnvContainer) == "1":
+		return DeployedContainer
+	case os.Getenv(EnvNative) == "1":
+		return LocalNative
+	default:
+		return LocalContainer
 	}
 }

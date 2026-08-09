@@ -87,7 +87,7 @@ func ConfigureLevel() {
 			return
 		}
 	}
-	if mode.Current().Container {
+	if mode.Current() == mode.DeployedContainer {
 		Level.Set(slog.LevelInfo)
 	} else {
 		Level.Set(slog.LevelWarn)

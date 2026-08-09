@@ -22,7 +22,7 @@ import (
 // anyone is told. Fires on a leftover variable too: unset, it still publishes
 // the value.
 func (s *Supervisor) warnKeyDelivery() {
-	if !mode.Current().Container || !creds.KeyValueInEnv() {
+	if mode.Current() != mode.DeployedContainer || !creds.KeyValueInEnv() {
 		return
 	}
 	slog.Warn("the master key value is in this process's environment -- readable wherever that environment is; mount the key as a file, point the file variable at the path, and unset the value variable",
@@ -41,8 +41,8 @@ func verifyAttemptGroups(groups []int, slots int) error {
 
 // verifySandbox enforces the fail-closed policy at boot, not mid-run.
 func (s *Supervisor) verifySandbox() error {
-	switch {
-	case mode.Current().Container:
+	switch mode.Current() {
+	case mode.DeployedContainer:
 		// Join the attempt groups first -- whether the image's membership
 		// reached this process depends on the init that booted the container
 		// -- then verify, refusing at boot rather than failing every attempt
@@ -103,7 +103,7 @@ func (s *Supervisor) verifySandbox() error {
 			return fmt.Errorf("attempt identity probe: %w: %s", probeErr, strings.TrimSpace(string(exitErr.Stderr)))
 		}
 		return fmt.Errorf("attempt identity probe: %w -- the binary needs cap_setuid and cap_setgid; rebuild the deploy image from the current template Dockerfile", probeErr)
-	case mode.Current().Native:
+	case mode.LocalNative:
 		slog.Warn("OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
 	default:
 		slog.Info("model processes run in the per-run container")
