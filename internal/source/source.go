@@ -3,15 +3,21 @@ package source
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
-const fetchTimeout = 5 * time.Minute
+const (
+	fetchTimeout     = 5 * time.Minute
+	gitKillGrace     = 2 * time.Second
+	gitDrainDeadline = 5 * time.Second
+)
 
 // Provenance identifies the repository content returned by Fetch.
 type Provenance struct {
@@ -122,13 +128,37 @@ func shorthand(repository string) bool {
 
 func gitOutput(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return killGitGroup(cmd.Process.Pid) }
+	cmd.WaitDelay = gitDrainDeadline
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		detail := strings.TrimSpace(string(out))
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("git timed out: %w: %s", ctx.Err(), detail)
+		}
+		if errors.Is(err, exec.ErrWaitDelay) {
+			return "", fmt.Errorf("git left its output pipe open after %s: %w", gitDrainDeadline, err)
+		}
 		if detail != "" {
 			return "", fmt.Errorf("%w: %s", err, detail)
 		}
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func killGitGroup(pid int) error {
+	group := -pid
+	if err := syscall.Kill(group, syscall.SIGTERM); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	time.Sleep(gitKillGrace)
+	if err := syscall.Kill(group, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }
