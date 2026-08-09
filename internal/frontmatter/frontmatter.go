@@ -49,8 +49,11 @@ func Split(raw []byte) (Document, error) {
 		line := bytes.TrimSuffix(raw[lineStart:lineEnd], []byte("\r"))
 		if bytes.Equal(line, []byte("---")) {
 			headerEnd := lineStart
-			if headerEnd > headerStart {
-				headerEnd -= len(lineEnding)
+			if headerEnd > headerStart && raw[headerEnd-1] == '\n' {
+				headerEnd--
+				if headerEnd > headerStart && raw[headerEnd-1] == '\r' {
+					headerEnd--
+				}
 			}
 			return Document{
 				Frontmatter: raw[headerStart:headerEnd],
