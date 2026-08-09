@@ -274,7 +274,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		delete(s.pool.waitLogged, d.r.Name)
 		s.setRunning(d.r.Name, true)
 		s.pool.runs.Add(1)
-		go func(d dispatch, uid uint32, release func()) {
+		go func(d dueRun, uid uint32, release func()) {
 			defer s.pool.runs.Done()
 			defer release()
 			defer s.setRunning(d.r.Name, false)
@@ -304,9 +304,9 @@ func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
 	return true
 }
 
-// dispatch is one due routine and the scheduling state its attempt owns
+// dueRun is one due routine and the scheduling state its attempt owns
 // until it settles.
-type dispatch struct {
+type dueRun struct {
 	r  *routine.Routine
 	st *schedule.State
 }
@@ -316,7 +316,7 @@ type dispatch struct {
 // intent -- all under the knowledge lock, serialized against in-flight
 // reservations and settlements. Returns the runnable dispatches, or ok=false
 // when nothing may launch (lost lease, blocked sync, failed intent commit).
-func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
+func (s *Supervisor) plan(now time.Time) ([]dueRun, bool) {
 	s.memMu.Lock()
 	defer s.memMu.Unlock()
 
@@ -353,121 +353,11 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 	routines, parseErrs := routine.LoadAgent(s.Dir)
 	s.reportLoadFailures(parseErrs, now)
 
-	// Reconcile scheduling state; collect runnable pending runs.
-	var due []dispatch
+	var due []dueRun
 	for _, r := range routines {
-		log := r.Log()
-		if !Schedulable(r) {
-			if !r.FM.IsActive() {
-				log.Debug("skipped", "reason", "inactive")
-			} else {
-				log.Debug("skipped", "reason", "no schedule or trigger")
-			}
-			continue
+		if run := s.reconcile(r, now); run != nil {
+			due = append(due, *run)
 		}
-		if s.isRunning(r.Name) {
-			// The executing attempt's settlement owns this routine's state.
-			log.Debug("skipped", "reason", "in flight")
-			continue
-		}
-		var spec *schedule.Spec
-		if r.FM.Schedule != "" {
-			var err error
-			spec, err = schedule.Parse(r.FM.Schedule, s.loc)
-			if err != nil {
-				log.Warn("bad schedule", "schedule", r.FM.Schedule, "error", err)
-				continue
-			}
-		}
-		if r.FM.Trigger != nil {
-			if err := r.FM.Trigger.Validate(); err != nil {
-				log.Warn("invalid trigger", "error", err)
-				continue
-			}
-		}
-		st, err := schedule.Load(s.stateDir(), r.Name)
-		if err != nil {
-			log.Error("loading scheduling state failed", "error", err)
-			continue
-		}
-		if st == nil {
-			// First sight of this routine: it owes nothing from before it existed.
-			st = &schedule.State{Routine: r.Name, Watermark: now}
-			if err := st.Save(s.stateDir()); err != nil {
-				log.Error("saving scheduling state failed", "error", err)
-				continue
-			}
-			log.Info("registered", "watermark", now)
-			continue
-		}
-		if st.Pending == nil {
-			if st.CoolingDown(now) {
-				// A tripped breaker looks idle from outside for up to 24h --
-				// announce once, not every tick.
-				if !s.pool.cooldownWarned[r.Name] {
-					s.pool.cooldownWarned[r.Name] = true
-					log.Warn("circuit breaker cooling down -- no new runs",
-						"until", st.CooldownUntil, "consecutive_abandons", st.ConsecutiveAbandons)
-				}
-				continue // circuit breaker: no new runs until the cool-down ends
-			}
-			delete(s.pool.cooldownWarned, r.Name)
-			minted := false
-			if spec != nil {
-				first, last, n := schedule.Occurrences(spec, st.Watermark, now)
-				if n > 0 {
-					st.Pending = &schedule.Pending{
-						RunID:          run.NewID(),
-						ScheduledFor:   first,
-						CoveredThrough: last,
-						CreatedAt:      now,
-					}
-					minted = true
-					if n > 1 {
-						log.Info("missed firings collapse into one run", "firings", n, "run_id", st.Pending.RunID)
-					}
-					// Refresh the baseline so the same news doesn't
-					// double-fire right after the scheduled run.
-					if r.FM.Trigger != nil {
-						s.refreshTriggerBaseline(r, now)
-					}
-				}
-			}
-			if !minted && r.FM.Trigger != nil {
-				if s.evaluateTrigger(r, now) {
-					st.Pending = &schedule.Pending{
-						RunID:          run.NewID(),
-						ScheduledFor:   now,
-						CoveredThrough: now,
-						CreatedAt:      now,
-					}
-					minted = true
-					log.Info("trigger fired", "run_id", st.Pending.RunID)
-				}
-			}
-			if !minted {
-				log.Debug("skipped", "reason", "nothing due")
-				continue
-			}
-			if err := st.Save(s.stateDir()); err != nil {
-				log.Error("saving scheduling state failed", "error", err)
-				continue
-			}
-		}
-		if st.Pending.Attempts >= MaxAttempts {
-			// Settlement is where a run is normally abandoned, but a run
-			// that kills its container never gets there.
-			s.abandon(r, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), "", now)
-			if err := st.Save(s.stateDir()); err != nil {
-				log.Error("saving scheduling state failed", "error", err)
-			}
-			continue
-		}
-		if next := schedule.NextRetryAt(st.Pending); now.Before(next) {
-			log.Debug("skipped", "reason", "backing off", "next_attempt_at", next)
-			continue // backing off after a failed attempt
-		}
-		due = append(due, dispatch{r, st})
 	}
 
 	slog.Debug("tick", "due", len(due), "routines", len(routines), "slots_free", len(s.pool.slots))
@@ -478,6 +368,118 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 		return nil, false
 	}
 	return due, true
+}
+
+func (s *Supervisor) reconcile(r *routine.Routine, now time.Time) *dueRun {
+	log := r.Log()
+	if !Schedulable(r) {
+		if !r.FM.IsActive() {
+			log.Debug("skipped", "reason", "inactive")
+		} else {
+			log.Debug("skipped", "reason", "no schedule or trigger")
+		}
+		return nil
+	}
+	if s.isRunning(r.Name) {
+		log.Debug("skipped", "reason", "in flight")
+		return nil
+	}
+
+	var spec *schedule.Spec
+	if r.FM.Schedule != "" {
+		var err error
+		spec, err = schedule.Parse(r.FM.Schedule, s.loc)
+		if err != nil {
+			log.Warn("bad schedule", "schedule", r.FM.Schedule, "error", err)
+			return nil
+		}
+	}
+	if r.FM.Trigger != nil {
+		if err := r.FM.Trigger.Validate(); err != nil {
+			log.Warn("invalid trigger", "error", err)
+			return nil
+		}
+	}
+
+	st, err := schedule.Load(s.stateDir(), r.Name)
+	if err != nil {
+		log.Error("loading scheduling state failed", "error", err)
+		return nil
+	}
+	if st == nil {
+		st = &schedule.State{Routine: r.Name, Watermark: now}
+		if err := st.Save(s.stateDir()); err != nil {
+			log.Error("saving scheduling state failed", "error", err)
+			return nil
+		}
+		log.Info("registered", "watermark", now)
+		return nil
+	}
+
+	if st.Pending == nil && !s.mintPending(r, st, spec, now) {
+		return nil
+	}
+	if st.Pending.Attempts >= MaxAttempts {
+		s.abandon(r, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), "", now)
+		if err := st.Save(s.stateDir()); err != nil {
+			log.Error("saving scheduling state failed", "error", err)
+		}
+		return nil
+	}
+	if next := schedule.NextRetryAt(st.Pending); now.Before(next) {
+		log.Debug("skipped", "reason", "backing off", "next_attempt_at", next)
+		return nil
+	}
+	return &dueRun{r: r, st: st}
+}
+
+func (s *Supervisor) mintPending(r *routine.Routine, st *schedule.State, spec *schedule.Spec, now time.Time) bool {
+	log := r.Log()
+	if st.CoolingDown(now) {
+		if !s.pool.cooldownWarned[r.Name] {
+			s.pool.cooldownWarned[r.Name] = true
+			log.Warn("circuit breaker cooling down -- no new runs",
+				"until", st.CooldownUntil, "consecutive_abandons", st.ConsecutiveAbandons)
+		}
+		return false
+	}
+	delete(s.pool.cooldownWarned, r.Name)
+
+	if spec != nil {
+		first, last, n := schedule.Occurrences(spec, st.Watermark, now)
+		if n > 0 {
+			st.Pending = &schedule.Pending{
+				RunID:          run.NewID(),
+				ScheduledFor:   first,
+				CoveredThrough: last,
+				CreatedAt:      now,
+			}
+			if n > 1 {
+				log.Info("missed firings collapse into one run", "firings", n, "run_id", st.Pending.RunID)
+			}
+			if r.FM.Trigger != nil {
+				s.refreshTriggerBaseline(r, now)
+			}
+		}
+	}
+	if st.Pending == nil && r.FM.Trigger != nil && s.evaluateTrigger(r, now) {
+		st.Pending = &schedule.Pending{
+			RunID:          run.NewID(),
+			ScheduledFor:   now,
+			CoveredThrough: now,
+			CreatedAt:      now,
+		}
+		log.Info("trigger fired", "run_id", st.Pending.RunID)
+	}
+	if st.Pending == nil {
+		log.Debug("skipped", "reason", "nothing due")
+		return false
+	}
+	if err := st.Save(s.stateDir()); err != nil {
+		log.Error("saving scheduling state failed", "error", err)
+		return false
+	}
+	return true
 }
 
 // isRunning reports whether a routine has an attempt executing right now.
