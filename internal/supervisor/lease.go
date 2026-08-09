@@ -22,7 +22,7 @@ type leaseKeeper struct {
 // compare-and-swap on the lease ref -- two racing instances cannot both win.
 func (s *Supervisor) acquireLease(ctx context.Context) error {
 	for {
-		lease, err := s.mem.ReadLease()
+		lease, err := s.store.ReadLease()
 		if err != nil {
 			return fmt.Errorf("lease: %w", err)
 		}
@@ -34,7 +34,7 @@ func (s *Supervisor) acquireLease(ctx context.Context) error {
 		}
 		if eligible {
 			now := time.Now()
-			sha, werr := s.mem.WriteLease(s.lease.instanceID, now, expected)
+			sha, werr := s.store.WriteLease(s.lease.instanceID, now, expected)
 			if werr == nil {
 				s.lease.mu.Lock()
 				s.holdLease(sha, now)
@@ -76,11 +76,11 @@ func (s *Supervisor) leaseExpired() bool {
 
 func (s *Supervisor) renewLeaseLocked() bool {
 	now := time.Now()
-	if sha, err := s.mem.WriteLease(s.lease.instanceID, now, s.lease.sha); err == nil {
+	if sha, err := s.store.WriteLease(s.lease.instanceID, now, s.lease.sha); err == nil {
 		s.holdLease(sha, now)
 		return true
 	}
-	lease, err := s.mem.ReadLease()
+	lease, err := s.store.ReadLease()
 	if err == nil && lease != nil && lease.Holder != s.lease.instanceID && time.Since(lease.At) <= s.lease.ttl {
 		return s.leaseLost(fmt.Sprintf("lease held by %s (last heartbeat %s ago, expires in %s) -- pausing dispatch",
 			lease.Holder, time.Since(lease.At).Round(time.Second), (s.lease.ttl - time.Since(lease.At)).Round(time.Second)))
@@ -89,7 +89,7 @@ func (s *Supervisor) renewLeaseLocked() bool {
 	if lease != nil {
 		expected = lease.SHA
 	}
-	if sha, werr := s.mem.WriteLease(s.lease.instanceID, now, expected); werr == nil {
+	if sha, werr := s.store.WriteLease(s.lease.instanceID, now, expected); werr == nil {
 		s.holdLease(sha, now)
 		return true
 	}
@@ -128,7 +128,7 @@ func (s *Supervisor) keepLeaseAlive(ctx context.Context, cancelRun context.Cance
 }
 
 func (s *Supervisor) foreignLeaseLive() bool {
-	lease, err := s.mem.ReadLease()
+	lease, err := s.store.ReadLease()
 	return err == nil && lease != nil && lease.Holder != s.lease.instanceID && time.Since(lease.At) <= s.lease.ttl
 }
 

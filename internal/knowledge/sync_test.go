@@ -25,16 +25,16 @@ func twoClones(t *testing.T) (a, b string) {
 	gitT(t, a, "add", "-A")
 	gitT(t, a, "commit", "-qm", "main")
 	gitT(t, a, "push", "-q", "origin", "main")
-	if err := At(a).Ensure(); err != nil {
+	if err := NewStore(a).Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(a).Push(); err != nil {
+	if err := NewStore(a).Push(); err != nil {
 		t.Fatal(err)
 	}
 
 	b = filepath.Join(base, "b")
 	gitT(t, base, "clone", "-q", bare, b)
-	if err := At(b).Ensure(); err != nil {
+	if err := NewStore(b).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	return a, b
@@ -126,14 +126,14 @@ func writeKnowledge(t *testing.T, clone, name, content string) {
 func TestSyncFastForwardsWhenBehind(t *testing.T) {
 	a, b := twoClones(t)
 	writeKnowledge(t, a, "events.md", "fact from a\n")
-	if _, err := At(a).Commit("a fact"); err != nil {
+	if _, err := NewStore(a).Commit("a fact"); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(a).Push(); err != nil {
+	if err := NewStore(a).Push(); err != nil {
 		t.Fatal(err)
 	}
 
-	rep := At(b).Sync()
+	rep := NewStore(b).Sync()
 	if !rep.Adopted || rep.Conflict || rep.Rewritten {
 		t.Fatalf("expected clean adoption, got %+v", rep)
 	}
@@ -146,22 +146,22 @@ func TestSyncRebasesDivergedHistories(t *testing.T) {
 	a, b := twoClones(t)
 	// Human curation on a, agent commit on b, both from the same tip.
 	writeKnowledge(t, a, "tasks.md", "curated by human\n")
-	if _, err := At(a).Commit("human curation"); err != nil {
+	if _, err := NewStore(a).Commit("human curation"); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(a).Push(); err != nil {
+	if err := NewStore(a).Push(); err != nil {
 		t.Fatal(err)
 	}
 	writeKnowledge(t, b, "events.md", "agent fact\n")
-	if _, err := At(b).Commit("agent fact"); err != nil {
+	if _, err := NewStore(b).Commit("agent fact"); err != nil {
 		t.Fatal(err)
 	}
 
-	rep := At(b).Sync()
+	rep := NewStore(b).Sync()
 	if !rep.Adopted || rep.Conflict {
 		t.Fatalf("expected rebase adoption, got %+v", rep)
 	}
-	if err := At(b).Push(); err != nil {
+	if err := NewStore(b).Push(); err != nil {
 		t.Fatalf("push after rebase should fast-forward: %v", err)
 	}
 	log := gitT(t, filepath.Join(b, "knowledge"), "log", "--oneline")
@@ -173,7 +173,7 @@ func TestSyncRebasesDivergedHistories(t *testing.T) {
 func TestSyncRefusesRewrittenHistory(t *testing.T) {
 	a, b := twoClones(t)
 	// b must have seen the remote once so a rewrite is detectable.
-	if rep := At(b).Sync(); rep.Rewritten || rep.Conflict {
+	if rep := NewStore(b).Sync(); rep.Rewritten || rep.Conflict {
 		t.Fatalf("baseline sync failed: %+v", rep)
 	}
 	// a force-rewrites the knowledge branch (attacker or confused human).
@@ -185,7 +185,7 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 	gitT(t, wtA, "commit", "-qm", "rewritten")
 	gitT(t, wtA, "push", "-q", "--force", "origin", "knowledge")
 
-	rep := At(b).Sync()
+	rep := NewStore(b).Sync()
 	if !rep.Rewritten {
 		t.Fatalf("expected rewrite refusal, got %+v", rep)
 	}
@@ -198,7 +198,7 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 	// would adopt the rewrite on the very next call. The accepted-ref
 	// baseline keeps refusing.
 	for i := 0; i < 3; i++ {
-		if rep := At(b).Sync(); !rep.Rewritten {
+		if rep := NewStore(b).Sync(); !rep.Rewritten {
 			t.Fatalf("sync call %d after rewrite: expected continued refusal, got %+v", i+2, rep)
 		}
 	}
@@ -212,7 +212,7 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 // ref survives the replacement and must block adoption.
 func TestEnsureWorktreeRefusesRewrittenHistoryAfterReplacement(t *testing.T) {
 	a, b := twoClones(t)
-	if rep := At(b).Sync(); rep.Rewritten || rep.Conflict {
+	if rep := NewStore(b).Sync(); rep.Rewritten || rep.Conflict {
 		t.Fatalf("baseline sync failed: %+v", rep)
 	}
 	// Rewrite origin's knowledge branch while "the container is down".
@@ -229,7 +229,7 @@ func TestEnsureWorktreeRefusesRewrittenHistoryAfterReplacement(t *testing.T) {
 	base := filepath.Dir(a)
 	c := filepath.Join(base, "c")
 	gitT(t, base, "clone", "-q", filepath.Join(base, "origin.git"), c)
-	err := At(c).Ensure()
+	err := NewStore(c).Ensure()
 	if err == nil {
 		t.Fatal("fresh clone adopted a rewritten knowledge branch")
 	}
@@ -241,18 +241,18 @@ func TestEnsureWorktreeRefusesRewrittenHistoryAfterReplacement(t *testing.T) {
 func TestSyncReportsConflictAndAborts(t *testing.T) {
 	a, b := twoClones(t)
 	writeKnowledge(t, a, "events.md", "line from a\n")
-	if _, err := At(a).Commit("a edit"); err != nil {
+	if _, err := NewStore(a).Commit("a edit"); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(a).Push(); err != nil {
+	if err := NewStore(a).Push(); err != nil {
 		t.Fatal(err)
 	}
 	writeKnowledge(t, b, "events.md", "conflicting line from b\n")
-	if _, err := At(b).Commit("b edit"); err != nil {
+	if _, err := NewStore(b).Commit("b edit"); err != nil {
 		t.Fatal(err)
 	}
 
-	rep := At(b).Sync()
+	rep := NewStore(b).Sync()
 	if !rep.Conflict {
 		t.Fatalf("expected conflict report, got %+v", rep)
 	}
@@ -264,35 +264,35 @@ func TestSyncReportsConflictAndAborts(t *testing.T) {
 
 func TestLeaseCASPreventsRaces(t *testing.T) {
 	a, b := twoClones(t)
-	shaA, err := At(a).WriteLease("instance-a", time.Now(), "")
+	shaA, err := NewStore(a).WriteLease("instance-a", time.Now(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// b races with a stale expectation ("no lease exists"): must lose.
-	if _, err := At(b).WriteLease("instance-b", time.Now(), ""); err == nil {
+	if _, err := NewStore(b).WriteLease("instance-b", time.Now(), ""); err == nil {
 		t.Fatal("CAS should reject a write against a stale expectation")
 	}
 	// b reads the truth and takes over against the correct token: must win.
-	lease, err := At(b).ReadLease()
+	lease, err := NewStore(b).ReadLease()
 	if err != nil || lease == nil || lease.Holder != "instance-a" || lease.SHA != shaA {
 		t.Fatalf("unexpected lease read: %+v err=%v", lease, err)
 	}
-	if _, err := At(b).WriteLease("instance-b", time.Now(), lease.SHA); err != nil {
+	if _, err := NewStore(b).WriteLease("instance-b", time.Now(), lease.SHA); err != nil {
 		t.Fatalf("CAS with correct token should succeed: %v", err)
 	}
-	if lease, _ = At(a).ReadLease(); lease == nil || lease.Holder != "instance-b" {
+	if lease, _ = NewStore(a).ReadLease(); lease == nil || lease.Holder != "instance-b" {
 		t.Fatalf("takeover not visible: %+v", lease)
 	}
 	// Release is ownership-checked: the stale instance a (whose last-written
 	// SHA has been superseded by b's takeover) must NOT delete b's live lease.
-	At(a).ReleaseLease(shaA)
-	current, _ := At(a).ReadLease()
+	NewStore(a).ReleaseLease(shaA)
+	current, _ := NewStore(a).ReadLease()
 	if current == nil || current.Holder != "instance-b" {
 		t.Fatalf("stale release deleted the live lease: %+v", current)
 	}
 	// The rightful holder releases with its own SHA: lease gone.
-	At(b).ReleaseLease(current.SHA)
-	if lease, _ = At(b).ReadLease(); lease != nil {
+	NewStore(b).ReleaseLease(current.SHA)
+	if lease, _ = NewStore(b).ReadLease(); lease != nil {
 		t.Fatalf("owned release should remove the lease: %+v", lease)
 	}
 }
@@ -300,10 +300,10 @@ func TestLeaseCASPreventsRaces(t *testing.T) {
 func TestLeasePreservesSubsecondHeartbeats(t *testing.T) {
 	a, b := twoClones(t)
 	now := time.Now().Truncate(time.Second).Add(375 * time.Millisecond)
-	if _, err := At(a).WriteLease("instance-a", now, ""); err != nil {
+	if _, err := NewStore(a).WriteLease("instance-a", now, ""); err != nil {
 		t.Fatal(err)
 	}
-	lease, err := At(b).ReadLease()
+	lease, err := NewStore(b).ReadLease()
 	if err != nil {
 		t.Fatal(err)
 	}

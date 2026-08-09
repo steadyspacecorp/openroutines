@@ -33,18 +33,18 @@ func cmdSync(args []string) int {
 	// likely to be reaching for sync. Ensure materializes it the way the
 	// supervisor does at boot, refusing a tip that doesn't descend from the
 	// accepted baseline.
-	mem := knowledge.At(".")
-	materialized := !mem.Status().Materialized
-	if err := mem.Ensure(); err != nil {
+	store := knowledge.NewStore(".")
+	materialized := !store.Status().Materialized
+	if err := store.Ensure(); err != nil {
 		return fail(err)
 	}
 	if materialized {
 		fmt.Printf("materialized knowledge/ from the %s branch\n", knowledge.Branch)
 	}
 
-	behind := mem.Status().Behind // counted before the sync, while still true
+	behind := store.Status().Behind // counted before the sync, while still true
 
-	rep := mem.Sync()
+	rep := store.Sync()
 	switch {
 	case rep.NoOrigin:
 		fmt.Println("no origin -- knowledge is local only, nothing to reconcile")
@@ -55,10 +55,10 @@ func cmdSync(args []string) int {
 	case rep.Unreachable:
 		return fail(fmt.Errorf("origin unreachable: %s", rep.Detail))
 	case rep.Rewritten: // the refusal text already explains the repair
-		reportStranded(mem)
+		reportStranded(store)
 		return fail(fmt.Errorf("%s", rep.Detail))
 	case rep.Conflict:
-		reportStranded(mem)
+		reportStranded(store)
 		return fail(fmt.Errorf("knowledge does not reconcile cleanly: %s\n\nresolve inside knowledge/, commit, then rerun openroutines sync", rep.Detail))
 	case rep.Detail != "":
 		return fail(fmt.Errorf("%s", rep.Detail))
@@ -74,7 +74,7 @@ func cmdSync(args []string) int {
 		fmt.Printf("knowledge is up to date with origin/%s\n", knowledge.Branch)
 	}
 
-	st := mem.Status()
+	st := store.Status()
 	if st.Uncommitted > 0 {
 		fmt.Printf("  ! %d file(s) with uncommitted changes in knowledge/ -- commit them before they can be published\n", st.Uncommitted)
 	}
@@ -85,7 +85,7 @@ func cmdSync(args []string) int {
 		fmt.Printf("  %d local commit(s) not on origin -- openroutines sync --push to publish\n", st.Unpushed)
 		return 0
 	}
-	if err := mem.Push(); err != nil {
+	if err := store.Push(); err != nil {
 		return fail(fmt.Errorf("publishing knowledge: %w", err))
 	}
 	fmt.Printf("  published %d commit(s) to origin/%s\n", st.Unpushed, knowledge.Branch)
@@ -96,8 +96,8 @@ func cmdSync(args []string) int {
 // sync was blocked -- typically carrying the blocker task that explains the
 // refusal, since the block that stops sync also stops the runs that would
 // otherwise report it.
-func reportStranded(mem *knowledge.Store) {
-	snap := mem.Blocked()
+func reportStranded(store *knowledge.Store) {
+	snap := store.Blocked()
 	if snap.Tip == "" {
 		return
 	}

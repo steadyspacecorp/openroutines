@@ -80,7 +80,7 @@ func cmdStatus(args []string) int {
 	}
 
 	now := time.Now().In(loc)
-	stateDir := knowledge.At(dir).StateDir()
+	stateDir := knowledge.NewStore(dir).StateDir()
 	settled := settledAttempts(dir)
 	routines, parseErrs := routine.LoadAgent(dir)
 	fmt.Printf("\n%s\n", bold(fmt.Sprintf("routines (%d):", len(routines))))
@@ -116,7 +116,7 @@ func cmdStatus(args []string) int {
 	// These numbers are only as current as the last fetch; call that out here
 	// too since the knowledge section's own warning is screens away by now.
 	if reported {
-		if ms := knowledge.At(dir).Status(); ms.Behind > 0 {
+		if ms := knowledge.NewStore(dir).Status(); ms.Behind > 0 {
 			fmt.Printf("  %s scheduling state above is from knowledge %d commit(s) behind origin/%s -- run openroutines sync\n", warnMark, ms.Behind, knowledge.Branch)
 		}
 	}
@@ -134,8 +134,8 @@ func cmdStatus(args []string) int {
 	}
 
 	fmt.Printf("\n%s\n", bold("knowledge:"))
-	mem := knowledge.At(dir)
-	ms := mem.Status()
+	store := knowledge.NewStore(dir)
+	ms := store.Status()
 	if !ms.Materialized {
 		if ms.RemoteKnowledge {
 			fmt.Printf("  %s not materialized in this checkout -- origin has the agent's knowledge; run openroutines sync to adopt it\n", warnMark)
@@ -153,12 +153,12 @@ func cmdStatus(args []string) int {
 		if ms.Behind > 0 {
 			fmt.Printf("  %s %d commit(s) behind origin/%s -- this checkout is reading old knowledge; run openroutines sync to get the latest from origin\n", warnMark, ms.Behind, knowledge.Branch)
 		}
-		if cursors, err := mem.Cursors(); err == nil && len(cursors) > 0 {
-			head, _ := mem.Head()
+		if cursors, err := store.Cursors(); err == nil && len(cursors) > 0 {
+			head, _ := store.Head()
 			for name, c := range cursors {
 				lag := ""
 				if head != "" && !strings.HasPrefix(head, c.ConsumedThrough) && head != c.ConsumedThrough {
-					changes, err := mem.Changes(c.ConsumedThrough, head)
+					changes, err := store.Changes(c.ConsumedThrough, head)
 					switch {
 					// Silence here would read as caught up; a stuck consumer's
 					// runs are abandoned on sight until a person repairs the file.
@@ -172,7 +172,7 @@ func cmdStatus(args []string) int {
 			}
 		}
 	}
-	if !mem.HasOrigin() {
+	if !store.HasOrigin() {
 		fmt.Printf("  %s no git origin -- knowledge is not durable until one is set\n", warnMark)
 	}
 
@@ -239,7 +239,7 @@ func attemptKey(runID string, attempt int) string {
 // settlement, so a reserved attempt missing from it is still running. Nil
 // when there's no log at all -- absence must not read as "in flight".
 func settledAttempts(dir string) map[string]bool {
-	raw, err := os.ReadFile(filepath.Join(knowledge.At(dir).Worktree(), "runs.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(knowledge.NewStore(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
 		return nil
 	}

@@ -29,7 +29,7 @@ type Settlement struct {
 // failure description. A Canceled attempt gets only its run record and no
 // commit of its own -- the same logical run retries.
 func Settle(dir string, r *routine.Routine, staging *AttemptWorkspace, res *AttemptResult, meta Attempt, detail string, stage func(*Settlement)) (*Settlement, error) {
-	mem := knowledge.At(dir)
+	store := knowledge.NewStore(dir)
 	s := &Settlement{Outcome: res.Outcome, Detail: detail}
 	if res.Outcome == Completed {
 		discarded, conflicted, err := importKnowledge(dir, r, staging)
@@ -48,7 +48,7 @@ func Settle(dir string, r *routine.Routine, staging *AttemptWorkspace, res *Atte
 		}
 	}
 	if s.Outcome != Completed && s.Outcome != Canceled {
-		if err := mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.ID(), s.Detail)); err != nil {
+		if err := store.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.ID(), s.Detail)); err != nil {
 			r.Log().Warn("could not record the failure event -- this log line is the only copy", "run_id", meta.RunID, "error", err)
 		}
 	}
@@ -57,13 +57,13 @@ func Settle(dir string, r *routine.Routine, staging *AttemptWorkspace, res *Atte
 	}
 	rec := *res
 	rec.Outcome = s.Outcome
-	if err := mem.AppendRunRecord(recordJSON(r, meta, &rec)); err != nil {
+	if err := store.AppendRunRecord(recordJSON(r, meta, &rec)); err != nil {
 		return s, err
 	}
 	if s.Outcome == Canceled {
 		return s, nil
 	}
-	commit, err := mem.Commit(fmt.Sprintf("Run %s (%s): %s", r.Name, meta.RunID, s.Outcome))
+	commit, err := store.Commit(fmt.Sprintf("Run %s (%s): %s", r.Name, meta.RunID, s.Outcome))
 	if err != nil {
 		return s, err
 	}
@@ -75,13 +75,13 @@ func Settle(dir string, r *routine.Routine, staging *AttemptWorkspace, res *Atte
 // teamwork: off discards a staged events.md change, the rest imports
 // normally. Reports whether such a change was discarded.
 func importKnowledge(dir string, r *routine.Routine, staging *AttemptWorkspace) (discarded bool, conflicted []knowledge.Conflict, err error) {
-	mem := knowledge.At(dir)
+	store := knowledge.NewStore(dir)
 	if !r.FM.RecordsEvents() {
 		if discarded, err = knowledge.RestoreFile(staging.KnowledgeDir, staging.BaseDir, "events.md"); err != nil {
 			return false, nil, err
 		}
 	}
-	conflicted, err = mem.Import(staging.KnowledgeDir, staging.BaseDir)
+	conflicted, err = store.Import(staging.KnowledgeDir, staging.BaseDir)
 	return discarded, conflicted, err
 }
 
@@ -89,12 +89,12 @@ func importKnowledge(dir string, r *routine.Routine, staging *AttemptWorkspace) 
 // current commit and renders the change set since the routine's cursor into
 // the workspace. No cursor means first run: nothing to replay.
 func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
-	mem := knowledge.At(dir)
-	through, err := mem.Head()
+	store := knowledge.NewStore(dir)
+	through, err := store.Head()
 	if err != nil {
 		return "", false, err
 	}
-	cursor, err := mem.LoadCursor(consumer)
+	cursor, err := store.LoadCursor(consumer)
 	if err != nil {
 		return "", false, err
 	}
@@ -103,7 +103,7 @@ func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
 	var changes []knowledge.CommitChange
 	if cursor != nil {
 		from = cursor.ConsumedThrough
-		if changes, err = mem.Changes(from, through); err != nil {
+		if changes, err = store.Changes(from, through); err != nil {
 			if errors.Is(err, knowledge.ErrCursorUnreachable) {
 				return "", false, fmt.Errorf("%w: %w -- repair or delete %s on the knowledge branch", ErrFatal, err, knowledge.CursorFile(consumer))
 			}
@@ -122,7 +122,7 @@ func advanceConsumer(dir string, r *routine.Routine, staging *AttemptWorkspace, 
 	if !r.FM.Reports || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
 		return
 	}
-	if err := knowledge.At(dir).SaveCursor(r.Name, knowledge.Cursor{
+	if err := knowledge.NewStore(dir).SaveCursor(r.Name, knowledge.Cursor{
 		ConsumedThrough: staging.ConsumerThrough,
 		ByRun:           runID,
 		At:              time.Now().UTC(),

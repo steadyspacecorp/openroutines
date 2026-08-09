@@ -96,7 +96,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Attempt, mu
 			secrets.release()
 		}
 	}()
-	mem := knowledge.At(dir)
+	store := knowledge.NewStore(dir)
 
 	workspace, err := os.MkdirTemp("", "openroutines-run-*")
 	if err != nil {
@@ -127,10 +127,10 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Attempt, mu
 	if err := func() error {
 		mu.Lock()
 		defer mu.Unlock()
-		if err := mem.Ensure(); err != nil {
+		if err := store.Ensure(); err != nil {
 			return err
 		}
-		if err := mem.Snapshot(staging.BaseDir); err != nil {
+		if err := store.Snapshot(staging.BaseDir); err != nil {
 			return err
 		}
 		if err := knowledge.CloneTree(staging.BaseDir, staging.KnowledgeDir); err != nil {
