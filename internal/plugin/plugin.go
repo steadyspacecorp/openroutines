@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -19,7 +18,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/frontmatter"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
@@ -107,203 +105,20 @@ var forbidden = map[string]string{
 // already present in the installing agent, for consistency checking. The
 // returned error aggregates every problem found -- nothing is partially ok.
 func Load(dir string, agentSkills map[string]bool) (*Plugin, error) {
-	name, body, err := parseManifestFile(filepath.Join(dir, FileName))
+	manifest, body, err := parseManifestFile(filepath.Join(dir, FileName))
 	if err != nil {
 		return nil, err
 	}
-	p := &Plugin{Manifest: *name, Body: body, Dir: dir}
-
-	var problems []string
-	badf := func(format string, args ...any) {
-		problems = append(problems, fmt.Sprintf(format, args...))
-	}
-
-	if !skill.NamePattern.MatchString(p.Manifest.Name) {
-		badf("plugin name %q must be a bare lowercase-hyphen name (steady, github-docs)", p.Manifest.Name)
-	}
-	if strings.TrimSpace(p.Manifest.Description) == "" {
-		badf("PLUGIN.md frontmatter needs a description")
-	}
-	for _, cname := range slices.Sorted(maps.Keys(p.Manifest.Credentials)) {
-		c := p.Manifest.Credentials[cname]
-		switch {
-		case !creds.NamePattern.MatchString(cname):
-			badf("credential name %q must be lowercase snake_case", cname)
-		case strings.HasPrefix(cname, creds.ReservedPrefix):
-			badf("credential name %q collides with the reserved %s_* prefix", cname, strings.ToUpper(creds.ReservedPrefix))
-		case creds.ReservedEnvName(cname):
-			badf("credential name %q would shadow the %s environment variable in the run", cname, strings.ToUpper(cname))
-		}
-		if strings.TrimSpace(c.Description) == "" {
-			badf("credential %q needs a description -- someone has to know what to fill in", cname)
-		}
-		if c.Type != "" && !creds.KnownType(c.Type) {
-			badf("credential %q has unknown type %q (supported: %s)", cname, c.Type, strings.Join(creds.DerivedTypes, ", "))
-		}
-	}
-	for _, vname := range slices.Sorted(maps.Keys(p.Manifest.Variables)) {
-		_, collidesWithCredential := p.Manifest.Credentials[vname]
-		switch {
-		case !creds.NamePattern.MatchString(vname):
-			badf("variable name %q must be lowercase snake_case", vname)
-		case strings.HasPrefix(vname, creds.ReservedPrefix):
-			badf("variable name %q collides with the reserved %s_* prefix", vname, strings.ToUpper(creds.ReservedPrefix))
-		case creds.ReservedEnvName(vname):
-			badf("variable name %q would shadow the %s environment variable in the run", vname, strings.ToUpper(vname))
-		case collidesWithCredential:
-			badf("variable %q collides with a credential declared by the plugin", vname)
-		}
-		if strings.TrimSpace(p.Manifest.Variables[vname].Description) == "" {
-			badf("variable %q needs a description", vname)
-		}
-	}
-	for _, mname := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
-		m := p.Manifest.MCP[mname]
-		// Server names become opencode tool prefixes ("<name>_*") and land
-		// in a person's opencode.json -- same grammar as credentials.
-		if !creds.NamePattern.MatchString(mname) {
-			badf("mcp server name %q must be lowercase snake_case", mname)
-		}
-		if strings.TrimSpace(m.Description) == "" {
-			badf("mcp server %q needs a description -- someone has to know what they are connecting", mname)
-		}
-		if strings.TrimSpace(m.URL) == "" {
-			badf("mcp server %q needs a url -- the declaration is what the person reviews and pastes into opencode.json", mname)
-		}
-		if m.Credential != "" {
-			if _, declared := p.Manifest.Credentials[m.Credential]; !declared {
-				badf("mcp server %q names credential %q, missing from the PLUGIN.md credentials block", mname, m.Credential)
-			}
-		}
-	}
-
-	// Walk the whole payload: everything must be classifiable, and violation
-	// is refusal. Symlinks and other irregular files are refused everywhere.
-	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, werr error) error {
-		if werr != nil {
-			return werr
-		}
-		rel, _ := filepath.Rel(dir, path)
-		if rel == "." {
-			return nil
-		}
-		if rel == ".git" || rel == ".github" {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Name() == ".git" {
-			badf("%s: nested .git metadata is refused", rel)
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !d.IsDir() && !d.Type().IsRegular() {
-			badf("%s: not a regular file -- symlinks and devices are refused", rel)
-			return nil
-		}
-		if reason, bad := forbidden[rel]; bad {
-			badf("%s: refused -- %s", rel, reason)
-			return nil
-		}
-		switch {
-		case rel == FileName || benignRoot[rel]:
-		case rel == "routines" || rel == "skills" || rel == "knowledge" || rel == filepath.Join("knowledge", "ledgers"):
-		case strings.HasPrefix(rel, "routines"+string(filepath.Separator)):
-			if d.IsDir() {
-				badf("%s: routines/ holds flat markdown files only", rel)
-				return filepath.SkipDir
-			}
-			base := strings.TrimSuffix(d.Name(), ".md")
-			if !strings.HasSuffix(d.Name(), ".md") || !routine.NamePattern.MatchString(base) {
-				badf("%s: routine files are <name>.md with a lowercase name", rel)
-			}
-		case strings.HasPrefix(rel, "skills"+string(filepath.Separator)):
-			parts := strings.Split(rel, string(filepath.Separator))
-			if !skill.NamePattern.MatchString(parts[1]) {
-				badf("skills/%s: not a valid Agent Skills directory name", parts[1])
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-			}
-		case strings.HasPrefix(rel, filepath.Join("knowledge", "ledgers")+string(filepath.Separator)):
-			base := strings.TrimSuffix(d.Name(), ".md")
-			if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") || !routine.NamePattern.MatchString(base) {
-				badf("%s: ledger stubs are flat knowledge/ledgers/<routine>.md files", rel)
-			} else {
-				p.Stubs = append(p.Stubs, rel)
-			}
-		case strings.HasPrefix(rel, "knowledge"+string(filepath.Separator)):
-			badf("%s: plugins may seed only knowledge/ledgers/ stubs, never shared knowledge files", rel)
-		default:
-			badf("%s: not part of a plugin -- the payload is allow-listed (PLUGIN.md, routines/, skills/, knowledge/ledgers/)", rel)
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	p := &Plugin{Manifest: *manifest, Body: body, Dir: dir}
+	validator := pluginValidator{plugin: p, agentSkills: agentSkills}
+	validator.validateManifest()
+	if err := validator.validatePayload(); err != nil {
 		return nil, err
 	}
-
-	routines, parseErrs := routine.LoadDir(filepath.Join(dir, "routines"))
-	p.Routines = routines
-	for _, e := range parseErrs {
-		// Every other finding names the file relative to the payload; a load
-		// error carries an absolute path into the clone, which says nothing
-		// to the person reviewing the plugin.
-		var re *routine.Error
-		if errors.As(e, &re) && re.Path != "" {
-			rel, relErr := filepath.Rel(dir, re.Path)
-			if relErr == nil {
-				badf("%s: %v", rel, re.Err)
-				continue
-			}
-		}
-		badf("%v", e)
-	}
-	skills, skillErrs := skill.List(filepath.Join(dir, "skills"))
-	p.Skills = skills
-	for _, e := range skillErrs {
-		badf("%v", e)
-	}
-
-	if len(p.Routines) == 0 && len(p.Skills) == 0 && len(p.Stubs) == 0 {
-		badf("nothing to install: a plugin bundles at least one routine, skill, or ledger stub")
-	}
-
-	// Internal consistency: no dangling grants, and the manifest tells the
-	// whole credential story the grant summary will print.
-	shipped := map[string]bool{}
-	for _, s := range p.Skills {
-		shipped[s.Name] = true
-	}
-	for _, r := range p.Routines {
-		for _, sk := range r.FM.Skills {
-			if !shipped[sk] && !agentSkills[sk] {
-				badf("routine %s declares skill %q, which neither the plugin nor the agent has", r.Name, sk)
-			}
-		}
-		for _, c := range r.FM.Credentials {
-			if _, declared := p.Manifest.Credentials[c]; !declared {
-				badf("routine %s declares credential %q, missing from the PLUGIN.md credentials block", r.Name, c)
-			}
-		}
-		// Strict like credentials, not lenient like skills: the manifest
-		// tells the whole story the grant summary prints, so a grant on an
-		// agent-defined server still needs the plugin's own declaration.
-		for _, m := range r.FM.MCP {
-			if _, declared := p.Manifest.MCP[m]; !declared {
-				badf("routine %s grants mcp server %q, missing from the PLUGIN.md mcp block", r.Name, m)
-			}
-		}
-	}
-
-	if len(problems) != 0 {
-		return nil, errors.New("invalid plugin:\n  " + strings.Join(problems, "\n  "))
+	validator.loadContents()
+	validator.validateContents()
+	if err := validator.err(); err != nil {
+		return nil, err
 	}
 	return p, nil
 }
