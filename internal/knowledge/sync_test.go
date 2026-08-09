@@ -296,3 +296,22 @@ func TestLeaseCASPreventsRaces(t *testing.T) {
 		t.Fatalf("owned release should remove the lease: %+v", lease)
 	}
 }
+
+func TestLeasePreservesSubsecondHeartbeats(t *testing.T) {
+	a, b := twoClones(t)
+	now := time.Now().Truncate(time.Second).Add(375 * time.Millisecond)
+	if _, err := At(a).WriteLease("instance-a", now, ""); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := At(b).ReadLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lease.At.Equal(now) {
+		t.Fatalf("heartbeat read as %s, want %s", lease.At, now)
+	}
+	legacy, err := parseLeaseTime("1723165200")
+	if err != nil || !legacy.Equal(time.Unix(1723165200, 0)) {
+		t.Fatalf("legacy heartbeat parsed as %s: %v", legacy, err)
+	}
+}
