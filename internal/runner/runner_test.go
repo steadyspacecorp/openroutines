@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -619,6 +620,38 @@ func TestCopyDeclaredSkillsRejectsTraversal(t *testing.T) {
 	for _, bad := range []string{"../victim", "../../x", "/abs", "a/b", ".."} {
 		if err := copyDeclaredSkills(filepath.Join(dir, "agent"), t.TempDir(), []string{bad}); err == nil {
 			t.Errorf("skill name %q should be rejected", bad)
+		}
+	}
+}
+
+func TestCopyDeclaredSkillsPreservesExecutableFiles(t *testing.T) {
+	agent := t.TempDir()
+	skillDir := filepath.Join(agent, "skills", "demo")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, mode := range map[string]fs.FileMode{
+		"SKILL.md": 0o644,
+		"run.sh":   0o755,
+	} {
+		if err := os.WriteFile(filepath.Join(skillDir, path), []byte("---\nname: demo\ndescription: demo\n---\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workspace := t.TempDir()
+	if err := copyDeclaredSkills(agent, workspace, []string{"demo"}); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]fs.FileMode{
+		"SKILL.md": 0o644,
+		"run.sh":   0o755,
+	} {
+		info, err := os.Stat(filepath.Join(workspace, ".opencode", "skills", "demo", path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %o, want %o", path, got, want)
 		}
 	}
 }
