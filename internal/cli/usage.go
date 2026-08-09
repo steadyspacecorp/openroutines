@@ -70,7 +70,7 @@ func cmdUsage(args []string) int {
 	if len(rows) == 0 {
 		// A fresh clone of a running agent also reads as "no runs", but the
 		// records exist on origin and won't materialize locally on their own.
-		if st := knowledge.At(".").Status(); !st.Materialized && st.RemoteKnowledge {
+		if st := knowledge.NewStore(".").Status(); !st.Materialized && st.RemoteKnowledge {
 			fmt.Println("knowledge is not materialized in this checkout -- run openroutines sync to adopt the agent's records from origin")
 		} else {
 			fmt.Println("no runs recorded yet -- records accumulate as routines run")
@@ -110,7 +110,7 @@ func retentionLabel(dir string) string {
 // Names the gap between what this checkout has and what origin holds, so a
 // stale worktree doesn't read as a quiet zero.
 func printKnowledgeLag(dir string) {
-	if st := knowledge.At(dir).Status(); st.Behind > 0 {
+	if st := knowledge.NewStore(dir).Status(); st.Behind > 0 {
 		fmt.Printf("\n%s these numbers read local knowledge/, %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to count the latest runs\n", warnMark, st.Behind, knowledge.Branch)
 	}
 }
@@ -120,7 +120,7 @@ func printKnowledgeLag(dir string) {
 // that carry a tokens object -- older releases, native dev runs, and
 // unreported usage count as runs without contributing sums.
 func aggregateUsage(dir string) []usageRow {
-	raw, err := os.ReadFile(filepath.Join(knowledge.At(dir).Worktree(), "runs.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(knowledge.NewStore(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
 		return nil
 	}

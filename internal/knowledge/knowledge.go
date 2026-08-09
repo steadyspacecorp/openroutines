@@ -43,9 +43,9 @@ type Store struct {
 	repoDir string
 }
 
-// At binds the agent repository at repoDir. No I/O: the worktree may not be
+// NewStore binds the agent repository at repoDir. No I/O: the worktree may not be
 // materialized yet (Status reports that; Ensure fixes it).
-func At(repoDir string) *Store { return &Store{repoDir: repoDir} }
+func NewStore(repoDir string) *Store { return &Store{repoDir: repoDir} }
 
 // primitives are the framework-blessed shared knowledge files, seeded on init.
 // Each opens with a fenced example of its format: the file teaches its own

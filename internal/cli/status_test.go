@@ -45,7 +45,7 @@ func statusAgent(t *testing.T, routines map[string]string) string {
 // saveState writes what the supervisor would have written for a routine.
 func saveState(t *testing.T, dir string, st *schedule.State) {
 	t.Helper()
-	if err := st.Save(knowledge.At(dir).StateDir()); err != nil {
+	if err := st.Save(knowledge.NewStore(dir).StateDir()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -53,7 +53,7 @@ func saveState(t *testing.T, dir string, st *schedule.State) {
 // writeRunLog writes the settlement records the supervisor would have appended.
 func writeRunLog(t *testing.T, dir string, lines ...string) {
 	t.Helper()
-	path := filepath.Join(knowledge.At(dir).Worktree(), "runs.jsonl")
+	path := filepath.Join(knowledge.NewStore(dir).Worktree(), "runs.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

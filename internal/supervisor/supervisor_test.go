@@ -195,7 +195,7 @@ func fixtureIn(t *testing.T, mode, tz, name, spec string) string {
 
 func newSupervisor(t *testing.T, dir string) *Supervisor {
 	t.Helper()
-	if err := knowledge.At(dir).Ensure(); err != nil {
+	if err := knowledge.NewStore(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	s, err := New(dir)
@@ -215,14 +215,14 @@ func newSupervisor(t *testing.T, dir string) *Supervisor {
 func usurpLease(t *testing.T, s *Supervisor) (stop func()) {
 	t.Helper()
 	take := func() error {
-		lease, err := s.mem.ReadLease()
+		lease, err := s.store.ReadLease()
 		if err != nil {
 			return err
 		}
 		if lease == nil {
 			return fmt.Errorf("no lease to usurp")
 		}
-		_, err = s.mem.WriteLease("usurper", time.Now(), lease.SHA)
+		_, err = s.store.WriteLease("usurper", time.Now(), lease.SHA)
 		return err
 	}
 	var err error
@@ -797,7 +797,7 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	if !strings.Contains(changes, "first run") || !strings.Contains(changes, "No pending changes") {
 		t.Fatalf("first change set should be empty-at-current-state: %q", changes)
 	}
-	c1, err := knowledge.At(dir).LoadCursor("every-minute")
+	c1, err := knowledge.NewStore(dir).LoadCursor("every-minute")
 	if err != nil || c1 == nil {
 		t.Fatalf("cursor should exist after consume: %+v, %v", c1, err)
 	}
@@ -807,7 +807,7 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	if !strings.Contains(changes, "Run every-minute") {
 		t.Fatalf("second change set should carry run 1's completion commit: %q", changes)
 	}
-	c2, err := knowledge.At(dir).LoadCursor("every-minute")
+	c2, err := knowledge.NewStore(dir).LoadCursor("every-minute")
 	if err != nil || c2 == nil || c2.ConsumedThrough == c1.ConsumedThrough {
 		t.Fatalf("cursor should have advanced: %+v -> %+v, %v", c1, c2, err)
 	}
@@ -827,7 +827,7 @@ func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 
 	s.tickWait(ctx, t0) // register
-	if err := knowledge.At(dir).SaveCursor("every-minute", knowledge.Cursor{
+	if err := knowledge.NewStore(dir).SaveCursor("every-minute", knowledge.Cursor{
 		ConsumedThrough: "0123456789abcdef0123456789abcdef01234567",
 		ByRun:           "run_gone",
 	}); err != nil {
@@ -1422,7 +1422,7 @@ func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
 	if err := st.Save(s.stateDir()); err != nil {
 		t.Fatal(err)
 	}
-	if n := knowledge.At(dir).Status().Uncommitted; n == 0 {
+	if n := knowledge.NewStore(dir).Status().Uncommitted; n == 0 {
 		t.Fatal("precondition: the pending record should be uncommitted")
 	}
 

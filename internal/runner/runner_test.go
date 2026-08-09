@@ -482,7 +482,7 @@ func settleFixture(t *testing.T) string {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
-	if err := knowledge.At(dir).Ensure(); err != nil {
+	if err := knowledge.NewStore(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -493,8 +493,8 @@ func settleFixture(t *testing.T) string {
 // is another "first run" that skips forward and receives nothing forever.
 func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	dir := settleFixture(t)
-	mem := knowledge.At(dir)
-	through, err := mem.Head()
+	store := knowledge.NewStore(dir)
+	through, err := store.Head()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +506,7 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 			ConsumerThrough:  boundary,
 			ConsumerFirstRun: first,
 		}
-		if err := mem.Snapshot(s.BaseDir); err != nil {
+		if err := store.Snapshot(s.BaseDir); err != nil {
 			t.Fatal(err)
 		}
 		if err := knowledge.CloneTree(s.BaseDir, s.KnowledgeDir); err != nil {
@@ -518,21 +518,21 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	if _, err := Settle(dir, r, stage(true, through), &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_first", Number: 1}, "", nil); err != nil {
 		t.Fatal(err)
 	}
-	cursor, err := mem.LoadCursor(r.Name)
+	cursor, err := store.LoadCursor(r.Name)
 	if err != nil || cursor == nil || cursor.ConsumedThrough != through || cursor.ByRun != "run_first" {
 		t.Fatalf("bootstrap cursor = %+v, err = %v; want %s by run_first", cursor, err, through)
 	}
 
 	// Once initialized, successful completion alone must not consume real
 	// pending changes: the explicit marker remains the delivery receipt.
-	newBoundary, err := mem.Head()
+	newBoundary, err := store.Head()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Settle(dir, r, stage(false, newBoundary), &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_empty", Number: 1}, "", nil); err != nil {
 		t.Fatal(err)
 	}
-	cursor, err = mem.LoadCursor(r.Name)
+	cursor, err = store.LoadCursor(r.Name)
 	if err != nil || cursor.ConsumedThrough != through || cursor.ByRun != "run_first" {
 		t.Fatalf("cursor advanced without marker: %+v, err = %v", cursor, err)
 	}
@@ -573,9 +573,9 @@ func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
 // before the settlement commit (so its writes ride along), and commits.
 func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 	dir := settleFixture(t)
-	mem := knowledge.At(dir)
+	store := knowledge.NewStore(dir)
 	staging := &AttemptWorkspace{KnowledgeDir: t.TempDir()}
-	if err := mem.Snapshot(staging.KnowledgeDir); err != nil {
+	if err := store.Snapshot(staging.KnowledgeDir); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(staging.KnowledgeDir, "ledgers", "x.md"), []byte("worked\n"), 0o644)
@@ -584,7 +584,7 @@ func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{}}
 	settlement, err := Settle(dir, r, staging, &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_ok", Number: 1}, "", func(fin *Settlement) {
 		staged = fin.Outcome == Completed
-		os.WriteFile(filepath.Join(mem.StateDir(), "x.json"), []byte("{}\n"), 0o644)
+		os.WriteFile(filepath.Join(store.StateDir(), "x.json"), []byte("{}\n"), 0o644)
 	})
 	if err != nil {
 		t.Fatal(err)

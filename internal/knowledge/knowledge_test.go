@@ -185,16 +185,16 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 		}
 	}
 	run("git", "init", "-q", "-b", "main", ".")
-	if err := At(repo).Ensure(); err != nil {
+	if err := NewStore(repo).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	staging := t.TempDir()
 	os.WriteFile(filepath.Join(staging, "events.md"), []byte("- staged fact\n"), 0o644)
 
 	// A human edit, uncommitted: refuse.
-	wt := At(repo).Worktree()
+	wt := NewStore(repo).Worktree()
 	os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("- [ ] mid-edit\n"), 0o644)
-	if _, err := At(repo).Import(staging, t.TempDir()); err == nil || !strings.Contains(err.Error(), "uncommitted") {
+	if _, err := NewStore(repo).Import(staging, t.TempDir()); err == nil || !strings.Contains(err.Error(), "uncommitted") {
 		t.Fatalf("expected dirty-worktree refusal, got %v", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(wt, "tasks.md")); string(got) != "- [ ] mid-edit\n" {
@@ -202,15 +202,15 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 	}
 
 	// Committed: import proceeds.
-	if _, err := At(repo).Commit("human curation"); err != nil {
+	if _, err := NewStore(repo).Commit("human curation"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := At(repo).Import(staging, t.TempDir()); err != nil {
+	if _, err := NewStore(repo).Import(staging, t.TempDir()); err != nil {
 		t.Fatalf("clean worktree should import: %v", err)
 	}
 
 	// The pipeline commits right after a successful import; mirror that.
-	if _, err := At(repo).Commit("import"); err != nil {
+	if _, err := NewStore(repo).Commit("import"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -218,7 +218,7 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 	os.MkdirAll(filepath.Join(wt, "state"), 0o755)
 	os.WriteFile(filepath.Join(wt, "state", "r.json"), []byte("{}"), 0o644)
 	os.WriteFile(filepath.Join(staging, "events.md"), []byte("- staged fact\n- another\n"), 0o644)
-	if _, err := At(repo).Import(staging, t.TempDir()); err != nil {
+	if _, err := NewStore(repo).Import(staging, t.TempDir()); err != nil {
 		t.Fatalf("supervisor-owned dirt must not block import: %v", err)
 	}
 }
@@ -272,8 +272,8 @@ func TestRestoreFileDiscardsStagedChange(t *testing.T) {
 // replays or skips a change set.
 func TestRemoveRoutineStateCoversAllSubtrees(t *testing.T) {
 	dir := t.TempDir()
-	mem := At(dir)
-	sd := mem.StateDir()
+	store := NewStore(dir)
+	sd := store.StateDir()
 	for _, p := range []string{
 		filepath.Join(sd, "x.json"),
 		filepath.Join(sd, "triggers", "x.json"),
@@ -285,7 +285,7 @@ func TestRemoveRoutineStateCoversAllSubtrees(t *testing.T) {
 		os.WriteFile(p, []byte("{}"), 0o644)
 	}
 
-	removed, err := mem.RemoveRoutineState("x")
+	removed, err := store.RemoveRoutineState("x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,10 +308,10 @@ func TestRemoveRoutineStateCoversAllSubtrees(t *testing.T) {
 	}
 
 	// Idempotent, and quiet when there is no state at all.
-	if removed, err := mem.RemoveRoutineState("x"); err != nil || len(removed) != 0 {
+	if removed, err := store.RemoveRoutineState("x"); err != nil || len(removed) != 0 {
 		t.Fatalf("second removal: %v, %v", removed, err)
 	}
-	if removed, err := At(t.TempDir()).RemoveRoutineState("x"); err != nil || removed != nil {
+	if removed, err := NewStore(t.TempDir()).RemoveRoutineState("x"); err != nil || removed != nil {
 		t.Fatalf("no state dir: %v, %v", removed, err)
 	}
 }
@@ -340,21 +340,21 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	run(a, "git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
 	run(a, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "main")
 	run(a, "git", "push", "-q", "origin", "main")
-	if err := At(a).Ensure(); err != nil {
+	if err := NewStore(a).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(a, "knowledge", "events.md"), []byte("generation one fact\n"), 0o644)
-	if _, err := At(a).Commit("Fact from generation one"); err != nil {
+	if _, err := NewStore(a).Commit("Fact from generation one"); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(a).Push(); err != nil {
+	if err := NewStore(a).Push(); err != nil {
 		t.Fatal(err)
 	}
 
 	// Generation 2: fresh clone (no local knowledge branch), must adopt.
 	b := filepath.Join(base, "b")
 	run(base, "git", "clone", "-q", bare, b)
-	if err := At(b).Ensure(); err != nil {
+	if err := NewStore(b).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	log := run(filepath.Join(b, "knowledge"), "git", "log", "--oneline")
@@ -381,7 +381,7 @@ func TestEnsureWarnsWhenOriginUnreachable(t *testing.T) {
 
 	logs := logtest.Capture(t)
 
-	if err := At(dir).Ensure(); err != nil {
+	if err := NewStore(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	logs.Expect("could not reach origin")
@@ -406,17 +406,17 @@ func TestSupervisorEntriesRedactSecrets(t *testing.T) {
 	}
 	registerDeployKey("-----BEGIN OPENSSH PRIVATE KEY-----\n" + deployKeyLine + "\n-----END OPENSSH PRIVATE KEY-----") // gitleaks:allow -- synthetic fixture
 
-	if err := At(dir).AppendEvent("2026-07-29 supervisor: push failed with key " + deployKeyLine + " and master key " + masterKey); err != nil {
+	if err := NewStore(dir).AppendEvent("2026-07-29 supervisor: push failed with key " + deployKeyLine + " and master key " + masterKey); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(dir).AppendHumanTask("task-20260729-1", "investigate: run failed with master key "+masterKey+" (source: supervisor; added 2026-07-29)"); err != nil {
+	if err := NewStore(dir).AppendHumanTask("task-20260729-1", "investigate: run failed with master key "+masterKey+" (source: supervisor; added 2026-07-29)"); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(dir).AppendRunRecord(`{"run_id":"run_x","hint":"push failed with key ` + deployKeyLine + ` and master key ` + masterKey + `"}`); err != nil {
+	if err := NewStore(dir).AppendRunRecord(`{"run_id":"run_x","hint":"push failed with key ` + deployKeyLine + ` and master key ` + masterKey + `"}`); err != nil {
 		t.Fatal(err)
 	}
 	for _, file := range []string{"events.md", "tasks.md", "runs.jsonl"} {
-		raw, err := os.ReadFile(filepath.Join(At(dir).Worktree(), file))
+		raw, err := os.ReadFile(filepath.Join(NewStore(dir).Worktree(), file))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -553,7 +553,7 @@ func TestOriginRewriteRequiresADeployKey(t *testing.T) {
 // (design decision "Overlap: kernel locks, skip-don't-queue").
 func TestImportThreeWayMerge(t *testing.T) {
 	repo := t.TempDir()
-	wt := At(repo).Worktree()
+	wt := NewStore(repo).Worktree()
 	os.MkdirAll(wt, 0o755)
 	staging, base := t.TempDir(), t.TempDir()
 	write := func(dir, name, content string) {
@@ -589,7 +589,7 @@ func TestImportThreeWayMerge(t *testing.T) {
 	write(base, "contested.md", "old\n")
 	write(wt, "contested.md", "old\n- news\n")
 
-	conflicted, err := At(repo).Import(staging, base)
+	conflicted, err := NewStore(repo).Import(staging, base)
 	if err != nil {
 		t.Fatal(err)
 	}

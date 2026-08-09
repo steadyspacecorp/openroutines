@@ -20,7 +20,7 @@ func deliveryFixture(t *testing.T) string {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
-	if err := At(dir).Ensure(); err != nil {
+	if err := NewStore(dir).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -28,7 +28,7 @@ func deliveryFixture(t *testing.T) string {
 
 func appendKnowledge(t *testing.T, dir, file, line string) {
 	t.Helper()
-	p := filepath.Join(At(dir).Worktree(), file)
+	p := filepath.Join(NewStore(dir).Worktree(), file)
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -41,13 +41,13 @@ func appendKnowledge(t *testing.T, dir, file, line string) {
 
 func TestChangesWalksCommitByCommit(t *testing.T) {
 	dir := deliveryFixture(t)
-	from, err := At(dir).Head()
+	from, err := NewStore(dir).Head()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: opened PR #1")
-	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
+	if _, err := NewStore(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 a11y-sweep NO-OP: all clean")
@@ -55,15 +55,15 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 	// Ledger and supervisor-owned writes must never reach a consumer.
 	appendKnowledge(t, dir, "ledgers/doc-drift.md", "- private cursor note")
 	appendKnowledge(t, dir, "runs.jsonl", `{"run_id":"run_b"}`)
-	if _, err := At(dir).Commit("Run a11y-sweep (run_b): completed"); err != nil {
+	if _, err := NewStore(dir).Commit("Run a11y-sweep (run_b): completed"); err != nil {
 		t.Fatal(err)
 	}
 
-	through, err := At(dir).Head()
+	through, err := NewStore(dir).Head()
 	if err != nil {
 		t.Fatal(err)
 	}
-	changes, err := At(dir).Changes(from, through)
+	changes, err := NewStore(dir).Changes(from, through)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,15 +96,15 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 func trimFixture(t *testing.T, dir string) string {
 	t.Helper()
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
-	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
+	if _, err := NewStore(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
-	added, _ := At(dir).Head()
+	added, _ := NewStore(dir).Head()
 	// Age the whole worktree past the window rather than backdating commits.
-	if changed, err := At(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
+	if changed, err := NewStore(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
 		t.Fatalf("trim: changed=%v err=%v", changed, err)
 	}
-	if _, err := At(dir).CommitTrim(30 * 24 * time.Hour); err != nil {
+	if _, err := NewStore(dir).CommitTrim(30 * 24 * time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	return added
@@ -115,11 +115,11 @@ func trimFixture(t *testing.T, dir string) string {
 // endpoint diff.
 func TestChangesSurvivePruning(t *testing.T) {
 	dir := deliveryFixture(t)
-	from, _ := At(dir).Head()
+	from, _ := NewStore(dir).Head()
 	trimFixture(t, dir)
 
-	through, _ := At(dir).Head()
-	changes, err := At(dir).Changes(from, through)
+	through, _ := NewStore(dir).Head()
+	changes, err := NewStore(dir).Changes(from, through)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,8 +141,8 @@ func TestRetentionTrimIsNotDelivered(t *testing.T) {
 	dir := deliveryFixture(t)
 	cursor := trimFixture(t, dir)
 
-	through, _ := At(dir).Head()
-	changes, err := At(dir).Changes(cursor, through)
+	through, _ := NewStore(dir).Head()
+	changes, err := NewStore(dir).Changes(cursor, through)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,25 +158,25 @@ func TestRetentionTrimIsNotDelivered(t *testing.T) {
 func TestTrimCommitLeavesUnrelatedWorkDeliverable(t *testing.T) {
 	dir := deliveryFixture(t)
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
-	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
+	if _, err := NewStore(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
-	cursor, _ := At(dir).Head()
+	cursor, _ := NewStore(dir).Head()
 
 	// Curation sitting in the worktree when the daily trim fires.
 	appendKnowledge(t, dir, "tasks.md", "- [ ] `task-20260721-1` hand-curated ask (source: a human; added 2026-07-21)")
-	if changed, err := At(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
+	if changed, err := NewStore(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
 		t.Fatalf("trim: changed=%v err=%v", changed, err)
 	}
-	if _, err := At(dir).CommitTrim(30 * 24 * time.Hour); err != nil {
+	if _, err := NewStore(dir).CommitTrim(30 * 24 * time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := At(dir).Commit("Run doc-drift (run_c): completed"); err != nil {
+	if _, err := NewStore(dir).Commit("Run doc-drift (run_c): completed"); err != nil {
 		t.Fatal(err)
 	}
 
-	through, _ := At(dir).Head()
-	changes, err := At(dir).Changes(cursor, through)
+	through, _ := NewStore(dir).Head()
+	changes, err := NewStore(dir).Changes(cursor, through)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,28 +196,28 @@ func TestTrimCommitLeavesUnrelatedWorkDeliverable(t *testing.T) {
 // the caller can tell it apart from an attempt worth repeating.
 func TestChangesRejectsUnreachableCursor(t *testing.T) {
 	dir := deliveryFixture(t)
-	through, _ := At(dir).Head()
+	through, _ := NewStore(dir).Head()
 
-	if _, err := At(dir).Changes("0123456789abcdef0123456789abcdef01234567", through); !errors.Is(err, ErrCursorUnreachable) {
+	if _, err := NewStore(dir).Changes("0123456789abcdef0123456789abcdef01234567", through); !errors.Is(err, ErrCursorUnreachable) {
 		t.Fatalf("a missing commit should report ErrCursorUnreachable, got %v", err)
 	}
 
 	// Present but off the branch: a repaired history leaves the old commit in
 	// the object store, where from..through would deliver the wrong set.
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: a fact")
-	if _, err := At(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
+	if _, err := NewStore(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
 	}
-	orphan, _ := At(dir).Head()
-	if _, err := git(At(dir).Worktree(), "reset", "--hard", "HEAD~1"); err != nil {
+	orphan, _ := NewStore(dir).Head()
+	if _, err := git(NewStore(dir).Worktree(), "reset", "--hard", "HEAD~1"); err != nil {
 		t.Fatal(err)
 	}
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: the repaired fact")
-	if _, err := At(dir).Commit("Run doc-drift (run_b): completed"); err != nil {
+	if _, err := NewStore(dir).Commit("Run doc-drift (run_b): completed"); err != nil {
 		t.Fatal(err)
 	}
-	through, _ = At(dir).Head()
-	if _, err := At(dir).Changes(orphan, through); !errors.Is(err, ErrCursorUnreachable) {
+	through, _ = NewStore(dir).Head()
+	if _, err := NewStore(dir).Changes(orphan, through); !errors.Is(err, ErrCursorUnreachable) {
 		t.Fatalf("an off-branch commit should report ErrCursorUnreachable, got %v", err)
 	}
 }
@@ -228,9 +228,9 @@ func TestChangesRejectsUnreachableCursor(t *testing.T) {
 // failure that abandons a run on its first try.
 func TestChangesKeepsEnvironmentFailuresRetryable(t *testing.T) {
 	dir := deliveryFixture(t)
-	head, _ := At(dir).Head()
+	head, _ := NewStore(dir).Head()
 
-	_, err := At(t.TempDir()).Changes(head, head)
+	_, err := NewStore(t.TempDir()).Changes(head, head)
 	if err == nil {
 		t.Fatal("a repository that is not there should fail")
 	}
@@ -244,7 +244,7 @@ func TestChangesKeepsEnvironmentFailuresRetryable(t *testing.T) {
 	restore, restoreGrace := gitTimeout, gitKillGrace
 	gitTimeout, gitKillGrace = time.Nanosecond, time.Millisecond
 	t.Cleanup(func() { gitTimeout, gitKillGrace = restore, restoreGrace })
-	_, err = At(dir).Changes(head, head)
+	_, err = NewStore(dir).Changes(head, head)
 	if err == nil {
 		t.Fatal("a git that cannot outrun its deadline should fail")
 	}
@@ -255,25 +255,25 @@ func TestChangesKeepsEnvironmentFailuresRetryable(t *testing.T) {
 
 func TestCursorRoundTripAndListing(t *testing.T) {
 	dir := deliveryFixture(t)
-	head, _ := At(dir).Head()
-	if c, err := At(dir).LoadCursor("check-in"); err != nil || c != nil {
+	head, _ := NewStore(dir).Head()
+	if c, err := NewStore(dir).LoadCursor("check-in"); err != nil || c != nil {
 		t.Fatalf("expected no cursor yet, got %+v, %v", c, err)
 	}
 	want := Cursor{ConsumedThrough: head, ByRun: "run_x", At: time.Now().UTC().Truncate(time.Second)}
-	if err := At(dir).SaveCursor("check-in", want); err != nil {
+	if err := NewStore(dir).SaveCursor("check-in", want); err != nil {
 		t.Fatal(err)
 	}
-	got, err := At(dir).LoadCursor("check-in")
+	got, err := NewStore(dir).LoadCursor("check-in")
 	if err != nil || got == nil || got.ConsumedThrough != head || got.ByRun != "run_x" {
 		t.Fatalf("cursor round trip failed: %+v, %v", got, err)
 	}
-	all, err := At(dir).Cursors()
+	all, err := NewStore(dir).Cursors()
 	if err != nil || len(all) != 1 {
 		t.Fatalf("cursor listing failed: %+v, %v", all, err)
 	}
 	// Cursors live under state/: supervisor-owned, never staged into a run.
 	staging := t.TempDir()
-	if err := At(dir).Snapshot(staging); err != nil {
+	if err := NewStore(dir).Snapshot(staging); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(staging, "state", "cursors", "check-in.json")); !os.IsNotExist(err) {
@@ -300,13 +300,13 @@ func TestRenderChangesShapes(t *testing.T) {
 
 func TestAppendHumanTaskSectionsAndDedup(t *testing.T) {
 	dir := deliveryFixture(t)
-	if err := At(dir).AppendHumanTask("task-run_a", "Investigate routine x (source: supervisor; added 2026-07-21)"); err != nil {
+	if err := NewStore(dir).AppendHumanTask("task-run_a", "Investigate routine x (source: supervisor; added 2026-07-21)"); err != nil {
 		t.Fatal(err)
 	}
-	if err := At(dir).AppendHumanTask("task-run_a", "Investigate routine x (source: supervisor; added 2026-07-21)"); err != nil {
+	if err := NewStore(dir).AppendHumanTask("task-run_a", "Investigate routine x (source: supervisor; added 2026-07-21)"); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := os.ReadFile(filepath.Join(At(dir).Worktree(), "tasks.md"))
+	raw, _ := os.ReadFile(filepath.Join(NewStore(dir).Worktree(), "tasks.md"))
 	text := string(raw)
 	if got := strings.Count(text, "task-run_a"); got != 1 {
 		t.Fatalf("expected exactly one task-run_a entry, got %d: %s", got, text)
@@ -323,15 +323,15 @@ func TestAppendHumanTaskSectionsAndDedup(t *testing.T) {
 func TestLoadCursorRejectsNonSHA(t *testing.T) {
 	dir := t.TempDir()
 	for _, bad := range []string{"--output=/tmp/evil", "HEAD", "refs/heads/main", "abc", ""} {
-		path := At(dir).cursorPath("c")
+		path := NewStore(dir).cursorPath("c")
 		os.MkdirAll(filepath.Dir(path), 0o755)
 		os.WriteFile(path, []byte(`{"consumed_through":"`+bad+`"}`), 0o644)
-		if _, err := At(dir).LoadCursor("c"); err == nil {
+		if _, err := NewStore(dir).LoadCursor("c"); err == nil {
 			t.Errorf("cursor value %q should be rejected", bad)
 		}
 	}
-	os.WriteFile(At(dir).cursorPath("c"), []byte(`{"consumed_through":"0123456789abcdef0123456789abcdef01234567"}`), 0o644)
-	if _, err := At(dir).LoadCursor("c"); err != nil {
+	os.WriteFile(NewStore(dir).cursorPath("c"), []byte(`{"consumed_through":"0123456789abcdef0123456789abcdef01234567"}`), 0o644)
+	if _, err := NewStore(dir).LoadCursor("c"); err != nil {
 		t.Fatalf("full SHA should load: %v", err)
 	}
 }
@@ -339,26 +339,26 @@ func TestLoadCursorRejectsNonSHA(t *testing.T) {
 func TestSupervisorEntriesFlattenAndResolve(t *testing.T) {
 	dir := deliveryFixture(t)
 	raw := "intent push failed: exit status 128: Permission denied (publickey).\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights"
-	if err := At(dir).AppendEvent("2026-07-24 supervisor: " + raw); err != nil {
+	if err := NewStore(dir).AppendEvent("2026-07-24 supervisor: " + raw); err != nil {
 		t.Fatal(err)
 	}
-	events, _ := os.ReadFile(filepath.Join(At(dir).Worktree(), "events.md"))
+	events, _ := os.ReadFile(filepath.Join(NewStore(dir).Worktree(), "events.md"))
 	if strings.Contains(string(events), "\nfatal:") {
 		t.Fatalf("multi-line error not flattened in events.md: %s", events)
 	}
-	if err := At(dir).AppendHumanTask("task-push-20260724", raw+" (source: supervisor; added 2026-07-24)"); err != nil {
+	if err := NewStore(dir).AppendHumanTask("task-push-20260724", raw+" (source: supervisor; added 2026-07-24)"); err != nil {
 		t.Fatal(err)
 	}
-	tasks, _ := os.ReadFile(filepath.Join(At(dir).Worktree(), "tasks.md"))
+	tasks, _ := os.ReadFile(filepath.Join(NewStore(dir).Worktree(), "tasks.md"))
 	if strings.Contains(string(tasks), "\nfatal:") {
 		t.Fatalf("multi-line error not flattened in tasks.md: %s", tasks)
 	}
 
-	changed, err := At(dir).ResolveHumanTasks("task-push-", "done 2026-07-25 -- push to origin recovered")
+	changed, err := NewStore(dir).ResolveHumanTasks("task-push-", "done 2026-07-25 -- push to origin recovered")
 	if err != nil || !changed {
 		t.Fatalf("resolve: changed=%v err=%v, want true nil", changed, err)
 	}
-	tasks, _ = os.ReadFile(filepath.Join(At(dir).Worktree(), "tasks.md"))
+	tasks, _ = os.ReadFile(filepath.Join(NewStore(dir).Worktree(), "tasks.md"))
 	text := string(tasks)
 	if strings.Contains(text, "- [ ] `task-push-") || !strings.Contains(text, "- [x] `task-push-20260724`") {
 		t.Fatalf("task not resolved in place: %s", text)
@@ -366,7 +366,7 @@ func TestSupervisorEntriesFlattenAndResolve(t *testing.T) {
 	if !strings.Contains(text, "; done 2026-07-25 -- push to origin recovered)") {
 		t.Fatalf("resolution not folded into the trailing parens: %s", text)
 	}
-	if changed, err = At(dir).ResolveHumanTasks("task-push-", "done again"); err != nil || changed {
+	if changed, err = NewStore(dir).ResolveHumanTasks("task-push-", "done again"); err != nil || changed {
 		t.Fatalf("second resolve: changed=%v err=%v, want false nil", changed, err)
 	}
 }
@@ -375,11 +375,11 @@ func TestResolveHumanTasksIgnoresFencedExamples(t *testing.T) {
 	dir := deliveryFixture(t)
 	appendKnowledge(t, dir, "tasks.md", "- [ ] `task-YYYY-real` do the real work")
 
-	changed, err := At(dir).ResolveHumanTasks("task-YYYY", "done")
+	changed, err := NewStore(dir).ResolveHumanTasks("task-YYYY", "done")
 	if err != nil || !changed {
 		t.Fatalf("resolve: changed=%v err=%v, want true nil", changed, err)
 	}
-	raw, err := os.ReadFile(filepath.Join(At(dir).Worktree(), "tasks.md"))
+	raw, err := os.ReadFile(filepath.Join(NewStore(dir).Worktree(), "tasks.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

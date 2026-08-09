@@ -53,16 +53,16 @@ func Schedulable(r *routine.Routine) bool {
 type Supervisor struct {
 	Dir string
 
-	mem       *knowledge.Store
+	store     *knowledge.Store
 	noOrigin  bool
 	loc       *time.Location
 	retention time.Duration
 	lastTrim  time.Time
 
-	// memMu serializes every knowledge-worktree critical section: tick
+	// knowledgeMu serializes every knowledge-worktree critical section: tick
 	// bookkeeping, each attempt's reserve-and-stage, each settlement.
 	// Kernel-backed, so a manual `routines run` serializes through it too.
-	memMu sync.Locker
+	knowledgeMu sync.Locker
 
 	lease    leaseKeeper
 	pool     runPool
@@ -113,8 +113,8 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	mem := knowledge.At(dir)
-	memMu, err := lock.Locker(dir, "knowledge")
+	store := knowledge.NewStore(dir)
+	knowledgeMu, err := lock.Locker(dir, "knowledge")
 	if err != nil {
 		return nil, err
 	}
@@ -123,12 +123,12 @@ func New(dir string) (*Supervisor, error) {
 		slots <- uint32(attemptUIDBase + i)
 	}
 	return &Supervisor{
-		Dir:       dir,
-		mem:       mem,
-		memMu:     memMu,
-		loc:       loc,
-		retention: retention,
-		noOrigin:  !mem.HasOrigin(),
+		Dir:         dir,
+		store:       store,
+		knowledgeMu: knowledgeMu,
+		loc:         loc,
+		retention:   retention,
+		noOrigin:    !store.HasOrigin(),
 		lease: leaseKeeper{
 			instanceID: knowledge.InstanceID(),
 			ttl:        knowledge.LeaseTTL,
@@ -149,7 +149,7 @@ func New(dir string) (*Supervisor, error) {
 	}, nil
 }
 
-func (s *Supervisor) stateDir() string { return s.mem.StateDir() }
+func (s *Supervisor) stateDir() string { return s.store.StateDir() }
 
 // InstanceID returns the identity used to own the distributed lease.
 func (s *Supervisor) InstanceID() string { return s.lease.instanceID }
@@ -171,12 +171,12 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		slog.Info("deploy key configured for knowledge sync")
 	}
-	// Under memMu: first-boot materialization must not race a manual run's
+	// Under knowledgeMu: first-boot materialization must not race a manual run's
 	// own locked Ensure.
 	if err := func() error {
-		s.memMu.Lock()
-		defer s.memMu.Unlock()
-		return s.mem.Ensure()
+		s.knowledgeMu.Lock()
+		defer s.knowledgeMu.Unlock()
+		return s.store.Ensure()
 	}(); err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		if err := s.acquireLease(ctx); err != nil {
 			return err
 		}
-		defer func() { s.mem.ReleaseLease(s.lease.sha) }()
+		defer func() { s.store.ReleaseLease(s.lease.sha) }()
 	}
 	slog.Info("supervising", "dir", s.Dir, "instance", s.lease.instanceID, "tick", TickInterval)
 	if err := s.verifySandbox(); err != nil {
@@ -308,8 +308,8 @@ type dueRun struct {
 // reservations and settlements. Returns the runnable dispatches, or ok=false
 // when nothing may launch (lost lease, blocked sync, failed intent commit).
 func (s *Supervisor) plan(now time.Time) ([]dueRun, bool) {
-	s.memMu.Lock()
-	defer s.memMu.Unlock()
+	s.knowledgeMu.Lock()
+	defer s.knowledgeMu.Unlock()
 
 	if !s.noOrigin {
 		s.syncOnce()
@@ -330,10 +330,10 @@ func (s *Supervisor) plan(now time.Time) ([]dueRun, bool) {
 	// stay lean.
 	if now.Sub(s.lastTrim) >= 24*time.Hour {
 		s.lastTrim = now
-		if changed, err := s.mem.Trim(s.retention, now); err != nil {
+		if changed, err := s.store.Trim(s.retention, now); err != nil {
 			slog.Warn("retention trim failed", "error", err)
 		} else if changed {
-			if _, err := s.mem.CommitTrim(s.retention); err != nil {
+			if _, err := s.store.CommitTrim(s.retention); err != nil {
 				slog.Warn("retention trim commit failed", "error", err)
 			}
 			s.pushBestEffort()
@@ -494,7 +494,7 @@ func (s *Supervisor) setRunning(name string, v bool) {
 // it. Whatever the worktree carries is the intent: Commit no-ops on a clean
 // tree, so the normal path costs nothing.
 func (s *Supervisor) commitIntent(message string) bool {
-	sha, err := s.mem.Commit(message)
+	sha, err := s.store.Commit(message)
 	if err != nil {
 		// A supervisor that cannot record what it is about to do must not
 		// do it.
@@ -505,7 +505,7 @@ func (s *Supervisor) commitIntent(message string) bool {
 	if s.noOrigin || s.blockers.syncBlocked || sha == "" {
 		return true
 	}
-	if err := s.mem.Push(); err != nil {
+	if err := s.store.Push(); err != nil {
 		// An identity that isn't durable is how duplicates happen.
 		s.blockOnce("push", "intent push failed -- runs held until origin is reachable", err, &s.blockers.unreachWarned)
 		return false
@@ -533,7 +533,7 @@ func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, ses
 	p := st.Pending
 	date := now.UTC().Format("2006-01-02")
 	taskID := "task-" + p.RunID
-	if err := s.mem.AppendHumanTask(taskID,
+	if err := s.store.AppendHumanTask(taskID,
 		fmt.Sprintf("Investigate routine %s: run %s abandoned after %d attempts (last failure: %s) -- watermark advanced, this work will not retry on its own (source: supervisor; added %s)", r.Name, p.RunID, p.Attempts, detail, date)); err != nil {
 		r.Log().Warn("could not record the abandonment task in knowledge -- this log line is the only copy",
 			"run_id", p.RunID, "task_id", taskID, "error", err)
@@ -541,7 +541,7 @@ func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, ses
 	st.Watermark = p.CoveredThrough
 	st.Pending = nil
 	if cooldown := st.RecordAbandonment(now); cooldown > 0 {
-		if err := s.mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown)); err != nil {
+		if err := s.store.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown)); err != nil {
 			r.Log().Warn("could not record the circuit breaker event in knowledge -- this log line is the only copy",
 				"run_id", p.RunID, "error", err)
 		}
@@ -566,10 +566,10 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	// mid-attempt is replaced by one that reads this record, so the budget
 	// drains instead of retrying forever at attempts: 0.
 	p := st.Pending
-	s.memMu.Lock()
+	s.knowledgeMu.Lock()
 	giveBack := reserve(p, now)
 	if err := st.Save(s.stateDir()); err != nil {
-		s.memMu.Unlock()
+		s.knowledgeMu.Unlock()
 		log.Error("saving scheduling state failed", "error", err)
 		return
 	}
@@ -578,13 +578,13 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		if err := st.Save(s.stateDir()); err != nil {
 			log.Error("saving scheduling state failed", "error", err)
 		}
-		s.memMu.Unlock()
+		s.knowledgeMu.Unlock()
 		return
 	}
-	s.memMu.Unlock()
+	s.knowledgeMu.Unlock()
 
 	// Stage takes the knowledge lock itself, only around its worktree reads:
-	// holding memMu through credential resolution would park every other
+	// holding knowledgeMu through credential resolution would park every other
 	// settlement behind this one's HTTPS round trips.
 	meta := runner.Attempt{
 		RunID:          p.RunID,
@@ -601,18 +601,18 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun, log)
 		defer stopHeartbeat()
 	}
-	staged, err := runner.Stage(s.Dir, agent, r, meta, s.memMu)
+	staged, err := runner.Stage(s.Dir, agent, r, meta, s.knowledgeMu)
 	if errors.Is(err, runner.ErrAttemptCleanup) {
 		cleanupErr = err
 	}
 	if err == nil && !s.noOrigin && !s.renewLease() {
 		cleanupErr = staged.Discard()
-		s.memMu.Lock()
+		s.knowledgeMu.Lock()
 		giveBack()
 		if err := st.Save(s.stateDir()); err != nil {
 			log.Error("saving scheduling state failed", "error", err)
 		}
-		s.memMu.Unlock()
+		s.knowledgeMu.Unlock()
 		log.Warn("not started -- lease lost after staging; the current holder will retry it")
 		return
 	}
@@ -642,8 +642,8 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 
 	// Settlement is the other knowledge critical section: import, run
 	// record, scheduling consequences, push.
-	s.memMu.Lock()
-	defer s.memMu.Unlock()
+	s.knowledgeMu.Lock()
+	defer s.knowledgeMu.Unlock()
 	if !s.noOrigin && !s.renewLease() {
 		giveBack()
 		if err := st.Save(s.stateDir()); err != nil {
@@ -682,7 +682,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 	for i, conflict := range settlement.Conflicted {
 		taskID := fmt.Sprintf("task-%s-knowledge-conflict-%d", p.RunID, i+1)
-		if err := s.mem.AppendHumanTask(taskID,
+		if err := s.store.AppendHumanTask(taskID,
 			fmt.Sprintf("Resolve concurrent knowledge edit from routine %s run %s: canonical %s was left unchanged; competing version saved at %s", r.Name, p.RunID, conflict.Path, conflict.Quarantine)); err != nil {
 			log.Warn("could not record the knowledge conflict task in knowledge -- this log line is the only copy",
 				"path", conflict.Path, "task_id", taskID, "error", err)
@@ -692,7 +692,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 	conflictCommitOK := true
 	if len(settlement.Conflicted) > 0 {
-		if _, err := s.mem.Commit(fmt.Sprintf("Record %s knowledge conflicts", p.RunID)); err != nil {
+		if _, err := s.store.Commit(fmt.Sprintf("Record %s knowledge conflicts", p.RunID)); err != nil {
 			conflictCommitOK = false
 			log.Error("conflict task commit failed", "error", err)
 		}
@@ -728,7 +728,7 @@ func withSessions(sessionsDir string, args ...any) []any {
 }
 
 func (s *Supervisor) syncOnce() {
-	rep := s.mem.Sync()
+	rep := s.store.Sync()
 	switch {
 	case rep.Rewritten:
 		s.blockers.syncBlocked = true
@@ -796,13 +796,13 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 
 	date := now.UTC().Format("2006-01-02")
 	for _, line := range news {
-		if err := s.mem.AppendEvent(fmt.Sprintf("%s supervisor: %s", date, line)); err != nil {
+		if err := s.store.AppendEvent(fmt.Sprintf("%s supervisor: %s", date, line)); err != nil {
 			slog.Error("recording routine load status failed", "error", err)
 			return
 		}
 		slog.Warn("routine load status changed", "status", line)
 	}
-	if _, err := s.mem.Commit("Record routine load status"); err != nil {
+	if _, err := s.store.Commit("Record routine load status"); err != nil {
 		slog.Error("routine load status commit failed", "error", err)
 		return
 	}
@@ -827,13 +827,13 @@ func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 	}
 	date := time.Now().UTC().Format("2006-01-02")
 	taskID := "task-" + kind + "-" + time.Now().UTC().Format("20060102")
-	if aerr := s.mem.AppendHumanTask(taskID, fmt.Sprintf("%s (source: supervisor; added %s)", msg, date)); aerr != nil {
+	if aerr := s.store.AppendHumanTask(taskID, fmt.Sprintf("%s (source: supervisor; added %s)", msg, date)); aerr != nil {
 		slog.Warn("could not record the supervisor blocker in knowledge -- this log line is the only copy",
 			"kind", kind, "task_id", taskID, "error", aerr)
 		*warned = false // retry on the next tick
 		return
 	}
-	if _, cerr := s.mem.Commit("Record supervisor blocker"); cerr != nil {
+	if _, cerr := s.store.Commit("Record supervisor blocker"); cerr != nil {
 		slog.Warn("could not record the supervisor blocker in knowledge -- this log line is the only copy",
 			"kind", kind, "task_id", taskID, "error", cerr)
 		*warned = false // retry on the next tick
@@ -847,7 +847,7 @@ func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 // it also heals blockers raised before a restart.
 func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	*warned = false
-	changed, err := s.mem.ResolveHumanTasks("task-"+kind+"-",
+	changed, err := s.store.ResolveHumanTasks("task-"+kind+"-",
 		"done "+time.Now().UTC().Format("2006-01-02")+" -- "+msg)
 	if err != nil {
 		slog.Warn("could not resolve the supervisor blocker task -- it will read as open until repaired",
@@ -858,7 +858,7 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 		return
 	}
 	slog.Error("RECOVERED", "kind", kind, "reason", msg)
-	_, _ = s.mem.Commit("Resolve supervisor blocker")
+	_, _ = s.store.Commit("Resolve supervisor blocker")
 	s.pushBestEffort()
 }
 
@@ -873,13 +873,13 @@ func (s *Supervisor) pushBestEffort() {
 		s.strandBlocked()
 		return
 	}
-	if err := s.mem.Push(); err != nil {
+	if err := s.store.Push(); err != nil {
 		slog.Warn("knowledge push failed (will retry)", "error", err)
 		return
 	}
 	if s.blockers.blockedTip != "" {
 		s.blockers.blockedTip = ""
-		s.mem.ClearBlocked()
+		s.store.ClearBlocked()
 	}
 }
 
@@ -887,7 +887,7 @@ func (s *Supervisor) pushBestEffort() {
 // so a failed attempt is retried rather than dying with the log line that
 // announced it. Keyed on the tip: a tick that changed nothing pushes nothing.
 func (s *Supervisor) strandBlocked() {
-	tip, err := s.mem.Head()
+	tip, err := s.store.Head()
 	if err != nil {
 		slog.Error("could not read the knowledge tip -- blocked knowledge not stranded to origin", "error", err)
 		return
@@ -895,7 +895,7 @@ func (s *Supervisor) strandBlocked() {
 	if tip == s.blockers.blockedTip {
 		return
 	}
-	if err := s.mem.PublishBlocked(); err != nil {
+	if err := s.store.PublishBlocked(); err != nil {
 		slog.Error("publishing blocked knowledge to origin failed (will retry)", "error", err)
 		return
 	}
@@ -998,10 +998,10 @@ func (s *Supervisor) verifySandbox() error {
 }
 
 func (s *Supervisor) shutdown() {
-	s.memMu.Lock()
-	defer s.memMu.Unlock()
+	s.knowledgeMu.Lock()
+	defer s.knowledgeMu.Unlock()
 	slog.Info("shutting down: final knowledge sync")
-	if _, err := s.mem.Commit("Shutdown"); err != nil {
+	if _, err := s.store.Commit("Shutdown"); err != nil {
 		slog.Error("shutdown commit failed", "error", err)
 	}
 	s.pushBestEffort()

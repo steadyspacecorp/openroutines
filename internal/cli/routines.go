@@ -371,7 +371,7 @@ func routinesRemove(args []string) int {
 	// Best effort: also clear scheduling state, trigger baseline, and consumer
 	// cursor from the knowledge branch, so a later routine with the same name
 	// doesn't inherit orphaned state. The ledger stays -- that's knowledge.
-	removed, _ := knowledge.At(".").RemoveRoutineState(name)
+	removed, _ := knowledge.NewStore(".").RemoveRoutineState(name)
 	for _, p := range removed {
 		fmt.Printf("Removed %s (commit inside knowledge/ to record it)\n", p)
 	}

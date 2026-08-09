@@ -130,7 +130,7 @@ func (i *Install) Apply() (installed, pendingStubs []string, err error) {
 		return nil, nil, err
 	}
 	installed = append(installed, filepath.Join(".openroutines", "plugins", p.Manifest.Name))
-	wt := knowledge.At(i.agentDir).Worktree()
+	wt := knowledge.NewStore(i.agentDir).Worktree()
 	haveWorktree := false
 	if fi, err := os.Stat(wt); err == nil && fi.IsDir() {
 		haveWorktree = true

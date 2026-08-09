@@ -206,7 +206,7 @@ func cmdCheck(args []string) int {
 
 	// Knowledge hygiene: task discipline is convention, not schema -- warn, never
 	// rewrite. The supervisor does not interpret model-authored knowledge.
-	if raw, err := os.ReadFile(filepath.Join(knowledge.At(dir).Worktree(), "tasks.md")); err == nil {
+	if raw, err := os.ReadFile(filepath.Join(knowledge.NewStore(dir).Worktree(), "tasks.md")); err == nil {
 		for _, task := range knowledge.ParseTaskEntries(string(raw)) {
 			if !strings.HasPrefix(task.ID, "task-") {
 				warnf("tasks.md entry without a stable `task-...` id: %.60s", task.Text)
