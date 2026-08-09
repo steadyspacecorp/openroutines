@@ -1,11 +1,16 @@
 package source
 
 import (
+	"context"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestFetchLocalRepository(t *testing.T) {
@@ -57,4 +62,76 @@ func TestResolvePathRejectsEscapes(t *testing.T) {
 			t.Fatal("ResolvePath accepted a symlink escape")
 		}
 	}
+}
+
+func TestGitOutputStopsTransportChildrenAtDeadline(t *testing.T) {
+	bin := t.TempDir()
+	childPID := filepath.Join(t.TempDir(), "child.pid")
+	git := filepath.Join(bin, "git")
+	script := "#!/bin/sh\nexec \"$SOURCE_GIT_HELPER\" -test.run=TestSourceGitHelperProcess\n"
+	if err := os.WriteFile(git, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SOURCE_GIT_HELPER", os.Args[0])
+	t.Setenv("SOURCE_GIT_CHILD_PID", childPID)
+	t.Setenv("GO_WANT_SOURCE_GIT_HELPER", "1")
+	t.Cleanup(func() {
+		raw, err := os.ReadFile(childPID)
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if err != nil {
+			return
+		}
+		if process, err := os.FindProcess(pid); err == nil {
+			_ = process.Kill()
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := gitOutput(ctx, "status")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("gitOutput succeeded after its deadline")
+		}
+	case <-time.After(7 * time.Second):
+		t.Fatal("gitOutput waited on a transport child after its deadline")
+	}
+}
+
+func TestSourceGitHelperProcess(_ *testing.T) {
+	if os.Getenv("GO_WANT_SOURCE_GIT_HELPER") != "1" {
+		return
+	}
+	if os.Getenv("SOURCE_GIT_HELPER_CHILD") == "1" {
+		signal.Ignore(syscall.SIGHUP, syscall.SIGTERM)
+		if err := os.WriteFile(os.Getenv("SOURCE_GIT_CHILD_PID"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+			os.Exit(2)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestSourceGitHelperProcess")
+	cmd.Env = append(os.Environ(), "SOURCE_GIT_HELPER_CHILD=1")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		os.Exit(2)
+	}
+	for {
+		if _, err := os.Stat(os.Getenv("SOURCE_GIT_CHILD_PID")); err == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_ = cmd.Wait()
+	os.Exit(0)
 }
