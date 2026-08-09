@@ -172,7 +172,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		defer func() { s.store.ReleaseLease(s.lease.sha) }()
 	}
 	slog.Info("supervising", "dir", s.Dir, "instance", s.lease.instanceID, "tick", TickInterval)
-	if err := s.verifyIsolation(); err != nil {
+	if err := verifyIsolation(); err != nil {
 		return err
 	}
 

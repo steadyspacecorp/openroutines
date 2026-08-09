@@ -54,7 +54,7 @@ func VerifyKeyDelivery() error {
 // and everything it was not given. Only production spawns model processes
 // directly; elsewhere the run container is the boundary, or a contributor has
 // opted out of both.
-func (s *Supervisor) verifyIsolation() error {
+func verifyIsolation() error {
 	switch mode.Current() {
 	case mode.DeployedContainer:
 		// A lower rung is a difference in degree; no rung at all is a difference
