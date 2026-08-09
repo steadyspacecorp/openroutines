@@ -91,9 +91,9 @@ func cmdUsage(args []string) int {
 // Names the window usage aggregates over, so the header reads "last 30 days"
 // instead of the retention term of art.
 func retentionLabel(dir string) string {
-	retention := knowledge.DefaultRetention
+	retention := config.DefaultRetention
 	if agent, err := config.Load(dir); err == nil {
-		if d, err := knowledge.ParseRetention(agent.Retention()); err == nil {
+		if d, err := config.ParseRetention(agent.Retention()); err == nil {
 			retention = d
 		}
 	}

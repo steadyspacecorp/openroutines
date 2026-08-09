@@ -118,7 +118,7 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	retention, err := knowledge.ParseRetention(agent.Retention())
+	retention, err := config.ParseRetention(agent.Retention())
 	if err != nil {
 		return nil, err
 	}

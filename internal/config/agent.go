@@ -17,7 +17,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 )
 
 // FileName is the agent configuration file at the repository root --
@@ -216,7 +215,7 @@ func (a *Agent) Problems() []string {
 	} else if a.Concurrency > MaxConcurrency {
 		out = append(out, fmt.Sprintf("concurrency %d exceeds the maximum of %d", a.Concurrency, MaxConcurrency))
 	}
-	if _, err := knowledge.ParseRetention(a.Retention()); err != nil {
+	if _, err := ParseRetention(a.Retention()); err != nil {
 		out = append(out, fmt.Sprintf("knowledge.retention: %v", err))
 	}
 	for _, name := range slices.Sorted(maps.Keys(a.Variables)) {
