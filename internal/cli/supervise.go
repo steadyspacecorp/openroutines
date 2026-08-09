@@ -34,7 +34,7 @@ func cmdSupervise(args []string) int {
 	defer stop()
 	if err := s.Run(ctx); err != nil {
 		// Logged (not handed to fail()) via the scrubbing logger configured at dispatch.
-		slog.Error("supervisor stopped", "error", err, "instance", s.InstanceID, "dir", s.Dir)
+		slog.Error("supervisor stopped", "error", err, "instance", s.InstanceID(), "dir", s.Dir)
 		return 1
 	}
 	return 0

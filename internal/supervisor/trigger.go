@@ -23,7 +23,7 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 	interval, _ := spec.IntervalDuration() // validated by the caller
 
 	log := r.Log()
-	if last, ok := s.lastPolled[r.Name]; ok && now.Before(last.Add(interval)) {
+	if last, ok := s.triggers.lastPolled[r.Name]; ok && now.Before(last.Add(interval)) {
 		log.Debug("skipped", "reason", "poll interval not elapsed")
 		return false
 	}
@@ -78,7 +78,7 @@ func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 // Performs the HTTP observation, resolving the declared credential and
 // deduplicating error logs (log on transition, not every tick).
 func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.State, now time.Time) (trigger.Result, bool) {
-	s.lastPolled[r.Name] = now
+	s.triggers.lastPolled[r.Name] = now
 	log := r.Log()
 	credential := ""
 	cleanup := func() {}
@@ -87,16 +87,16 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 		// materializes the value: a poll uses a credential only when the
 		// routine's own credentials list grants it.
 		if !slices.Contains(r.FM.Credentials, spec.Credential) {
-			if !s.pollFailed[r.Name] {
-				s.pollFailed[r.Name] = true
+			if !s.triggers.pollFailed[r.Name] {
+				s.triggers.pollFailed[r.Name] = true
 				log.Warn("trigger credential is not listed in the routine's credentials", "credential", spec.Credential)
 			}
 			return trigger.Result{}, false
 		}
 		derived, err := s.triggerCredential(spec.Credential)
 		if err != nil {
-			if !s.pollFailed[r.Name] {
-				s.pollFailed[r.Name] = true
+			if !s.triggers.pollFailed[r.Name] {
+				s.triggers.pollFailed[r.Name] = true
 				log.Warn("trigger credential failed", "credential", spec.Credential, "error", err)
 			}
 			return trigger.Result{}, false
@@ -107,15 +107,15 @@ func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.
 	defer cleanup()
 	res, err := trigger.Poll(trigger.Client, spec, credential, r.Name, prior)
 	if err != nil {
-		if !s.pollFailed[r.Name] {
-			s.pollFailed[r.Name] = true
+		if !s.triggers.pollFailed[r.Name] {
+			s.triggers.pollFailed[r.Name] = true
 			log.Warn("trigger poll failed", "error", err)
 		}
 		return trigger.Result{}, false
 	}
-	if s.pollFailed[r.Name] {
+	if s.triggers.pollFailed[r.Name] {
 		log.Warn("trigger poll recovered")
-		delete(s.pollFailed, r.Name)
+		delete(s.triggers.pollFailed, r.Name)
 	}
 	return res, true
 }

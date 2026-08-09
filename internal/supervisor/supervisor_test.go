@@ -23,20 +23,22 @@ import (
 func TestAttemptIdentityIsNotReusedWhenCleanupFails(t *testing.T) {
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
 	s := &Supervisor{
-		slots: make(chan uint32, 1),
-		fatal: make(chan error, 1),
-		reap: func(uid uint32) error {
-			return fmt.Errorf("pid escaped uid %d", uid)
+		pool: runPool{
+			slots: make(chan uint32, 1),
+			fatal: make(chan error, 1),
+			reap: func(uid uint32) error {
+				return fmt.Errorf("pid escaped uid %d", uid)
+			},
 		},
 	}
 	if s.releaseIdentity(20000, nil) {
 		t.Fatal("cleanup failure returned the identity to the pool")
 	}
-	if len(s.slots) != 0 {
+	if len(s.pool.slots) != 0 {
 		t.Fatal("poisoned identity is available for reuse")
 	}
 	select {
-	case err := <-s.fatal:
+	case err := <-s.pool.fatal:
 		if !strings.Contains(err.Error(), "refusing to reuse identity") {
 			t.Fatalf("fatal error = %v", err)
 		}
@@ -48,18 +50,20 @@ func TestAttemptIdentityIsNotReusedWhenCleanupFails(t *testing.T) {
 func TestAttemptIdentityIsNotReusedWhenWorkspaceCleanupFails(t *testing.T) {
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
 	s := &Supervisor{
-		slots: make(chan uint32, 1),
-		fatal: make(chan error, 1),
-		reap:  func(uint32) error { return nil },
+		pool: runPool{
+			slots: make(chan uint32, 1),
+			fatal: make(chan error, 1),
+			reap:  func(uint32) error { return nil },
+		},
 	}
 	if s.releaseIdentity(20000, errors.New("attempt workspace still exists")) {
 		t.Fatal("workspace cleanup failure returned the identity to the pool")
 	}
-	if len(s.slots) != 0 {
+	if len(s.pool.slots) != 0 {
 		t.Fatal("poisoned identity is available for reuse")
 	}
 	select {
-	case err := <-s.fatal:
+	case err := <-s.pool.fatal:
 		if !strings.Contains(err.Error(), "attempt workspace still exists") {
 			t.Fatalf("fatal error = %v", err)
 		}
@@ -237,7 +241,7 @@ func usurpLease(t *testing.T, s *Supervisor) (stop func()) {
 			select {
 			case <-quit:
 				return
-			case <-time.After(s.leaseTTL / 4):
+			case <-time.After(s.lease.ttl / 4):
 				_ = take() // a renewal the holder wins is re-taken next tick
 			}
 		}
@@ -276,7 +280,7 @@ func optInConcurrency(t *testing.T, dir string, n int) {
 // what a serial Tick used to do.
 func (s *Supervisor) tickWait(ctx context.Context, now time.Time) {
 	s.Tick(ctx, now)
-	s.runs.Wait()
+	s.pool.runs.Wait()
 }
 
 func readFile(_ *testing.T, path string) string {
@@ -886,7 +890,7 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	if got := strings.Count(ledger, "ran run_"); got != 1 {
 		t.Fatalf("dispatch continued after rewrite: %d runs, %q", got, ledger)
 	}
-	if !s.syncBlocked {
+	if !s.blockers.syncBlocked {
 		t.Fatal("supervisor should be sync-blocked after a rewrite")
 	}
 }
@@ -915,7 +919,7 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	rewritten := gitOut(t, bare, "rev-parse", "refs/heads/knowledge")
 
 	s.tickWait(ctx, t0.Add(2*time.Minute))
-	if !s.syncBlocked {
+	if !s.blockers.syncBlocked {
 		t.Fatal("precondition: the supervisor should be sync-blocked after a rewrite")
 	}
 	stranded := gitOut(t, bare, "cat-file", "-p", "refs/openroutines/blocked:tasks.md")
@@ -940,7 +944,7 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	// accepted ref. Sync recovers, and the stranded blocker lands on the branch.
 	runCmd(t, bare, "git", "update-ref", "refs/openroutines/accepted", rewritten)
 	s.tickWait(ctx, t0.Add(3*time.Minute))
-	if s.syncBlocked {
+	if s.blockers.syncBlocked {
 		t.Fatal("sync should have recovered once the new history was accepted")
 	}
 	onBranch := gitOut(t, bare, "cat-file", "-p", "refs/heads/knowledge:tasks.md")
@@ -1043,7 +1047,7 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 
 	optInConcurrency(t, dir, 2)
 	holder := newSupervisor(t, dir)
-	holder.leaseTTL = 6 * time.Second
+	holder.lease.ttl = 6 * time.Second
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 	holder.tickWait(ctx, t0) // register
@@ -1075,8 +1079,8 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	run(other, "git", "init", "-q", "-b", "main", ".")
 	run(other, "git", "remote", "add", "origin", bare)
 	second := newSupervisor(t, other)
-	second.InstanceID = "second-instance"
-	second.leaseTTL = holder.leaseTTL
+	second.lease.instanceID = "second-instance"
+	second.lease.ttl = holder.lease.ttl
 
 	acquireCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
@@ -1144,7 +1148,7 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 	// The run sleeps 3s against a 1.5s TTL: a lease renewed only at dispatch
 	// is 2.2s stale at the assertion below (expired, 0.7s to spare) while the
 	// in-run heartbeat keeps it younger than ~0.5s (live, 1s to spare).
-	holder.leaseTTL = 1500 * time.Millisecond
+	holder.lease.ttl = 1500 * time.Millisecond
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 	holder.tickWait(ctx, t0) // register
@@ -1169,8 +1173,8 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 	runCmd(t, other, "git", "init", "-q", "-b", "main", ".")
 	runCmd(t, other, "git", "remote", "add", "origin", bare)
 	second := newSupervisor(t, other)
-	second.InstanceID = "second-instance"
-	second.leaseTTL = holder.leaseTTL
+	second.lease.instanceID = "second-instance"
+	second.lease.ttl = holder.lease.ttl
 
 	acquireCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
@@ -1198,7 +1202,7 @@ func TestLeaseLostAfterStagingHandsTheAttemptBack(t *testing.T) {
 	// Drain the pool so the next tick mints the pending record but cannot
 	// dispatch it: the reservation has to happen below, under a lease that
 	// is already lost -- a window plan's own heartbeat cannot see.
-	uid := <-s.slots
+	uid := <-s.pool.slots
 	s.tickWait(ctx, t0.Add(61*time.Second))
 	st := loadState(t, s)
 	if st.Pending == nil {
@@ -1237,7 +1241,7 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 	runCmd(t, dir, "git", "remote", "add", "origin", bare)
 
 	holder := newSupervisor(t, dir)
-	holder.leaseTTL = 1500 * time.Millisecond
+	holder.lease.ttl = 1500 * time.Millisecond
 	logs := logtest.Capture(t)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
