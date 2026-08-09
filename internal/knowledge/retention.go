@@ -11,11 +11,6 @@ import (
 	"time"
 )
 
-// DefaultRetention is the knowledge working-set window when openroutines.yml doesn't
-// set knowledge.retention. Git history is the unlimited archive; the working
-// files are the window a routine actually loads into context.
-const DefaultRetention = 30 * 24 * time.Hour
-
 // trimmedStreams are the record streams the retention window applies to.
 // tasks.md is a living list (age doesn't make a task done) and ledgers are
 // routine-owned -- both exempt. Pruning removes a line from the working view
@@ -38,26 +33,6 @@ const trimTrailer = "Openroutines-Retention-Trim: true"
 func (m *Knowledge) CommitTrim(keep time.Duration) (string, error) {
 	message := fmt.Sprintf("Trim knowledge to retention window (%s)\n\n%s\n", keep, trimTrailer)
 	return m.commitPaths(message, append([]string{runRecordsFile}, trimmedStreams...)...)
-}
-
-// ParseRetention accepts "30d" style (days) or any Go duration ("720h").
-// Empty means the default.
-func ParseRetention(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return DefaultRetention, nil
-	}
-	if days, ok := strings.CutSuffix(s, "d"); ok {
-		if n, err := strconv.Atoi(days); err == nil && n > 0 {
-			return time.Duration(n) * 24 * time.Hour, nil
-		}
-		return 0, fmt.Errorf("retention %q: use Nd (days) or a duration like 720h", s)
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("retention %q: use Nd (days) or a duration like 720h", s)
-	}
-	return d, nil
 }
 
 // Trim drops record entries older than the window. Age is the line's git
