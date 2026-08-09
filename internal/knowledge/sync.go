@@ -210,7 +210,7 @@ const (
 
 // leaseContent formats the heartbeat blob.
 func leaseContent(instanceID string, now time.Time) string {
-	return fmt.Sprintf("%s %d\n", instanceID, now.Unix())
+	return fmt.Sprintf("%s %s\n", instanceID, now.Format(time.RFC3339Nano))
 }
 
 // Lease is the current holder's heartbeat, plus the blob SHA used as the
@@ -241,11 +241,22 @@ func (store *Store) ReadLease() (*Lease, error) {
 	if len(fields) != 2 {
 		return nil, fmt.Errorf("malformed lease %q", content)
 	}
-	var unix int64
-	if _, serr := fmt.Sscanf(fields[1], "%d", &unix); serr != nil {
-		return nil, serr
+	at, err := parseLeaseTime(fields[1])
+	if err != nil {
+		return nil, err
 	}
-	return &Lease{Holder: fields[0], At: time.Unix(unix, 0), SHA: sha}, nil
+	return &Lease{Holder: fields[0], At: at, SHA: sha}, nil
+}
+
+func parseLeaseTime(value string) (time.Time, error) {
+	if at, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return at, nil
+	}
+	var unix int64
+	if _, err := fmt.Sscanf(value, "%d", &unix); err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(unix, 0), nil
 }
 
 // WriteLease publishes this instance's heartbeat atomically: the push
