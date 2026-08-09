@@ -19,8 +19,8 @@ type SyncReport struct {
 }
 
 // HasOrigin reports whether the repo has an origin remote configured.
-func (m *Knowledge) HasOrigin() bool {
-	_, err := git(m.repoDir, "remote", "get-url", "origin")
+func (store *Store) HasOrigin() bool {
+	_, err := git(store.repoDir, "remote", "get-url", "origin")
 	return err == nil
 }
 
@@ -31,35 +31,35 @@ const acceptedRef = "refs/openroutines/accepted"
 
 // AcceptedTip returns the last accepted knowledge tip recorded on origin, ""
 // when none has been recorded yet (pre-upgrade repos, first boot).
-func (m *Knowledge) AcceptedTip() string {
-	if _, err := git(m.repoDir, "fetch", "--quiet", "origin", "+"+acceptedRef+":"+acceptedRef); err != nil {
+func (store *Store) AcceptedTip() string {
+	if _, err := git(store.repoDir, "fetch", "--quiet", "origin", "+"+acceptedRef+":"+acceptedRef); err != nil {
 		return ""
 	}
-	tip, _ := git(m.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
+	tip, _ := git(store.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
 	return tip
 }
 
 // recordAccepted publishes tip as the new accepted baseline (best effort --
 // the next sync simply re-verifies from the previous baseline).
-func (m *Knowledge) recordAccepted(tip string) {
-	current, _ := git(m.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
+func (store *Store) recordAccepted(tip string) {
+	current, _ := git(store.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
 	if current == tip {
 		return
 	}
-	if _, err := git(m.repoDir, "push", "--quiet", "origin", "+"+tip+":"+acceptedRef); err == nil {
-		_, _ = git(m.repoDir, "update-ref", acceptedRef, tip)
+	if _, err := git(store.repoDir, "push", "--quiet", "origin", "+"+tip+":"+acceptedRef); err == nil {
+		_, _ = git(store.repoDir, "update-ref", acceptedRef, tip)
 	}
 }
 
 // Sync reconciles the local knowledge branch with origin: fast-forward when
 // behind, rebase when diverged, refuse rewritten history and conflicts --
 // never resolve silently. The rewrite baseline is the durable accepted ref.
-func (m *Knowledge) Sync() SyncReport {
-	wt := m.Worktree()
-	if !m.HasOrigin() {
+func (store *Store) Sync() SyncReport {
+	wt := store.Worktree()
+	if !store.HasOrigin() {
 		return SyncReport{NoOrigin: true}
 	}
-	if _, err := git(m.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); err != nil {
+	if _, err := git(store.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); err != nil {
 		if strings.Contains(err.Error(), "exit status 2") {
 			return SyncReport{RemoteMissing: true} // first push will create it
 		}
@@ -68,18 +68,18 @@ func (m *Knowledge) Sync() SyncReport {
 
 	// The accepted tip, falling back to the remote-tracking ref for repos
 	// that predate it.
-	oldTip := m.AcceptedTip()
+	oldTip := store.AcceptedTip()
 	if oldTip == "" {
-		oldTip, _ = git(m.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch)
+		oldTip, _ = git(store.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch)
 	}
-	if _, err := git(m.repoDir, "fetch", "--quiet", "origin", Branch); err != nil {
+	if _, err := git(store.repoDir, "fetch", "--quiet", "origin", Branch); err != nil {
 		return SyncReport{Unreachable: true, Detail: err.Error()}
 	}
-	newTip, err := git(m.repoDir, "rev-parse", "refs/remotes/origin/"+Branch)
+	newTip, err := git(store.repoDir, "rev-parse", "refs/remotes/origin/"+Branch)
 	if err != nil {
 		return SyncReport{Unreachable: true, Detail: err.Error()}
 	}
-	if oldTip != "" && oldTip != newTip && !isAncestor(m.repoDir, oldTip, newTip) {
+	if oldTip != "" && oldTip != newTip && !isAncestor(store.repoDir, oldTip, newTip) {
 		return SyncReport{Rewritten: true, Detail: fmt.Sprintf("origin/%s rewritten: %s no longer reachable from %s", Branch, short(oldTip), short(newTip))}
 	}
 
@@ -89,16 +89,16 @@ func (m *Knowledge) Sync() SyncReport {
 	}
 	switch {
 	case local == newTip:
-		m.recordAccepted(newTip)
+		store.recordAccepted(newTip)
 		return SyncReport{}
-	case isAncestor(m.repoDir, local, newTip):
+	case isAncestor(store.repoDir, local, newTip):
 		// Behind: fast-forward only.
 		if _, err := git(wt, "merge", "--ff-only", "--quiet", newTip); err != nil {
 			return SyncReport{Conflict: true, Detail: err.Error()}
 		}
-		m.recordAccepted(newTip)
+		store.recordAccepted(newTip)
 		return SyncReport{Adopted: true}
-	case isAncestor(m.repoDir, newTip, local):
+	case isAncestor(store.repoDir, newTip, local):
 		return SyncReport{} // ahead: the next push carries it
 	default:
 		// Diverged (human curation raced local commits): rebase ours on top.
@@ -106,7 +106,7 @@ func (m *Knowledge) Sync() SyncReport {
 			_, _ = git(wt, "rebase", "--abort")
 			return SyncReport{Conflict: true, Detail: err.Error()}
 		}
-		m.recordAccepted(newTip)
+		store.recordAccepted(newTip)
 		return SyncReport{Adopted: true}
 	}
 }
@@ -114,16 +114,16 @@ func (m *Knowledge) Sync() SyncReport {
 // Push publishes the knowledge branch. Fast-forward only: rejections are
 // reported, never forced. A successful push advances the accepted baseline:
 // origin's tip is now our own history.
-func (m *Knowledge) Push() error {
-	if !m.HasOrigin() {
+func (store *Store) Push() error {
+	if !store.HasOrigin() {
 		return nil
 	}
-	wt := m.Worktree()
+	wt := store.Worktree()
 	if _, err := git(wt, "push", "--quiet", "origin", Branch); err != nil {
 		return err
 	}
 	if tip, err := git(wt, "rev-parse", "HEAD"); err == nil {
-		m.recordAccepted(tip)
+		store.recordAccepted(tip)
 	}
 	return nil
 }
@@ -146,42 +146,42 @@ type BlockedSnapshot struct {
 // a parentless snapshot -- pushing the local tip would drag along the very
 // lineage a rewrite may have just purged. Force is safe: the ref is the
 // supervisor's own, and each snapshot supersedes the last.
-func (m *Knowledge) PublishBlocked() error {
-	if !m.HasOrigin() {
+func (store *Store) PublishBlocked() error {
+	if !store.HasOrigin() {
 		return nil
 	}
-	tree, err := git(m.repoDir, "rev-parse", "refs/heads/"+Branch+"^{tree}")
+	tree, err := git(store.repoDir, "rev-parse", "refs/heads/"+Branch+"^{tree}")
 	if err != nil {
 		return err
 	}
-	snap, err := git(m.repoDir, "commit-tree", tree, "-m",
+	snap, err := git(store.repoDir, "commit-tree", tree, "-m",
 		"Knowledge the agent could not publish: sync to origin/"+Branch+" is blocked")
 	if err != nil {
 		return err
 	}
-	_, err = git(m.repoDir, "push", "--quiet", "origin", "+"+snap+":"+BlockedRef)
+	_, err = git(store.repoDir, "push", "--quiet", "origin", "+"+snap+":"+BlockedRef)
 	return err
 }
 
 // ClearBlocked drops the stranded ref, for the caller that has just published
 // the same state on the branch itself. Best effort: a ref left behind costs
 // nothing but a second copy of what the branch already carries.
-func (m *Knowledge) ClearBlocked() {
-	_, _ = git(m.repoDir, "push", "--quiet", "origin", ":"+BlockedRef)
+func (store *Store) ClearBlocked() {
+	_, _ = git(store.repoDir, "push", "--quiet", "origin", ":"+BlockedRef)
 }
 
 // Blocked reports what a blocked supervisor stranded on origin. Fetching is
 // part of the answer: the ref is outside the namespaces git replicates, so
 // nothing else in a checkout would ever show it.
-func (m *Knowledge) Blocked() BlockedSnapshot {
-	if _, err := git(m.repoDir, "fetch", "--quiet", "origin", "+"+BlockedRef+":"+BlockedRef); err != nil {
+func (store *Store) Blocked() BlockedSnapshot {
+	if _, err := git(store.repoDir, "fetch", "--quiet", "origin", "+"+BlockedRef+":"+BlockedRef); err != nil {
 		return BlockedSnapshot{}
 	}
-	tip, err := git(m.repoDir, "rev-parse", "--verify", "--quiet", BlockedRef)
+	tip, err := git(store.repoDir, "rev-parse", "--verify", "--quiet", BlockedRef)
 	if err != nil || tip == "" {
 		return BlockedSnapshot{}
 	}
-	when, _ := git(m.repoDir, "log", "-1", "--format=%cI", tip)
+	when, _ := git(store.repoDir, "log", "-1", "--format=%cI", tip)
 	return BlockedSnapshot{Tip: tip, When: when}
 }
 
@@ -222,18 +222,18 @@ type Lease struct {
 }
 
 // ReadLease fetches the current lease from origin; nil when none exists.
-func (m *Knowledge) ReadLease() (*Lease, error) {
-	if _, lerr := git(m.repoDir, "fetch", "--quiet", "origin", "+"+leaseRef+":"+leaseRef); lerr != nil {
+func (store *Store) ReadLease() (*Lease, error) {
+	if _, lerr := git(store.repoDir, "fetch", "--quiet", "origin", "+"+leaseRef+":"+leaseRef); lerr != nil {
 		if strings.Contains(lerr.Error(), "couldn't find remote ref") {
 			return nil, nil
 		}
 		return nil, lerr
 	}
-	sha, err := git(m.repoDir, "rev-parse", leaseRef)
+	sha, err := git(store.repoDir, "rev-parse", leaseRef)
 	if err != nil {
 		return nil, err
 	}
-	content, cerr := git(m.repoDir, "cat-file", "blob", leaseRef)
+	content, cerr := git(store.repoDir, "cat-file", "blob", leaseRef)
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -252,13 +252,13 @@ func (m *Knowledge) ReadLease() (*Lease, error) {
 // succeeds only if origin's lease is still exactly expectedSHA (empty means
 // "must not exist"). Two instances racing for the same lease cannot both
 // win. Returns the new lease SHA for the next renewal's expectation.
-func (m *Knowledge) WriteLease(instanceID string, now time.Time, expectedSHA string) (string, error) {
-	blob, err := gitStdin(m.repoDir, leaseContent(instanceID, now), "hash-object", "-w", "--stdin")
+func (store *Store) WriteLease(instanceID string, now time.Time, expectedSHA string) (string, error) {
+	blob, err := gitStdin(store.repoDir, leaseContent(instanceID, now), "hash-object", "-w", "--stdin")
 	if err != nil {
 		return "", err
 	}
 	cas := "--force-with-lease=" + leaseRef + ":" + expectedSHA
-	if _, err := git(m.repoDir, "push", "--quiet", cas, "origin", blob+":"+leaseRef); err != nil {
+	if _, err := git(store.repoDir, "push", "--quiet", cas, "origin", blob+":"+leaseRef); err != nil {
 		return "", err
 	}
 	return blob, nil
@@ -268,11 +268,11 @@ func (m *Knowledge) WriteLease(instanceID string, now time.Time, expectedSHA str
 // is still the one this instance last wrote -- unconditional deletion let a
 // stale instance delete the new holder's live lease. ownedSHA "" means this
 // instance never held it.
-func (m *Knowledge) ReleaseLease(ownedSHA string) {
+func (store *Store) ReleaseLease(ownedSHA string) {
 	if ownedSHA == "" {
 		return
 	}
-	_, _ = git(m.repoDir, "push", "--quiet", "--force-with-lease="+leaseRef+":"+ownedSHA, "origin", ":"+leaseRef)
+	_, _ = git(store.repoDir, "push", "--quiet", "--force-with-lease="+leaseRef+":"+ownedSHA, "origin", ":"+leaseRef)
 }
 
 func gitStdin(dir, stdin string, args ...string) (string, error) {

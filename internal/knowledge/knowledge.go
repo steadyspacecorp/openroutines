@@ -36,16 +36,16 @@ const (
 // and consumer cursors in subdirectories.
 const stateDirName = "state"
 
-// Knowledge is one agent repository's knowledge. The handle binds the repository
+// Store is one agent repository's knowledge. The handle binds the repository
 // root; every operation that reads or maintains the knowledge branch, its
 // worktree, and the supervisor-owned state inside it goes through here.
-type Knowledge struct {
+type Store struct {
 	repoDir string
 }
 
 // At binds the agent repository at repoDir. No I/O: the worktree may not be
 // materialized yet (Status reports that; Ensure fixes it).
-func At(repoDir string) *Knowledge { return &Knowledge{repoDir: repoDir} }
+func At(repoDir string) *Store { return &Store{repoDir: repoDir} }
 
 // primitives are the framework-blessed shared knowledge files, seeded on init.
 // Each opens with a fenced example of its format: the file teaches its own
@@ -214,65 +214,65 @@ func gitExitCode(err error) int {
 }
 
 // Worktree returns the knowledge worktree location inside the agent repo.
-func (m *Knowledge) Worktree() string { return filepath.Join(m.repoDir, Dir) }
+func (store *Store) Worktree() string { return filepath.Join(store.repoDir, Dir) }
 
 // StateDir returns the supervisor-owned state directory inside the worktree.
 // Per-routine state lives at <StateDir>/<name>.json (scheduling) and
 // <StateDir>/<subdir>/<name>.json (trigger baselines, consumer cursors).
-func (m *Knowledge) StateDir() string { return filepath.Join(m.Worktree(), stateDirName) }
+func (store *Store) StateDir() string { return filepath.Join(store.Worktree(), stateDirName) }
 
 // Ensure materializes knowledge/ as a worktree of the knowledge branch,
 // creating the orphan branch and seeding the primitives on first use.
 // Self-heals: safe to call every run.
-func (m *Knowledge) Ensure() error {
-	wt := m.Worktree()
+func (store *Store) Ensure() error {
+	wt := store.Worktree()
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
 		return nil // already materialized
 	}
 	// The image's .git may register a worktree whose directory was excluded
 	// from the image; prune or the add below fails on first boot.
-	_, _ = git(m.repoDir, "worktree", "prune")
-	if _, err := git(m.repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
+	_, _ = git(store.repoDir, "worktree", "prune")
+	if _, err := git(store.repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
 		// No local branch: adopt origin's rather than minting a new root
 		// that splices into the lineage.
-		if m.HasOrigin() {
-			if _, lerr := git(m.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); lerr == nil {
-				if _, ferr := git(m.repoDir, "fetch", "--quiet", "origin", "+refs/heads/"+Branch+":refs/heads/"+Branch); ferr != nil {
+		if store.HasOrigin() {
+			if _, lerr := git(store.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); lerr == nil {
+				if _, ferr := git(store.repoDir, "fetch", "--quiet", "origin", "+refs/heads/"+Branch+":refs/heads/"+Branch); ferr != nil {
 					return fmt.Errorf("adopting knowledge branch from origin: %w", ferr)
 				}
 				// Adoption is where a restart could launder a rewritten
 				// history: refuse a tip that does not descend from the
 				// accepted baseline, which survives container replacement.
-				if accepted := m.AcceptedTip(); accepted != "" {
-					tip, terr := git(m.repoDir, "rev-parse", "refs/heads/"+Branch)
-					if terr == nil && tip != accepted && !isAncestor(m.repoDir, accepted, tip) {
+				if accepted := store.AcceptedTip(); accepted != "" {
+					tip, terr := git(store.repoDir, "rev-parse", "refs/heads/"+Branch)
+					if terr == nil && tip != accepted && !isAncestor(store.repoDir, accepted, tip) {
 						return fmt.Errorf("origin/%s does not descend from the last accepted tip %s -- knowledge history was rewritten while this agent was down; refusing to adopt it. Inspect origin/%s, then either restore the branch or move %s to the new tip to accept the rewrite deliberately", Branch, short(accepted), Branch, acceptedRef)
 					}
 				}
-				tip, _ := git(m.repoDir, "rev-parse", "refs/heads/"+Branch)
+				tip, _ := git(store.repoDir, "rev-parse", "refs/heads/"+Branch)
 				slog.Info("knowledge: adopted the knowledge branch from origin", "tip", tip)
 			} else if !strings.Contains(lerr.Error(), "exit status 2") {
 				slog.Warn("knowledge: could not reach origin to adopt the knowledge branch -- creating a local root; this will diverge if origin has one", "error", lerr)
 			}
 		}
 	}
-	if _, err := git(m.repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
+	if _, err := git(store.repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
 		// First use: orphan branch from an empty tree via plumbing
 		// (worktree add --orphan needs git >= 2.42).
-		tree, err := gitStdin(m.repoDir, "", "mktree")
+		tree, err := gitStdin(store.repoDir, "", "mktree")
 		if err != nil {
 			return fmt.Errorf("creating knowledge branch: %w", err)
 		}
-		commit, err := git(m.repoDir, "commit-tree", tree, "-m", "Knowledge branch root")
+		commit, err := git(store.repoDir, "commit-tree", tree, "-m", "Knowledge branch root")
 		if err != nil {
 			return fmt.Errorf("creating knowledge branch: %w", err)
 		}
-		if _, err := git(m.repoDir, "branch", Branch, commit); err != nil {
+		if _, err := git(store.repoDir, "branch", Branch, commit); err != nil {
 			return fmt.Errorf("creating knowledge branch: %w", err)
 		}
 		slog.Info("knowledge: created the knowledge branch", "commit", commit)
 	}
-	if _, err := git(m.repoDir, "worktree", "add", wt, Branch); err != nil {
+	if _, err := git(store.repoDir, "worktree", "add", wt, Branch); err != nil {
 		return err
 	}
 	// Seed the primitives and the ledgers directory if absent.
@@ -301,8 +301,8 @@ func (m *Knowledge) Ensure() error {
 // Snapshot copies the knowledge worktree's files into a plain staging directory:
 // regular files only, no git metadata. This staged copy is what a routine
 // sees and writes as knowledge/.
-func (m *Knowledge) Snapshot(stagingDir string) error {
-	wt := m.Worktree()
+func (store *Store) Snapshot(stagingDir string) error {
+	wt := store.Worktree()
 	return filepath.WalkDir(wt, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -416,11 +416,11 @@ func Validate(stagingDir string) error {
 // whole, appends on both sides compose, and any other concurrent edit keeps
 // the canonical file and quarantines the staged competitor. Deletions apply
 // only where the worktree still matches the base. Caller commits.
-func (m *Knowledge) Import(stagingDir, baseDir string) (conflicted []Conflict, err error) {
+func (store *Store) Import(stagingDir, baseDir string) (conflicted []Conflict, err error) {
 	if err := Validate(stagingDir); err != nil {
 		return nil, err
 	}
-	wt := m.Worktree()
+	wt := store.Worktree()
 	// Refuse to import over uncommitted human curation -- it has no reflog to
 	// recover from. Supervisor-owned paths legitimately carry this attempt's
 	// own in-flight bookkeeping.
@@ -522,8 +522,8 @@ func RestoreFile(stagingDir, baseDir, name string) (bool, error) {
 }
 
 // Commit records the current worktree state on the knowledge branch.
-func (m *Knowledge) Commit(message string) (string, error) {
-	wt := m.Worktree()
+func (store *Store) Commit(message string) (string, error) {
+	wt := store.Worktree()
 	if _, err := git(wt, "add", "-A"); err != nil {
 		return "", err
 	}
@@ -539,8 +539,8 @@ func (m *Knowledge) Commit(message string) (string, error) {
 // commitPaths commits only the named paths: a maintenance commit must not
 // carry work that merely happened to be dirty when it fired. Missing paths
 // are skipped.
-func (m *Knowledge) commitPaths(message string, paths ...string) (string, error) {
-	wt := m.Worktree()
+func (store *Store) commitPaths(message string, paths ...string) (string, error) {
+	wt := store.Worktree()
 	var present []string
 	for _, p := range paths {
 		if _, err := os.Stat(filepath.Join(wt, p)); err == nil {
@@ -573,28 +573,28 @@ func flatten(s string) string {
 // scrubbed prepares supervisor-written text for a knowledge file: redacted at
 // this seam, not at call sites that remember to ask -- what lands here is
 // committed and pushed.
-func (m *Knowledge) scrubbed(line string) string {
+func (store *Store) scrubbed(line string) string {
 	return flatten(scrub.Redacted(line))
 }
 
 // AppendEvent records a supervisor-written event: the mechanism for outcomes
 // the model never got to narrate (timeouts, crashes, sync trouble).
-func (m *Knowledge) AppendEvent(line string) error {
-	p := filepath.Join(m.Worktree(), "events.md")
+func (store *Store) AppendEvent(line string) error {
+	p := filepath.Join(store.Worktree(), "events.md")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = fmt.Fprintf(f, "- %s\n", m.scrubbed(line))
+	_, err = fmt.Fprintf(f, "- %s\n", store.scrubbed(line))
 	return err
 }
 
 // AppendHumanTask records a supervisor-created human-owned task at the end of
 // the real "## Human-owned" section (fenced format examples don't count),
 // created if missing. Idempotent by task id.
-func (m *Knowledge) AppendHumanTask(taskID, description string) error {
-	p := filepath.Join(m.Worktree(), "tasks.md")
+func (store *Store) AppendHumanTask(taskID, description string) error {
+	p := filepath.Join(store.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -606,7 +606,7 @@ func (m *Knowledge) AppendHumanTask(taskID, description string) error {
 	if strings.Contains(text, "`"+taskID+"`") {
 		return nil // one canonical record per task
 	}
-	entry := fmt.Sprintf("- [ ] `%s` %s", taskID, m.scrubbed(description))
+	entry := fmt.Sprintf("- [ ] `%s` %s", taskID, store.scrubbed(description))
 	lines := strings.Split(text, "\n")
 
 	section := -1
@@ -650,8 +650,8 @@ func (m *Knowledge) AppendHumanTask(taskID, description string) error {
 // ResolveHumanTasks completes every open task whose id starts with idPrefix.
 // Prefix matching makes recovery restart-proof: the supervisor need not
 // remember which day's blocker it raised. Reports whether anything changed.
-func (m *Knowledge) ResolveHumanTasks(idPrefix, resolution string) (bool, error) {
-	p := filepath.Join(m.Worktree(), "tasks.md")
+func (store *Store) ResolveHumanTasks(idPrefix, resolution string) (bool, error) {
+	p := filepath.Join(store.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -683,8 +683,8 @@ func (m *Knowledge) ResolveHumanTasks(idPrefix, resolution string) (bool, error)
 
 // AppendRunRecord appends one JSONL run record. Redacted like every append
 // but never flattened: whitespace inside its JSON strings is content.
-func (m *Knowledge) AppendRunRecord(record string) error {
-	p := filepath.Join(m.Worktree(), "runs.jsonl")
+func (store *Store) AppendRunRecord(record string) error {
+	p := filepath.Join(store.Worktree(), "runs.jsonl")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -698,8 +698,8 @@ func (m *Knowledge) AppendRunRecord(record string) error {
 // scheduling state plus the entry in every state subdirectory. Filenames are
 // compared, never globbed, so name cannot alter the matching. Returns the
 // removed paths relative to the repository root; the caller commits.
-func (m *Knowledge) RemoveRoutineState(name string) ([]string, error) {
-	stateDir := m.StateDir()
+func (store *Store) RemoveRoutineState(name string) ([]string, error) {
+	stateDir := store.StateDir()
 	entries, err := os.ReadDir(stateDir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -712,7 +712,7 @@ func (m *Knowledge) RemoveRoutineState(name string) ([]string, error) {
 		p := filepath.Join(dir, name+".json")
 		switch err := os.Remove(p); {
 		case err == nil:
-			rel, _ := filepath.Rel(m.repoDir, p)
+			rel, _ := filepath.Rel(store.repoDir, p)
 			removed = append(removed, rel)
 		case !os.IsNotExist(err):
 			return err
@@ -746,12 +746,12 @@ type WorktreeStatus struct {
 // Status inspects the knowledge worktree; only RemoteKnowledge is set when not
 // yet materialized -- it distinguishes a fresh clone of a running agent
 // (adopt with sync) from an agent that has never run.
-func (m *Knowledge) Status() WorktreeStatus {
+func (store *Store) Status() WorktreeStatus {
 	var st WorktreeStatus
-	if _, err := git(m.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch); err == nil {
+	if _, err := git(store.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch); err == nil {
 		st.RemoteKnowledge = true
 	}
-	wt := m.Worktree()
+	wt := store.Worktree()
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err != nil {
 		return st
 	}
