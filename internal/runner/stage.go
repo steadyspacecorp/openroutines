@@ -10,6 +10,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
+	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 	"io"
@@ -63,7 +64,7 @@ const attemptHomeName = ".home"
 // resolution can spend seconds on the network. On error, everything Stage
 // acquired is already released.
 func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Attempt, mu sync.Locker) (stagedRun *StagedRun, err error) {
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && meta.AttemptUID == 0 {
+	if mode.Current().Container && meta.AttemptUID == 0 {
 		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
 	}
 	model, err := EffectiveModel(agent, r)
@@ -167,7 +168,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Attempt, mu
 		return nil, err
 	}
 	attemptHome := filepath.Join(workspace, attemptHomeName)
-	if meta.AttemptUID != 0 && os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+	if meta.AttemptUID != 0 && mode.Current().Container {
 		// An attempt identity's gid equals its uid (template Dockerfile).
 		if err := prepareWorkspaceAccess(meta.AttemptUID, workspace); err != nil {
 			return nil, fmt.Errorf("preparing read-only attempt workspace: %w", err)

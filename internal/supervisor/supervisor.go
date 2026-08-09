@@ -26,6 +26,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/lock"
+	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/run"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
@@ -277,7 +278,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 
 func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
 	err := cleanupErr
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+	if mode.Current().Container {
 		err = errors.Join(err, s.reap(uid))
 	}
 	if err != nil {
@@ -904,7 +905,7 @@ func (s *Supervisor) strandBlocked() {
 // anyone is told. Fires on a leftover variable too: unset, it still publishes
 // the value.
 func (s *Supervisor) warnKeyDelivery() {
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") != "1" || !creds.KeyValueInEnv() {
+	if !mode.Current().Container || !creds.KeyValueInEnv() {
 		return
 	}
 	slog.Warn("the master key value is in this process's environment -- readable wherever that environment is; mount the key as a file, point the file variable at the path, and unset the value variable",
@@ -924,7 +925,7 @@ func verifyAttemptGroups(groups []int, slots int) error {
 // verifySandbox enforces the fail-closed policy at boot, not mid-run.
 func (s *Supervisor) verifySandbox() error {
 	switch {
-	case os.Getenv("OPENROUTINES_IN_CONTAINER") == "1":
+	case mode.Current().Container:
 		// Join the attempt groups first -- whether the image's membership
 		// reached this process depends on the init that booted the container
 		// -- then verify, refusing at boot rather than failing every attempt
@@ -985,7 +986,7 @@ func (s *Supervisor) verifySandbox() error {
 			return fmt.Errorf("attempt identity probe: %w: %s", probeErr, strings.TrimSpace(string(exitErr.Stderr)))
 		}
 		return fmt.Errorf("attempt identity probe: %w -- the binary needs cap_setuid and cap_setgid; rebuild the deploy image from the current template Dockerfile", probeErr)
-	case os.Getenv("OPENROUTINES_NATIVE") == "1":
+	case mode.Current().Native:
 		slog.Warn("OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
 	default:
 		slog.Info("model processes run in the per-run container")

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
@@ -86,7 +87,7 @@ func ConfigureLevel() {
 			return
 		}
 	}
-	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
+	if mode.Current().Container {
 		Level.Set(slog.LevelInfo)
 	} else {
 		Level.Set(slog.LevelWarn)
