@@ -10,7 +10,7 @@ import (
 
 // genDefWithMCP renders a definition for an agent whose opencode.json
 // defines two MCP servers.
-func genDefWithMCP(t *testing.T, meta Meta, fm routine.Frontmatter) string {
+func genDefWithMCP(t *testing.T, meta Attempt, fm routine.Frontmatter) string {
 	t.Helper()
 	r := &routine.Routine{Name: "x", FM: fm}
 	def, err := renderDefinition(&config.Agent{Name: "a", Description: "d"}, r, []string{"slack", "steady"}, meta)
@@ -24,7 +24,7 @@ func genDefWithMCP(t *testing.T, meta Meta, fm routine.Frontmatter) string {
 // the tools (and their third-party descriptions) never reach an ungranted
 // routine's model.
 func TestMCPServersDenyByDefault(t *testing.T) {
-	def := genDefWithMCP(t, Meta{RunID: "run_t"}, routine.Frontmatter{})
+	def := genDefWithMCP(t, Attempt{RunID: "run_t"}, routine.Frontmatter{})
 	for _, want := range []string{`"slack_*": deny`, `"steady_*": deny`} {
 		if !strings.Contains(def, want) {
 			t.Fatalf("definition missing %q:\n%s", want, def)
@@ -34,7 +34,7 @@ func TestMCPServersDenyByDefault(t *testing.T) {
 
 // A grant opens exactly the named server; the others stay closed.
 func TestMCPGrantOpensOnlyNamedServer(t *testing.T) {
-	def := genDefWithMCP(t, Meta{RunID: "run_t"}, routine.Frontmatter{MCP: []string{"steady"}})
+	def := genDefWithMCP(t, Attempt{RunID: "run_t"}, routine.Frontmatter{MCP: []string{"steady"}})
 	if !strings.Contains(def, `"steady_*": allow`) {
 		t.Fatalf("granted server not allowed:\n%s", def)
 	}
@@ -46,7 +46,7 @@ func TestMCPGrantOpensOnlyNamedServer(t *testing.T) {
 // An agent with no opencode.json (or no mcp block) renders no MCP rules
 // -- the feature is invisible to agents that don't use it.
 func TestNoMCPConfigNoRules(t *testing.T) {
-	def := genDef(t, Meta{RunID: "run_t"})
+	def := genDef(t, Attempt{RunID: "run_t"})
 	if strings.Contains(def, "_*") {
 		t.Fatalf("unexpected MCP rules without mcp config:\n%s", def)
 	}

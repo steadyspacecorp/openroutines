@@ -49,21 +49,26 @@ const (
 	Canceled  Outcome = "canceled" // shutdown interrupted the attempt
 )
 
-// Meta identifies the attempt: run id (stable across retries), attempt id,
-// and the schedule window for supervisor-dispatched runs.
-type Meta struct {
+// Attempt identifies one execution of a logical run.
+type Attempt struct {
 	RunID          string
-	AttemptID      string
-	ScheduledFor   string // RFC3339, empty for manual runs
-	CoveredThrough string // RFC3339, empty for manual runs
+	Number         int
+	ScheduledFor   time.Time
+	CoveredThrough time.Time
 	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
 	Rehearsal      string // fixture path; set only for manual rehearsal runs
 }
 
-// ExecResult is one attempt's outcome. Hint, when set, classifies a common
+// ID formats the attempt number for logs, environments, and session paths.
+func (a Attempt) ID() string { return fmt.Sprintf("attempt_%02d", a.Number) }
+
+// Manual reports whether the attempt was dispatched outside the scheduler.
+func (a Attempt) Manual() bool { return a.ScheduledFor.IsZero() }
+
+// AttemptResult is one attempt's outcome. Hint, when set, classifies a common
 // failure (currently: provider authentication) so it surfaces as a
 // configuration problem instead of an opaque crash.
-type ExecResult struct {
+type AttemptResult struct {
 	Outcome     Outcome
 	ExitCode    int
 	Duration    time.Duration
@@ -107,8 +112,8 @@ var ErrFatal = errors.New("not retryable")
 // pool, or its next assignee could read the leftover tree.
 var ErrAttemptCleanup = errors.New("attempt workspace cleanup failed")
 
-// Staging is the attempt's staged knowledge, awaiting import or discard.
-type Staging struct {
+// AttemptWorkspace is the attempt's staged knowledge, awaiting import or discard.
+type AttemptWorkspace struct {
 	KnowledgeDir string
 	// BaseDir is the pristine snapshot the run started from, outside the
 	// run's reach; the import diffs staged knowledge against it so
@@ -133,7 +138,7 @@ type Staging struct {
 // Cleanup discards the whole run workspace, staging and base included. A
 // model process can chmod its own files away from the group, so removal may
 // need the attempt identity's own help (see removeAttemptTree).
-func (s *Staging) Cleanup() error {
+func (s *AttemptWorkspace) Cleanup() error {
 	if s.attemptUID != 0 {
 		// Kill anything still carrying the identity first: an escaped
 		// descendant could otherwise race the removal.
@@ -155,7 +160,7 @@ func (s *Staging) Cleanup() error {
 // Consumed reports whether the routine created the consume marker. The staged
 // knowledge directory is canonical (the one sandbox-writable workspace path);
 // the workspace root is still accepted for unsandboxed runs.
-func (s *Staging) Consumed() bool {
+func (s *AttemptWorkspace) Consumed() bool {
 	if _, err := os.Stat(filepath.Join(s.KnowledgeDir, knowledge.ConsumeMarker)); err == nil {
 		return true
 	}
@@ -163,8 +168,8 @@ func (s *Staging) Consumed() bool {
 	return err == nil
 }
 
-// Result is a completed manual run (routines run).
-type Result struct {
+// ManualResult is a completed manual run.
+type ManualResult struct {
 	RunID       string
 	Outcome     Outcome
 	ExitCode    int
@@ -173,6 +178,13 @@ type Result struct {
 	Hint        string               // classified failure cause, when one was recognized
 	SessionsDir string               // the run's exported sessions, "" when no session dir is designated
 	Conflicted  []knowledge.Conflict // semantic edits preserved outside the canonical file
+}
+
+// ManualOptions controls knowledge settlement and rehearsal behavior.
+type ManualOptions struct {
+	DiscardKnowledge bool
+	Rehearse         bool
+	Fixture          string
 }
 
 // EffectiveModel resolves frontmatter over agent defaults.
@@ -225,11 +237,11 @@ func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Dura
 type StagedRun struct {
 	dir       string
 	r         *routine.Routine
-	meta      Meta
+	meta      Attempt
 	model     string
 	timeout   time.Duration
 	secrets   *runSecrets
-	staging   *Staging
+	staging   *AttemptWorkspace
 	workspace string
 	runTmp    string
 	env       []string
@@ -256,7 +268,7 @@ const attemptHomeName = ".home"
 // knowledge lock, held only around the worktree reads -- credential
 // resolution can spend seconds on the network. On error, everything Stage
 // acquired is already released.
-func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sync.Locker) (stagedRun *StagedRun, err error) {
+func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Attempt, mu sync.Locker) (stagedRun *StagedRun, err error) {
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" && meta.AttemptUID == 0 {
 		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
 	}
@@ -295,7 +307,7 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	if err != nil {
 		return nil, err
 	}
-	staging := &Staging{KnowledgeDir: filepath.Join(workspace, knowledge.Dir), workspace: workspace}
+	staging := &AttemptWorkspace{KnowledgeDir: filepath.Join(workspace, knowledge.Dir), workspace: workspace}
 	defer func() {
 		if !ok {
 			err = errors.Join(err, staging.Cleanup())
@@ -374,8 +386,8 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 
 	// Clean environment: constructed, never inherited.
 	env := frameworkEnv(agent.Timezone, r, meta)
-	if meta.ScheduledFor != "" {
-		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor)
+	if !meta.ScheduledFor.IsZero() {
+		env = append(env, "OPENROUTINES_SCHEDULED_FOR="+meta.ScheduledFor.Format(time.RFC3339))
 	}
 	if r.FM.Websearch {
 		// Registers the search backend; the permission rule in the generated
@@ -383,8 +395,8 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 		// exa_api_key lands as EXA_API_KEY for keyed use.
 		env = append(env, "OPENCODE_ENABLE_EXA=1")
 	}
-	if meta.CoveredThrough != "" {
-		env = append(env, "OPENROUTINES_COVERED_THROUGH="+meta.CoveredThrough)
+	if !meta.CoveredThrough.IsZero() {
+		env = append(env, "OPENROUTINES_COVERED_THROUGH="+meta.CoveredThrough.Format(time.RFC3339))
 	}
 	for _, k := range slices.Sorted(maps.Keys(secrets.env)) {
 		env = append(env, k+"="+secrets.env[k])
@@ -425,11 +437,11 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, meta Meta, mu sy
 	}, nil
 }
 
-func frameworkEnv(timezone string, r *routine.Routine, meta Meta) []string {
+func frameworkEnv(timezone string, r *routine.Routine, meta Attempt) []string {
 	return []string{
 		"TZ=" + timezone,
 		"OPENROUTINES_RUN_ID=" + meta.RunID,
-		"OPENROUTINES_ATTEMPT_ID=" + meta.AttemptID,
+		"OPENROUTINES_ATTEMPT_ID=" + meta.ID(),
 		"OPENROUTINES_URL=" + r.FM.EffectiveURL(),
 	}
 }
@@ -438,7 +450,7 @@ func frameworkEnv(timezone string, r *routine.Routine, meta Meta) []string {
 // credential material is revoked when the attempt ends, success or failure;
 // a fresh attempt derives fresh material. On error the staging is already
 // cleaned, and a cleanup failure is joined to the returned error.
-func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStaging *Staging, err error) {
+func (sr *StagedRun) Run(ctx context.Context) (result *AttemptResult, returnedStaging *AttemptWorkspace, err error) {
 	r, meta, staging := sr.r, sr.meta, sr.staging
 	dir := sr.dir
 	ocArgs := sr.ocArgs
@@ -483,7 +495,7 @@ func (sr *StagedRun) Run(ctx context.Context) (result *ExecResult, returnedStagi
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
-	res := &ExecResult{Outcome: Completed}
+	res := &AttemptResult{Outcome: Completed}
 	go func() { done <- cmd.Wait() }()
 	select {
 	case werr := <-done:
@@ -566,13 +578,11 @@ Follow the routine below exactly, under these restraints.
 
 `
 
-// Run executes routine `name` manually. skipKnowledge discards staged writes
-// and the run record; rehearse runs against the fixture (grants stripped) or
-// the live world (read-only by instruction), always discarding knowledge.
+// Run executes routine name manually. Rehearsals always discard knowledge.
 // In the production container a manual run reserves the manual attempt
 // identity, so it can never share a uid with a supervisor slot.
-func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result *Result, err error) {
-	meta := Meta{RunID: run.NewID(), AttemptID: "attempt_01", Rehearsal: fixture}
+func Run(dir, name string, options ManualOptions) (result *ManualResult, err error) {
+	meta := Attempt{RunID: run.NewID(), Number: 1, Rehearsal: options.Fixture}
 	if os.Getenv("OPENROUTINES_IN_CONTAINER") == "1" {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
 		if err != nil {
@@ -589,9 +599,9 @@ func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result
 	if err != nil {
 		return nil, err
 	}
-	if rehearse {
+	if options.Rehearse {
 		rr := *r
-		if fixture != "" {
+		if options.Fixture != "" {
 			// Grants are stripped at the source so the existing pipeline
 			// enforces the absence.
 			rr.FM.Credentials = nil
@@ -604,7 +614,7 @@ func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result
 			rr.Body = livePreamble + r.Body
 		}
 		r = &rr
-		skipKnowledge = true
+		options.DiscardKnowledge = true
 	}
 	// One attempt per routine at a time, held snapshot through settlement --
 	// the same lock the supervisor takes, so a manual run cannot double the
@@ -635,8 +645,8 @@ func Run(dir, name string, skipKnowledge, rehearse bool, fixture string) (result
 	}
 	defer func() { err = errors.Join(err, staging.Cleanup()) }()
 
-	res := &Result{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint, SessionsDir: exec.SessionsDir}
-	if skipKnowledge {
+	res := &ManualResult{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint, SessionsDir: exec.SessionsDir}
+	if options.DiscardKnowledge {
 		return res, nil
 	}
 
@@ -666,7 +676,7 @@ type Settlement struct {
 // so caller bookkeeping rides the same commit. detail overrides the derived
 // failure description. A Canceled attempt gets only its run record and no
 // commit of its own -- the same logical run retries.
-func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, meta Meta, detail string, stage func(*Settlement)) (*Settlement, error) {
+func Settle(dir string, r *routine.Routine, staging *AttemptWorkspace, res *AttemptResult, meta Attempt, detail string, stage func(*Settlement)) (*Settlement, error) {
 	mem := knowledge.At(dir)
 	s := &Settlement{Outcome: res.Outcome, Detail: detail}
 	if res.Outcome == Completed {
@@ -686,7 +696,7 @@ func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, m
 		}
 	}
 	if s.Outcome != Completed && s.Outcome != Canceled {
-		if err := mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.AttemptID, s.Detail)); err != nil {
+		if err := mem.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.ID(), s.Detail)); err != nil {
 			r.Log().Warn("could not record the failure event -- this log line is the only copy", "run_id", meta.RunID, "error", err)
 		}
 	}
@@ -695,7 +705,7 @@ func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, m
 	}
 	rec := *res
 	rec.Outcome = s.Outcome
-	if err := mem.AppendRunRecord(recordJSON(r, meta, parseAttempt(meta.AttemptID), &rec, meta.ScheduledFor == "")); err != nil {
+	if err := mem.AppendRunRecord(recordJSON(r, meta, &rec)); err != nil {
 		return s, err
 	}
 	if s.Outcome == Canceled {
@@ -709,16 +719,10 @@ func Settle(dir string, r *routine.Routine, staging *Staging, res *ExecResult, m
 	return s, nil
 }
 
-func parseAttempt(attemptID string) int {
-	var n int
-	_, _ = fmt.Sscanf(attemptID, "attempt_%d", &n)
-	return n
-}
-
 // importKnowledge applies routine-level policy, then imports the staged tree:
 // teamwork: off discards a staged events.md change, the rest imports
 // normally. Reports whether such a change was discarded.
-func importKnowledge(dir string, r *routine.Routine, staging *Staging) (discarded bool, conflicted []knowledge.Conflict, err error) {
+func importKnowledge(dir string, r *routine.Routine, staging *AttemptWorkspace) (discarded bool, conflicted []knowledge.Conflict, err error) {
 	mem := knowledge.At(dir)
 	if !r.FM.RecordsEvents() {
 		if discarded, err = knowledge.RestoreFile(staging.KnowledgeDir, staging.BaseDir, "events.md"); err != nil {
@@ -762,7 +766,7 @@ func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
 // import, before the completion commit, so consumption and results land
 // together. Exception to the marker rule: a successful first run's change set
 // is empty by construction, so completion establishes the starting cursor.
-func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID string) {
+func advanceConsumer(dir string, r *routine.Routine, staging *AttemptWorkspace, runID string) {
 	if !r.FM.Reports || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
 		return
 	}
@@ -778,11 +782,11 @@ func advanceConsumer(dir string, r *routine.Routine, staging *Staging, runID str
 // recordJSON formats one run record line for runs.jsonl. Usage fields are
 // per attempt (spend happens per attempt; retries would double-count a
 // run-level figure) and absent means the runtime didn't report, never zero.
-func recordJSON(r *routine.Routine, meta Meta, attempt int, res *ExecResult, manual bool) string {
+func recordJSON(r *routine.Routine, meta Attempt, res *AttemptResult) string {
 	record := run.Record{
-		RunID: meta.RunID, Routine: r.Name, Attempt: attempt, Outcome: string(res.Outcome),
+		RunID: meta.RunID, Routine: r.Name, Attempt: meta.Number, Outcome: string(res.Outcome),
 		RecordedAt: timestamp(), DurationMS: res.Duration.Milliseconds(), ExitCode: res.ExitCode,
-		ScheduledFor: meta.ScheduledFor, CoveredThrough: meta.CoveredThrough, Manual: manual,
+		ScheduledFor: formatAttemptTime(meta.ScheduledFor), CoveredThrough: formatAttemptTime(meta.CoveredThrough), Manual: meta.Manual(),
 		Model: res.Model, Effort: res.Effort, Hint: res.Hint, Tokens: res.Usage,
 	}
 	if res.Usage != nil {
@@ -1041,7 +1045,7 @@ type instructionData struct {
 
 // writeAgentDefinition places the generated opencode agent for this run at
 // the harness's discovery path in the workspace.
-func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Routine, servers []string, meta Meta) error {
+func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Routine, servers []string, meta Attempt) error {
 	def, err := renderDefinition(agent, r, servers, meta)
 	if err != nil {
 		return err
@@ -1057,7 +1061,7 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 // an explicit rule per configured MCP server (servers is passed in so rule
 // generation can never silently see an empty config), and the standing
 // instruction.
-func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string, meta Meta) (string, error) {
+func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string, meta Attempt) (string, error) {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "description: Generated for routine %s -- derived from frontmatter, do not edit\n", r.Name)
@@ -1110,7 +1114,14 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 // RenderDefinition generates a routine's agent definition exactly as a run
 // would, without running anything -- check validates wiring with it offline.
 func RenderDefinition(agent *config.Agent, r *routine.Routine, servers []string) (string, error) {
-	return renderDefinition(agent, r, servers, Meta{RunID: "run_check", AttemptID: "attempt_00"})
+	return renderDefinition(agent, r, servers, Attempt{RunID: "run_check"})
+}
+
+func formatAttemptTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 // variablesLine renders the agent's variable names ("$PRODUCT_REPO,
