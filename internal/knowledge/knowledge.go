@@ -603,8 +603,10 @@ func (store *Store) AppendHumanTask(taskID, description string) error {
 	if text == "" {
 		text = "# Tasks\n"
 	}
-	if strings.Contains(text, "`"+taskID+"`") {
-		return nil // one canonical record per task
+	for _, task := range ParseTaskEntries(text) {
+		if task.ID == taskID {
+			return nil
+		}
 	}
 	entry := fmt.Sprintf("- [ ] `%s` %s", taskID, store.scrubbed(description))
 	lines := strings.Split(text, "\n")
@@ -661,10 +663,12 @@ func (store *Store) ResolveHumanTasks(idPrefix, resolution string) (bool, error)
 	}
 	lines := strings.Split(string(raw), "\n")
 	changed := false
-	for i, line := range lines {
-		if !strings.HasPrefix(strings.TrimSpace(line), "- [ ] `"+idPrefix) {
+	for _, task := range ParseTaskEntries(string(raw)) {
+		if !task.Open || !strings.HasPrefix(task.ID, idPrefix) {
 			continue
 		}
+		i := task.line
+		line := lines[i]
 		line = strings.Replace(line, "- [ ]", "- [x]", 1)
 		if trimmed := strings.TrimRight(line, " "); strings.HasSuffix(trimmed, ")") {
 			at := strings.LastIndex(line, ")")

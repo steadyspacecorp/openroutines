@@ -370,3 +370,24 @@ func TestSupervisorEntriesFlattenAndResolve(t *testing.T) {
 		t.Fatalf("second resolve: changed=%v err=%v, want false nil", changed, err)
 	}
 }
+
+func TestResolveHumanTasksIgnoresFencedExamples(t *testing.T) {
+	dir := deliveryFixture(t)
+	appendKnowledge(t, dir, "tasks.md", "- [ ] `task-YYYY-real` do the real work")
+
+	changed, err := At(dir).ResolveHumanTasks("task-YYYY", "done")
+	if err != nil || !changed {
+		t.Fatalf("resolve: changed=%v err=%v, want true nil", changed, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(At(dir).Worktree(), "tasks.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "- [ ] `task-YYYYMMDD-<n>`") {
+		t.Fatalf("fenced task example was resolved: %s", text)
+	}
+	if !strings.Contains(text, "- [x] `task-YYYY-real` do the real work (done)") {
+		t.Fatalf("real task was not resolved: %s", text)
+	}
+}
