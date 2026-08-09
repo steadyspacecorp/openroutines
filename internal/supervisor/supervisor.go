@@ -267,7 +267,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 
 func (s *Supervisor) releaseIdentity(uid uint32, cleanupErr error) bool {
 	err := cleanupErr
-	if mode.Current().Container {
+	if mode.Current() == mode.DeployedContainer {
 		err = errors.Join(err, s.pool.reap(uid))
 	}
 	if err != nil {

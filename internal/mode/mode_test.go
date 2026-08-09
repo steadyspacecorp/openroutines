@@ -5,12 +5,24 @@ import "testing"
 func TestCurrent(t *testing.T) {
 	t.Setenv(EnvContainer, "1")
 	t.Setenv(EnvNative, "")
-	if got := Current(); !got.Container || got.Native {
-		t.Fatalf("Current() = %#v", got)
+	if got := Current(); got != DeployedContainer {
+		t.Fatalf("Current() = %v, want %v", got, DeployedContainer)
 	}
 	t.Setenv(EnvContainer, "true")
 	t.Setenv(EnvNative, "1")
-	if got := Current(); got.Container || !got.Native {
-		t.Fatalf("Current() = %#v", got)
+	if got := Current(); got != LocalNative {
+		t.Fatalf("Current() = %v, want %v", got, LocalNative)
+	}
+	t.Setenv(EnvContainer, "")
+	t.Setenv(EnvNative, "")
+	if got := Current(); got != LocalContainer {
+		t.Fatalf("Current() = %v, want %v", got, LocalContainer)
+	}
+	// The deployed container defines the security boundary even if a stale
+	// local-development override also survives in the environment.
+	t.Setenv(EnvContainer, "1")
+	t.Setenv(EnvNative, "1")
+	if got := Current(); got != DeployedContainer {
+		t.Fatalf("Current() = %v, want %v", got, DeployedContainer)
 	}
 }

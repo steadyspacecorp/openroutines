@@ -65,7 +65,7 @@ func GenerateKey() string {
 func LoadKey(dir string) ([]byte, error) {
 	keyHex := ""
 	if path := os.Getenv(EnvMasterKeyFile); path != "" {
-		if mode.Current().Container {
+		if mode.Current() == mode.DeployedContainer {
 			info, err := os.Stat(path)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", EnvMasterKeyFile, err)
