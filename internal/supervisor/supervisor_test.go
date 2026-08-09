@@ -1187,6 +1187,26 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 	}
 }
 
+func TestUnsettledRunIsNotReportedAsCompleted(t *testing.T) {
+	dir := fixture(t, "ok")
+	s := newSupervisor(t, dir)
+	logs := logtest.Capture(t)
+	ctx := context.Background()
+	t0 := time.Now().Truncate(time.Minute)
+
+	s.tickWait(ctx, t0)
+	if err := os.Mkdir(filepath.Join(dir, "knowledge", "runs.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.tickWait(ctx, t0.Add(61*time.Second))
+
+	logs.Expect("settlement failed -- run remains pending and will retry")
+	logs.Reject("run completed")
+	if st := loadState(t, s); st.Pending == nil {
+		t.Fatal("the unsettled run must remain pending for retry")
+	}
+}
+
 // A lease lost between staging and start hands the reserved attempt back:
 // no model process ran, so the budget must not move -- a reservation that
 // never becomes a run is given back (docs/design.md), exactly as the
