@@ -3,86 +3,87 @@ package runner
 import (
 	"errors"
 	"fmt"
-	"github.com/steadyspacecorp/openroutines/internal/knowledge"
-	"github.com/steadyspacecorp/openroutines/internal/routine"
-	"github.com/steadyspacecorp/openroutines/internal/run"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
+	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/run"
 )
 
 // Settlement is one attempt's settled, durable outcome.
 type Settlement struct {
-	Outcome   Outcome // downgraded to Crashed when staged knowledge was rejected
-	Detail    string  // the failure description recorded; "" for clean completions
-	Discarded bool    // staged events.md change discarded (teamwork: off)
-	Commit    string  // settlement commit hash, "" when nothing changed
-	// Conflicted names files a concurrently settled run also edited; the
+	Outcome         Outcome // downgraded to Crashed when staged knowledge was rejected
+	Detail          string  // the failure description recorded; "" for clean completions
+	EventsDiscarded bool    // staged events.md change discarded (teamwork: off)
+	Commit          string  // settlement commit hash, "" when nothing changed
+	// Conflicts names files a concurrently settled run also edited; the
 	// staged competitor was quarantined for a person to resolve.
-	Conflicted []knowledge.Conflict
+	Conflicts []knowledge.Conflict
 }
 
 // Settle makes one attempt's end durable in knowledge -- the single
 // settlement path for manual and scheduled runs. A rejected import downgrades
-// the outcome to Crashed. stage, when set, runs before the settlement commit
-// so caller bookkeeping rides the same commit. detail overrides the derived
+// the outcome to Crashed. beforeCommit, when set, runs before the settlement
+// commit so caller bookkeeping rides the same commit. detail overrides the derived
 // failure description. A Canceled attempt gets only its run record and no
 // commit of its own -- the same logical run retries.
-func Settle(dir string, r *routine.Routine, staging *AttemptWorkspace, res *AttemptResult, meta Attempt, detail string, stage func(*Settlement)) (*Settlement, error) {
+func Settle(dir string, r *routine.Routine, workspace *AttemptWorkspace, result *AttemptResult, attempt Attempt, detail string, beforeCommit func(*Settlement)) (*Settlement, error) {
 	store := knowledge.NewStore(dir)
-	s := &Settlement{Outcome: res.Outcome, Detail: detail}
-	if res.Outcome == Completed {
-		discarded, conflicted, err := importKnowledge(dir, r, staging)
+	settlement := &Settlement{Outcome: result.Outcome, Detail: detail}
+	if result.Outcome == Completed {
+		eventsDiscarded, conflicts, err := importKnowledge(dir, r, workspace)
 		if err != nil {
-			s.Outcome = Crashed
-			s.Detail = "knowledge rejected: " + err.Error()
+			settlement.Outcome = Crashed
+			settlement.Detail = "knowledge rejected: " + err.Error()
 		} else {
-			s.Discarded = discarded
-			s.Conflicted = conflicted
-			advanceConsumer(dir, r, staging, meta.RunID)
+			settlement.EventsDiscarded = eventsDiscarded
+			settlement.Conflicts = conflicts
+			advanceConsumer(dir, r, workspace, attempt.RunID)
 		}
-	} else if s.Detail == "" && res.Outcome != Canceled {
-		s.Detail = fmt.Sprintf("%s after %s (exit %d)", res.Outcome, res.Duration, res.ExitCode)
-		if res.Hint != "" {
-			s.Detail += " -- " + res.Hint
-		}
-	}
-	if s.Outcome != Completed && s.Outcome != Canceled {
-		if err := store.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, meta.RunID, meta.ID(), s.Detail)); err != nil {
-			r.Log().Warn("could not record the failure event -- this log line is the only copy", "run_id", meta.RunID, "error", err)
+	} else if settlement.Detail == "" && result.Outcome != Canceled {
+		settlement.Detail = fmt.Sprintf("%s after %s (exit %d)", result.Outcome, result.Duration, result.ExitCode)
+		if result.Hint != "" {
+			settlement.Detail += " -- " + result.Hint
 		}
 	}
-	if stage != nil {
-		stage(s)
+	if settlement.Outcome != Completed && settlement.Outcome != Canceled {
+		if err := store.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, attempt.RunID, attempt.ID(), settlement.Detail)); err != nil {
+			r.Log().Warn("could not record the failure event -- this log line is the only copy", "run_id", attempt.RunID, "error", err)
+		}
 	}
-	rec := *res
-	rec.Outcome = s.Outcome
-	if err := store.AppendRunRecord(recordJSON(r, meta, &rec)); err != nil {
-		return s, err
+	if beforeCommit != nil {
+		beforeCommit(settlement)
 	}
-	if s.Outcome == Canceled {
-		return s, nil
+	record := *result
+	record.Outcome = settlement.Outcome
+	if err := store.AppendRunRecord(recordJSON(r, attempt, &record)); err != nil {
+		return settlement, err
 	}
-	commit, err := store.Commit(fmt.Sprintf("Run %s (%s): %s", r.Name, meta.RunID, s.Outcome))
+	if settlement.Outcome == Canceled {
+		return settlement, nil
+	}
+	commit, err := store.Commit(fmt.Sprintf("Run %s (%s): %s", r.Name, attempt.RunID, settlement.Outcome))
 	if err != nil {
-		return s, err
+		return settlement, err
 	}
-	s.Commit = commit
-	return s, nil
+	settlement.Commit = commit
+	return settlement, nil
 }
 
 // importKnowledge applies routine-level policy, then imports the staged tree:
 // teamwork: off discards a staged events.md change, the rest imports
 // normally. Reports whether such a change was discarded.
-func importKnowledge(dir string, r *routine.Routine, staging *AttemptWorkspace) (discarded bool, conflicted []knowledge.Conflict, err error) {
+func importKnowledge(dir string, r *routine.Routine, workspace *AttemptWorkspace) (eventsDiscarded bool, conflicts []knowledge.Conflict, err error) {
 	store := knowledge.NewStore(dir)
 	if !r.Frontmatter.RecordsEvents() {
-		if discarded, err = knowledge.RestoreFile(staging.KnowledgeDir, staging.BaseDir, "events.md"); err != nil {
+		if eventsDiscarded, err = knowledge.RestoreFile(workspace.KnowledgeDir, workspace.BaseDir, "events.md"); err != nil {
 			return false, nil, err
 		}
 	}
-	conflicted, err = store.Import(staging.KnowledgeDir, staging.BaseDir)
-	return discarded, conflicted, err
+	conflicts, err = store.Import(workspace.KnowledgeDir, workspace.BaseDir)
+	return eventsDiscarded, conflicts, err
 }
 
 // prepareChanges fixes the delivery boundary at the knowledge branch's
@@ -118,31 +119,31 @@ func prepareChanges(dir, workspace, consumer string) (string, bool, error) {
 // import, before the completion commit, so consumption and results land
 // together. Exception to the marker rule: a successful first run's change set
 // is empty by construction, so completion establishes the starting cursor.
-func advanceConsumer(dir string, r *routine.Routine, staging *AttemptWorkspace, runID string) {
-	if !r.Frontmatter.Reports || staging.ConsumerThrough == "" || (!staging.ConsumerFirstRun && !staging.Consumed()) {
+func advanceConsumer(dir string, r *routine.Routine, workspace *AttemptWorkspace, runID string) {
+	if !r.Frontmatter.Reports || workspace.Delivery.Through == "" || (!workspace.Delivery.FirstRun && !workspace.Consumed()) {
 		return
 	}
 	if err := knowledge.NewStore(dir).SaveCursor(r.Name, knowledge.Cursor{
-		ConsumedThrough: staging.ConsumerThrough,
+		ConsumedThrough: workspace.Delivery.Through,
 		ByRun:           runID,
 		At:              time.Now().UTC(),
 	}); err != nil {
-		r.Log().Error("cursor not advanced -- this change set will be delivered again", "run_id", runID, "through", staging.ConsumerThrough, "error", err)
+		r.Log().Error("cursor not advanced -- this change set will be delivered again", "run_id", runID, "through", workspace.Delivery.Through, "error", err)
 	}
 }
 
 // recordJSON formats one run record line for runs.jsonl. Usage fields are
 // per attempt (spend happens per attempt; retries would double-count a
 // run-level figure) and absent means the runtime didn't report, never zero.
-func recordJSON(r *routine.Routine, meta Attempt, res *AttemptResult) string {
+func recordJSON(r *routine.Routine, attempt Attempt, result *AttemptResult) string {
 	record := run.Record{
-		RunID: meta.RunID, Routine: r.Name, Attempt: meta.Number, Outcome: string(res.Outcome),
-		RecordedAt: timestamp(), DurationMS: res.Duration.Milliseconds(), ExitCode: res.ExitCode,
-		ScheduledFor: formatAttemptTime(meta.ScheduledFor), CoveredThrough: formatAttemptTime(meta.CoveredThrough), Manual: meta.Manual(),
-		Model: res.Model, Effort: res.Effort, Hint: res.Hint, Tokens: res.Usage,
+		RunID: attempt.RunID, Routine: r.Name, Attempt: attempt.Number, Outcome: string(result.Outcome),
+		RecordedAt: timestamp(), DurationMS: result.Duration.Milliseconds(), ExitCode: result.ExitCode,
+		ScheduledFor: formatAttemptTime(attempt.ScheduledFor), CoveredThrough: formatAttemptTime(attempt.CoveredThrough), Manual: attempt.Manual(),
+		Model: result.Model, Effort: result.Effort, Hint: result.Hint, Tokens: result.Usage,
 	}
-	if res.Usage != nil {
-		record.CostReported = res.Usage.CostReported
+	if result.Usage != nil {
+		record.CostReported = result.Usage.CostReported
 	}
 	return record.JSON()
 }

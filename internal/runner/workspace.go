@@ -161,8 +161,8 @@ type instructionData struct {
 
 // writeAgentDefinition places the generated opencode agent for this run at
 // the harness's discovery path in the workspace.
-func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Routine, servers []string, meta Attempt) error {
-	def, err := renderDefinition(agent, r, servers, meta)
+func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Routine, servers []string, attempt Attempt) error {
+	def, err := renderDefinition(agent, r, servers, attempt)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func writeAgentDefinition(workspace string, agent *config.Agent, r *routine.Rout
 // an explicit rule per configured MCP server (servers is passed in so rule
 // generation can never silently see an empty config), and the standing
 // instruction.
-func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string, meta Attempt) (string, error) {
+func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string, attempt Attempt) (string, error) {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "description: Generated for routine %s -- derived from frontmatter, do not edit\n", r.Name)
@@ -215,7 +215,7 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 		AgentName:     agent.Name,
 		Description:   strings.TrimSpace(agent.Description),
 		RoutineName:   r.Name,
-		RunID:         meta.RunID,
+		RunID:         attempt.RunID,
 		RecordsEvents: r.Frontmatter.RecordsEvents(),
 		Reports:       r.Frontmatter.Reports,
 		Changes:       knowledge.ChangesFileName,

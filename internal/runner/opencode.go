@@ -23,95 +23,88 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
-// opencode is one attempt's grip on its opencode runtime: run hands back the
-// model process ready to start, kill and reap end it, exec runs one
-// follow-up subcommand as the supervisor and returns its stdout.
-type opencode interface {
+// attemptRuntime is one attempt's grip on its opencode process: run hands
+// back the model process ready to start, kill and reap end it, and exec runs
+// one follow-up subcommand as the supervisor and returns its stdout.
+type attemptRuntime interface {
 	run(ocArgs []string) *exec.Cmd
 	kill(cmd *exec.Cmd, done chan error, log *slog.Logger)
 	reap(cmd *exec.Cmd)
 	exec(args ...string) ([]byte, error)
 }
 
-// opencode picks the attempt's deployment mode and checks its prerequisites.
-func (sr *StagedRun) opencode() (opencode, error) {
+// runtime picks the attempt's deployment mode and checks its prerequisites.
+func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
+	currentMode := mode.Current()
 	switch {
-	case nativeMode() && mode.Current().Container:
+	case currentMode.Container:
 		if _, err := exec.LookPath("opencode"); err != nil {
 			return nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
 		}
-		return hostOpencode{
-			workspace:    sr.workspace,
-			runTmp:       sr.runTmp,
-			knowledgeDir: sr.staging.KnowledgeDir,
-			uid:          sr.meta.AttemptUID,
-			env:          sr.env,
+		return sandboxedRuntime{
+			workspace:    p.workspace.root,
+			tempDir:      p.tempDir,
+			knowledgeDir: p.workspace.KnowledgeDir,
+			uid:          p.attempt.AttemptUID,
+			env:          p.env,
 		}, nil
-	case nativeMode():
+	case currentMode.Native:
 		if _, err := exec.LookPath("opencode"); err != nil {
 			return nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
 		}
-		return nativeOpencode{workspace: sr.workspace, runTmp: sr.runTmp, env: sr.env}, nil
+		return nativeRuntime{workspace: p.workspace.root, tempDir: p.tempDir, env: p.env}, nil
 	default:
 		if _, err := exec.LookPath("docker"); err != nil {
 			return nil, fmt.Errorf("docker is required to run routines -- the model process executes in a container (see README prerequisites); contributors with opencode installed locally can set OPENROUTINES_NATIVE=1")
 		}
-		image := runtimeImageTag(sr.dir)
-		if err := ensureRuntimeImage(sr.dir, image); err != nil {
+		image := runtimeImageTag(p.agentDir)
+		if err := ensureRuntimeImage(p.agentDir, image); err != nil {
 			return nil, err
 		}
 		// Pre-create the attempt home world-writable: the container's agent
 		// uid (10001) is not the host user's, and the workspace is a bind
 		// mount discarded after the run.
-		for _, p := range []string{
-			filepath.Join(sr.workspace, attemptHomeName),
-			filepath.Join(sr.workspace, attemptHomeName, ".local"),
-			filepath.Join(sr.workspace, attemptHomeName, ".local", "share"),
+		for _, path := range []string{
+			filepath.Join(p.workspace.root, attemptHomeName),
+			filepath.Join(p.workspace.root, attemptHomeName, ".local"),
+			filepath.Join(p.workspace.root, attemptHomeName, ".local", "share"),
 		} {
-			if err := os.MkdirAll(p, 0o777); err != nil {
+			if err := os.MkdirAll(path, 0o777); err != nil {
 				return nil, err
 			}
-			_ = os.Chmod(p, 0o777)
+			_ = os.Chmod(path, 0o777)
 		}
-		return containerOpencode{
-			workspace: sr.workspace,
+		return containerRuntime{
+			workspace: p.workspace.root,
 			image:     image,
-			name:      "openroutines-" + sr.meta.RunID,
-			env:       sr.env,
+			name:      "openroutines-" + p.attempt.RunID,
+			env:       p.env,
 		}, nil
 	}
 }
 
-// nativeMode reports whether to spawn opencode directly instead of in a
-// container: inside the production image (which ships opencode), or when a
-// contributor explicitly opts out with OPENROUTINES_NATIVE=1.
-func nativeMode() bool {
-	current := mode.Current()
-	return current.Container || current.Native
-}
-
-// hostOpencode is production: opencode from the image's PATH, the run
+// sandboxedRuntime is production: opencode from the image's PATH, the run
 // confined behind the Landlock shim as the attempt's own identity.
-type hostOpencode struct {
+type sandboxedRuntime struct {
 	processGroup
 	workspace    string
-	runTmp       string
+	tempDir      string
 	knowledgeDir string
 	uid          uint32
 	env          []string
 }
 
 // home is the disposable per-attempt HOME inside the workspace.
-func (h hostOpencode) home() string { return filepath.Join(h.workspace, attemptHomeName) }
+func (h sandboxedRuntime) home() string { return filepath.Join(h.workspace, attemptHomeName) }
 
-func (h hostOpencode) dataHome() string { return filepath.Join(h.home(), ".local", "share") }
+func (h sandboxedRuntime) dataHome() string { return filepath.Join(h.home(), ".local", "share") }
 
 // run builds the model process behind the Landlock shim -- our own binary
 // applies the rules to itself, then execs opencode. HOME is disposable and
 // the attempt's alone: a shared writable home let one routine persist state,
 // plugins included, into a later routine's session.
-func (h hostOpencode) run(ocArgs []string) *exec.Cmd {
-	ro, rw := sandbox.Paths(h.workspace, h.knowledgeDir, h.runTmp, os.Getenv("HOME"), h.home())
+func (h sandboxedRuntime) run(ocArgs []string) *exec.Cmd {
+	ro, rw := sandbox.Paths(h.workspace, h.knowledgeDir, h.tempDir, os.Getenv("HOME"), h.home())
 	cmd := exec.Command(sandbox.HelperPath, append([]string{"sandbox-exec", "--", "opencode"}, ocArgs...)...)
 	cmd.Env = slices.Concat(h.env, []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -119,7 +112,7 @@ func (h hostOpencode) run(ocArgs []string) *exec.Cmd {
 		"XDG_DATA_HOME=" + h.dataHome(),
 		"XDG_CONFIG_HOME=" + filepath.Join(h.home(), ".config"),
 		"XDG_CACHE_HOME=" + filepath.Join(h.home(), ".cache"),
-		"TMPDIR=" + h.runTmp,
+		"TMPDIR=" + h.tempDir,
 		sandbox.EnvRO + "=" + sandbox.JoinPaths(ro),
 		sandbox.EnvRW + "=" + sandbox.JoinPaths(rw),
 		sandbox.EnvAttemptUID + "=" + strconv.FormatUint(uint64(h.uid), 10),
@@ -135,7 +128,7 @@ func (h hostOpencode) run(ocArgs []string) *exec.Cmd {
 
 // exec runs one subcommand with a minted hygiene HOME (see captureHome); the
 // attempt's store is reached by XDG_DATA_HOME -- data, never code.
-func (h hostOpencode) exec(args ...string) ([]byte, error) {
+func (h sandboxedRuntime) exec(args ...string) ([]byte, error) {
 	gid := attemptGroup(h.home())
 	home, cleanup, err := captureHome(h.workspace, gid)
 	if err != nil {
@@ -227,31 +220,31 @@ func attemptGroup(attemptHome string) uint32 {
 	return st.Gid
 }
 
-// nativeOpencode is OPENROUTINES_NATIVE=1: the developer's own opencode,
+// nativeRuntime is OPENROUTINES_NATIVE=1: the developer's own opencode,
 // unconfined by explicit opt-in. Their real HOME stays (opencode auth lives
 // there); sessions are reached by working directory, which is this attempt's
 // alone. No capture-home hygiene -- the run already executed unconfined with
 // this same HOME.
-type nativeOpencode struct {
+type nativeRuntime struct {
 	processGroup
 	workspace string
-	runTmp    string
+	tempDir   string
 	env       []string
 }
 
-func (n nativeOpencode) run(ocArgs []string) *exec.Cmd {
+func (n nativeRuntime) run(ocArgs []string) *exec.Cmd {
 	cmd := exec.Command("opencode", ocArgs...)
 	cmd.Env = slices.Concat(n.env, []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
-		"TMPDIR=" + n.runTmp,
+		"TMPDIR=" + n.tempDir,
 	})
 	cmd.Dir = n.workspace
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return cmd
 }
 
-func (n nativeOpencode) exec(args ...string) ([]byte, error) {
+func (n nativeRuntime) exec(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "opencode", args...)
@@ -260,10 +253,10 @@ func (n nativeOpencode) exec(args ...string) ([]byte, error) {
 	return runToFile(cmd)
 }
 
-// containerOpencode is the local default: opencode exists only inside the
+// containerRuntime is the local default: opencode exists only inside the
 // runtime image, so both paths re-enter it with the workspace mounted at
 // /work and nothing else from the host visible.
-type containerOpencode struct {
+type containerRuntime struct {
 	workspace string
 	image     string
 	name      string
@@ -274,7 +267,7 @@ type containerOpencode struct {
 // passed by NAME only -- docker resolves the values from the client
 // process's environment -- so secret values never appear on the command
 // line (argv is world-readable via ps for the duration of the run).
-func (c containerOpencode) run(ocArgs []string) *exec.Cmd {
+func (c containerRuntime) run(ocArgs []string) *exec.Cmd {
 	// HOME is the disposable per-attempt directory inside the mounted
 	// workspace, so session storage survives --rm.
 	args := []string{
@@ -299,14 +292,14 @@ func (c containerOpencode) run(ocArgs []string) *exec.Cmd {
 	return cmd
 }
 
-func (c containerOpencode) kill(cmd *exec.Cmd, done chan error, log *slog.Logger) {
+func (c containerRuntime) kill(cmd *exec.Cmd, done chan error, log *slog.Logger) {
 	stopContainer(c.name)
 	killClient(cmd, containerExitGrace, done, log)
 }
 
 // reap is a no-op: the run's pid namespace dies with `docker run --rm`,
 // which reaps every descendant already.
-func (c containerOpencode) reap(*exec.Cmd) {}
+func (c containerRuntime) reap(*exec.Cmd) {}
 
 // captureHomeMount is where the capture exec's empty home lives inside
 // the runtime image -- deliberately outside /work, the attempt's
@@ -318,7 +311,7 @@ const captureHomeMount = "/capture-home"
 // opencode's side of docker's stdout pipe.
 const captureOutName = ".capture-out"
 
-func (c containerOpencode) exec(args ...string) ([]byte, error) {
+func (c containerRuntime) exec(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
 	defer cancel()
 	// Clear the landing path first: a planted symlink must not decide where

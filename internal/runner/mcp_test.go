@@ -10,10 +10,10 @@ import (
 
 // genDefWithMCP renders a definition for an agent whose opencode.json
 // defines two MCP servers.
-func genDefWithMCP(t *testing.T, meta Attempt, fm routine.Frontmatter) string {
+func genDefWithMCP(t *testing.T, attempt Attempt, fm routine.Frontmatter) string {
 	t.Helper()
 	r := &routine.Routine{Name: "x", Frontmatter: fm}
-	def, err := renderDefinition(&config.Agent{Name: "a", Description: "d"}, r, []string{"slack", "steady"}, meta)
+	def, err := renderDefinition(&config.Agent{Name: "a", Description: "d"}, r, []string{"slack", "steady"}, attempt)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -107,7 +107,7 @@ func routinesRun(args []string) int {
 			fmt.Println()
 		}
 	}
-	res, err := runner.Run(".", name, runner.ManualOptions{
+	result, err := runner.RunManual(".", name, runner.ManualOptions{
 		DiscardKnowledge: !writeKnowledge,
 		Rehearse:         rehearse,
 		Fixture:          fixture,
@@ -115,22 +115,22 @@ func routinesRun(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	fmt.Printf("\n%s: %s in %s (run %s)\n", name, res.Outcome, res.Duration, res.RunID)
-	if res.SessionsDir != "" {
-		fmt.Printf("sessions: %s\n", res.SessionsDir)
+	fmt.Printf("\n%s: %s in %s (run %s)\n", name, result.Outcome, result.Duration, result.RunID)
+	if result.SessionsDir != "" {
+		fmt.Printf("sessions: %s\n", result.SessionsDir)
 	}
-	if res.Hint != "" {
-		fmt.Println(res.Hint)
+	if result.Hint != "" {
+		fmt.Println(result.Hint)
 	}
-	for _, f := range res.Conflicted {
+	for _, f := range result.Conflicts {
 		fmt.Printf("note: a concurrent run edited the same lines in %s -- both versions kept; curate the file if they disagree\n", f)
 	}
 	if !writeKnowledge {
 		fmt.Println("knowledge discarded: external actions were still performed and credentials were available -- pass --write-knowledge for a run that settles (first runs may still have initialized the knowledge worktree)")
-	} else if res.Commit != "" {
-		fmt.Printf("knowledge updated: commit %s on the %s branch\n", res.Commit, "knowledge")
+	} else if result.Commit != "" {
+		fmt.Printf("knowledge updated: commit %s on the %s branch\n", result.Commit, "knowledge")
 	}
-	if res.Outcome != runner.Completed {
+	if result.Outcome != runner.Completed {
 		return 1
 	}
 	return 0

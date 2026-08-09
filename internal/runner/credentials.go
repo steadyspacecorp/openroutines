@@ -2,13 +2,14 @@ package runner
 
 import (
 	"fmt"
-	"github.com/steadyspacecorp/openroutines/internal/config"
-	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"maps"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
 // authFailurePattern matches provider authentication errors in the session
