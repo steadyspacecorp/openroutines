@@ -32,6 +32,36 @@ func TestSplitAcceptsCRLFAndClosingDelimiterAtEOF(t *testing.T) {
 	}
 }
 
+func TestSplitAcceptsMixedLineEndings(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, replaced string
+	}{
+		{
+			name:     "CRLF opening and LF closing",
+			raw:      "---\r\nmodel: provider/model\n---\nbody\n",
+			replaced: "---\r\nmodel: next\n---\nbody\n",
+		},
+		{
+			name:     "LF opening and CRLF closing",
+			raw:      "---\nmodel: provider/model\r\n---\r\nbody\r\n",
+			replaced: "---\nmodel: next\r\n---\r\nbody\r\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := Split([]byte(tc.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(doc.Frontmatter); got != "model: provider/model" {
+				t.Fatalf("frontmatter = %q", got)
+			}
+			if got := string(doc.WithFrontmatter([]byte("model: next"))); got != tc.replaced {
+				t.Fatalf("WithFrontmatter() = %q, want %q", got, tc.replaced)
+			}
+		})
+	}
+}
+
 func TestReplaceEmptyFrontmatter(t *testing.T) {
 	doc, err := Split([]byte("---\n---\nbody"))
 	if err != nil {
