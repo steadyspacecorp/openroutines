@@ -41,19 +41,29 @@ func cmdStatus(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	location := printAgentStatus(dir, agent)
+	printCredentialStatus(dir)
+	printRoutineStatus(dir, location)
+	printSkillStatus(dir)
+	printKnowledgeStatus(dir)
+	printTokenUsage(dir)
+	printConfigurationNeeds(agent)
+	return 0
+}
 
+func printAgentStatus(dir string, agent *config.Agent) *time.Location {
 	fmt.Printf("agent      %s\n", orUnset(agent.Name))
 	fmt.Printf("job        %s\n", orUnset(firstLine(agent.Description)))
 	fmt.Printf("owner      %s <%s>\n", orUnset(agent.Owner.Name), orUnset(agent.Owner.Email))
-	// The supervisor refuses to start on an unloadable timezone; status just
-	// says so and carries on in UTC rather than quietly printing fire times
-	// the agent would never use.
-	loc, err := time.LoadLocation(agent.Timezone)
-	tzNote := ""
+
+	// The supervisor refuses to start on an unloadable timezone; status carries
+	// on in UTC but labels the fallback rather than printing impossible fire times.
+	location, err := time.LoadLocation(agent.Timezone)
+	timezoneNote := ""
 	if err != nil {
-		loc, tzNote = time.UTC, " -- INVALID, times below shown in UTC"
+		location, timezoneNote = time.UTC, " -- INVALID, times below shown in UTC"
 	}
-	fmt.Printf("timezone   %s%s\n", orUnset(agent.Timezone), tzNote)
+	fmt.Printf("timezone   %s%s\n", orUnset(agent.Timezone), timezoneNote)
 	fmt.Printf("model      %s (default)\n", orUnset(agent.Defaults.Model))
 	if len(agent.Variables) > 0 {
 		names := slices.Sorted(maps.Keys(agent.Variables))
@@ -62,129 +72,144 @@ func cmdStatus(args []string) int {
 	if pin, err := readVersionPin(dir); err == nil {
 		fmt.Printf("framework  %s (pinned; this binary is %s)\n", pin, version.Version)
 	}
+	return location
+}
 
-	if key, err := creds.LoadKey(dir); err != nil {
+func printCredentialStatus(dir string) {
+	key, err := creds.LoadKey(dir)
+	if err != nil {
 		fmt.Printf("master key MISSING -- run openroutines configure\n")
-	} else if store, err := creds.Read(dir, key); err != nil {
-		fmt.Printf("master key present, but credentials do not decrypt: %v\n", err)
-	} else {
-		names := make([]string, 0, len(store))
-		for k := range store {
-			names = append(names, k)
-		}
-		if len(names) == 0 {
-			fmt.Printf("master key present -- no credentials stored yet\n")
-		} else {
-			fmt.Printf("master key present -- %d credential(s): %s\n", len(store), strings.Join(names, ", "))
-		}
+		return
 	}
+	store, err := creds.Read(dir, key)
+	if err != nil {
+		fmt.Printf("master key present, but credentials do not decrypt: %v\n", err)
+		return
+	}
+	names := slices.Sorted(maps.Keys(store))
+	if len(names) == 0 {
+		fmt.Printf("master key present -- no credentials stored yet\n")
+	} else {
+		fmt.Printf("master key present -- %d credential(s): %s\n", len(store), strings.Join(names, ", "))
+	}
+}
 
-	now := time.Now().In(loc)
-	stateDir := knowledge.NewStore(dir).StateDir()
+func printRoutineStatus(dir string, location *time.Location) {
+	now := time.Now().In(location)
+	store := knowledge.NewStore(dir)
 	settled := settledAttempts(dir)
 	routines, parseErrs := routine.LoadAgent(dir)
 	fmt.Printf("\n%s\n", bold(fmt.Sprintf("routines (%d):", len(routines))))
-	reported := false
-	for _, r := range routines {
-		st, stErr := schedule.Load(stateDir, r.Name)
-		state := "inactive"
+
+	reportedState := false
+	for _, routine := range routines {
+		state, stateErr := schedule.Load(store.StateDir(), routine.Name)
+		activity := "inactive"
 		next := ""
-		if r.Frontmatter.IsActive() {
-			state = "active"
+		if routine.Frontmatter.IsActive() {
+			activity = "active"
 			// A routine in cool-down doesn't fire at its next occurrence, so
-			// don't print a time that won't happen; the cool-down's end is on
-			// the breaker line below instead.
-			if st != nil && st.CoolingDown(now) {
+			// print the cool-down instead of a time that will not happen.
+			if state != nil && state.CoolingDown(now) {
 				next = " -- cooling down"
-			} else if spec, err := schedule.Parse(r.Frontmatter.Schedule, loc); err == nil {
-				next = " -- next " + stamp(spec.Next(now), now, loc)
+			} else if spec, err := schedule.Parse(routine.Frontmatter.Schedule, location); err == nil {
+				next = " -- next " + stamp(spec.Next(now), now, location)
 			}
 		}
 		grants := ""
-		if g := grantSummary(r); len(g) > 0 {
-			grants = " (" + strings.Join(g, " ") + ")"
+		if summary := grantSummary(routine); len(summary) > 0 {
+			grants = " (" + strings.Join(summary, " ") + ")"
 		}
-		fmt.Printf("  %-20s %-14s %s%s%s\n", r.Name, scheduleSummary(r), state, next, grants)
-		if stErr != nil {
-			fmt.Printf("      %s %v\n", warnMark, stErr)
+		fmt.Printf("  %-20s %-14s %s%s%s\n", routine.Name, scheduleSummary(routine), activity, next, grants)
+		if stateErr != nil {
+			fmt.Printf("      %s %v\n", warnMark, stateErr)
 		}
-		for _, line := range scheduleStateLines(st, r, now, loc, settled) {
-			reported = true
+		for _, line := range scheduleStateLines(state, routine, now, location, settled) {
+			reportedState = true
 			fmt.Printf("      %s\n", line)
 		}
 	}
-	// These numbers are only as current as the last fetch; call that out here
-	// too since the knowledge section's own warning is screens away by now.
-	if reported {
-		if ms := knowledge.NewStore(dir).Status(); ms.Behind > 0 {
-			fmt.Printf("  %s scheduling state above is from knowledge %d commit(s) behind origin/%s -- run openroutines sync\n", warnMark, ms.Behind, knowledge.Branch)
+	if reportedState {
+		if status := store.Status(); status.Behind > 0 {
+			fmt.Printf("  %s scheduling state above is from knowledge %d commit(s) behind origin/%s -- run openroutines sync\n", warnMark, status.Behind, knowledge.Branch)
 		}
 	}
-	for _, e := range parseErrs {
-		fmt.Printf("  %s %v\n", warnMark, e)
+	for _, err := range parseErrs {
+		fmt.Printf("  %s %v\n", warnMark, err)
 	}
+}
 
-	skills, skillErrs := skill.ListAgent(dir)
+func printSkillStatus(dir string) {
+	skills, errs := skill.ListAgent(dir)
 	fmt.Printf("\n%s\n", bold(fmt.Sprintf("skills (%d):", len(skills))))
-	for _, s := range skills {
-		fmt.Printf("  %-20s %s\n", s.Name, firstLine(s.Description))
+	for _, skill := range skills {
+		fmt.Printf("  %-20s %s\n", skill.Name, firstLine(skill.Description))
 	}
-	for _, e := range skillErrs {
-		fmt.Printf("  %s %v\n", warnMark, e)
+	for _, err := range errs {
+		fmt.Printf("  %s %v\n", warnMark, err)
 	}
+}
 
+func printKnowledgeStatus(dir string) {
 	fmt.Printf("\n%s\n", bold("knowledge:"))
 	store := knowledge.NewStore(dir)
-	ms := store.Status()
-	if !ms.Materialized {
-		if ms.RemoteKnowledge {
+	status := store.Status()
+	if !status.Materialized {
+		if status.RemoteKnowledge {
 			fmt.Printf("  %s not materialized in this checkout -- origin has the agent's knowledge; run openroutines sync to adopt it\n", warnMark)
 		} else {
 			fmt.Printf("  not materialized yet -- appears on first run\n")
 		}
 	} else {
-		fmt.Printf("  last commit: %s\n", ms.LastCommit)
-		if ms.Uncommitted > 0 {
-			fmt.Printf("  %s %d file(s) with uncommitted changes -- commit inside knowledge/ when done curating\n", warnMark, ms.Uncommitted)
+		fmt.Printf("  last commit: %s\n", status.LastCommit)
+		if status.Uncommitted > 0 {
+			fmt.Printf("  %s %d file(s) with uncommitted changes -- commit inside knowledge/ when done curating\n", warnMark, status.Uncommitted)
 		}
-		if ms.Unpushed > 0 {
-			fmt.Printf("  %d commit(s) not yet pushed to origin\n", ms.Unpushed)
+		if status.Unpushed > 0 {
+			fmt.Printf("  %d commit(s) not yet pushed to origin\n", status.Unpushed)
 		}
-		if ms.Behind > 0 {
-			fmt.Printf("  %s %d commit(s) behind origin/%s -- this checkout is reading old knowledge; run openroutines sync to get the latest from origin\n", warnMark, ms.Behind, knowledge.Branch)
+		if status.Behind > 0 {
+			fmt.Printf("  %s %d commit(s) behind origin/%s -- this checkout is reading old knowledge; run openroutines sync to get the latest from origin\n", warnMark, status.Behind, knowledge.Branch)
 		}
-		if cursors, err := store.Cursors(); err == nil && len(cursors) > 0 {
-			head, _ := store.Head()
-			for name, c := range cursors {
-				lag := ""
-				if head != "" && !strings.HasPrefix(head, c.ConsumedThrough) && head != c.ConsumedThrough {
-					changes, err := store.Changes(c.ConsumedThrough, head)
-					switch {
-					// Silence here would read as caught up; a stuck consumer's
-					// runs are abandoned on sight until a person repairs the file.
-					case errors.Is(err, knowledge.ErrCursorUnreachable):
-						lag = fmt.Sprintf(" -- ! not on the knowledge branch, delivery is stuck: repair or delete %s", knowledge.CursorFile(name))
-					case err == nil && len(changes) > 0:
-						lag = fmt.Sprintf(" -- %d change(s) pending", len(changes))
-					}
-				}
-				fmt.Printf("  consumer %s: through %.12s (run %s)%s\n", name, c.ConsumedThrough, c.ByRun, lag)
-			}
-		}
+		printConsumerStatus(store)
 	}
 	if !store.HasOrigin() {
 		fmt.Printf("  %s no git origin -- knowledge is not durable until one is set\n", warnMark)
 	}
+}
 
-	printTokenUsage(dir)
-
-	if problems := agent.Problems(); len(problems) > 0 {
-		fmt.Printf("\n%s\n", bold("still needed:"))
-		for _, p := range problems {
-			fmt.Printf("  - %s\n", p)
-		}
+func printConsumerStatus(store *knowledge.Store) {
+	cursors, err := store.Cursors()
+	if err != nil || len(cursors) == 0 {
+		return
 	}
-	return 0
+	head, _ := store.Head()
+	for name, cursor := range cursors {
+		lag := ""
+		if head != "" && !strings.HasPrefix(head, cursor.ConsumedThrough) && head != cursor.ConsumedThrough {
+			changes, err := store.Changes(cursor.ConsumedThrough, head)
+			switch {
+			// Silence here would read as caught up; a stuck consumer's runs are
+			// abandoned on sight until a person repairs the file.
+			case errors.Is(err, knowledge.ErrCursorUnreachable):
+				lag = fmt.Sprintf(" -- ! not on the knowledge branch, delivery is stuck: repair or delete %s", knowledge.CursorFile(name))
+			case err == nil && len(changes) > 0:
+				lag = fmt.Sprintf(" -- %d change(s) pending", len(changes))
+			}
+		}
+		fmt.Printf("  consumer %s: through %.12s (run %s)%s\n", name, cursor.ConsumedThrough, cursor.ByRun, lag)
+	}
+}
+
+func printConfigurationNeeds(agent *config.Agent) {
+	problems := agent.Problems()
+	if len(problems) == 0 {
+		return
+	}
+	fmt.Printf("\n%s\n", bold("still needed:"))
+	for _, problem := range problems {
+		fmt.Printf("  - %s\n", problem)
+	}
 }
 
 // Renders the supervisor's durable scheduling record for one routine: what
