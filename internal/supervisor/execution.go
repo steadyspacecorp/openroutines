@@ -138,7 +138,8 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		}
 	})
 	if settlementErr != nil {
-		log.Error("settle failed", "error", settlementErr)
+		log.Error("settlement failed -- run remains pending and will retry", "error", settlementErr)
+		return
 	}
 	if settlement.EventsDiscarded {
 		log.Info("discarded staged events.md change (teamwork: off)")
