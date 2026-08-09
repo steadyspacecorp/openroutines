@@ -565,15 +565,15 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	// The reservation is durable before anything spawns: a container lost
 	// mid-attempt is replaced by one that reads this record, so the budget
 	// drains instead of retrying forever at attempts: 0.
-	p := st.Pending
+	pending := st.Pending
 	s.knowledgeMu.Lock()
-	giveBack := reserve(p, now)
+	giveBack := reserve(pending, now)
 	if err := st.Save(s.stateDir()); err != nil {
 		s.knowledgeMu.Unlock()
 		log.Error("saving scheduling state failed", "error", err)
 		return
 	}
-	if !s.commitIntent(fmt.Sprintf("Reserve %s attempt %d (%s)", r.Name, p.Attempts, p.RunID)) {
+	if !s.commitIntent(fmt.Sprintf("Reserve %s attempt %d (%s)", r.Name, pending.Attempts, pending.RunID)) {
 		giveBack()
 		if err := st.Save(s.stateDir()); err != nil {
 			log.Error("saving scheduling state failed", "error", err)
@@ -586,11 +586,11 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	// Stage takes the knowledge lock itself, only around its worktree reads:
 	// holding knowledgeMu through credential resolution would park every other
 	// settlement behind this one's HTTPS round trips.
-	meta := runner.Attempt{
-		RunID:          p.RunID,
-		Number:         p.Attempts,
-		ScheduledFor:   p.ScheduledFor,
-		CoveredThrough: p.CoveredThrough,
+	attempt := runner.Attempt{
+		RunID:          pending.RunID,
+		Number:         pending.Attempts,
+		ScheduledFor:   pending.ScheduledFor,
+		CoveredThrough: pending.CoveredThrough,
 		AttemptUID:     attemptUID,
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
@@ -601,12 +601,12 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun, log)
 		defer stopHeartbeat()
 	}
-	staged, err := runner.Stage(s.Dir, agent, r, meta, s.knowledgeMu)
+	prepared, err := runner.Stage(s.Dir, agent, r, attempt, s.knowledgeMu)
 	if errors.Is(err, runner.ErrAttemptCleanup) {
 		cleanupErr = err
 	}
 	if err == nil && !s.noOrigin && !s.renewLease() {
-		cleanupErr = staged.Discard()
+		cleanupErr = prepared.Discard()
 		s.knowledgeMu.Lock()
 		giveBack()
 		if err := st.Save(s.stateDir()); err != nil {
@@ -617,13 +617,13 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		return
 	}
 
-	log.Info("attempt starting", "attempt_id", meta.ID(), "scheduled_for", meta.ScheduledFor,
+	log.Info("attempt starting", "attempt_id", attempt.ID(), "scheduled_for", attempt.ScheduledFor,
 		"timeout", runner.EffectiveTimeout(agent, r))
 
-	var res *runner.AttemptResult
-	var staging *runner.AttemptWorkspace
+	var result *runner.AttemptResult
+	var workspace *runner.AttemptWorkspace
 	if err == nil {
-		res, staging, err = staged.Run(runCtx)
+		result, workspace, err = prepared.Run(runCtx)
 		if errors.Is(err, runner.ErrAttemptCleanup) {
 			cleanupErr = err
 		}
@@ -634,10 +634,10 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		// The runner classifies; the supervisor only asks.
 		fatal = errors.Is(err, runner.ErrFatal)
 		log.Error("attempt failed to start", "error", err)
-		res = &runner.AttemptResult{Outcome: runner.Crashed, ExitCode: -1}
+		result = &runner.AttemptResult{Outcome: runner.Crashed, ExitCode: -1}
 		detail = err.Error()
 	} else {
-		defer func() { cleanupErr = errors.Join(cleanupErr, staging.Cleanup()) }()
+		defer func() { cleanupErr = errors.Join(cleanupErr, workspace.Cleanup()) }()
 	}
 
 	// Settlement is the other knowledge critical section: import, run
@@ -658,32 +658,32 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	// abandons the run, shutdown returns the reserved attempt so the same
 	// logical run retries on next boot.
 	abandoned := false
-	settlement, serr := runner.Settle(s.Dir, r, staging, res, meta, detail, func(fin *runner.Settlement) {
+	settlement, settlementErr := runner.Settle(s.Dir, r, workspace, result, attempt, detail, func(settled *runner.Settlement) {
 		switch {
-		case fin.Outcome == runner.Canceled:
+		case settled.Outcome == runner.Canceled:
 			giveBack()
-		case fin.Outcome == runner.Completed:
-			st.Watermark = p.CoveredThrough
+		case settled.Outcome == runner.Completed:
+			st.Watermark = pending.CoveredThrough
 			st.Pending = nil
 			st.RecordSuccess()
-		case fatal, p.Attempts >= MaxAttempts:
+		case fatal, pending.Attempts >= MaxAttempts:
 			abandoned = true
-			s.abandon(r, st, fin.Detail, res.SessionsDir, now)
+			s.abandon(r, st, settled.Detail, result.SessionsDir, now)
 		}
 		if err := st.Save(s.stateDir()); err != nil {
 			log.Error("saving scheduling state failed", "error", err)
 		}
 	})
-	if serr != nil {
-		log.Error("settle failed", "error", serr)
+	if settlementErr != nil {
+		log.Error("settle failed", "error", settlementErr)
 	}
-	if settlement.Discarded {
+	if settlement.EventsDiscarded {
 		log.Info("discarded staged events.md change (teamwork: off)")
 	}
-	for i, conflict := range settlement.Conflicted {
-		taskID := fmt.Sprintf("task-%s-knowledge-conflict-%d", p.RunID, i+1)
+	for i, conflict := range settlement.Conflicts {
+		taskID := fmt.Sprintf("task-%s-knowledge-conflict-%d", pending.RunID, i+1)
 		if err := s.store.AppendHumanTask(taskID,
-			fmt.Sprintf("Resolve concurrent knowledge edit from routine %s run %s: canonical %s was left unchanged; competing version saved at %s", r.Name, p.RunID, conflict.Path, conflict.Quarantine)); err != nil {
+			fmt.Sprintf("Resolve concurrent knowledge edit from routine %s run %s: canonical %s was left unchanged; competing version saved at %s", r.Name, pending.RunID, conflict.Path, conflict.Quarantine)); err != nil {
 			log.Warn("could not record the knowledge conflict task in knowledge -- this log line is the only copy",
 				"path", conflict.Path, "task_id", taskID, "error", err)
 		}
@@ -691,8 +691,8 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 			"path", conflict.Path, "quarantine", conflict.Quarantine)
 	}
 	conflictCommitOK := true
-	if len(settlement.Conflicted) > 0 {
-		if _, err := s.store.Commit(fmt.Sprintf("Record %s knowledge conflicts", p.RunID)); err != nil {
+	if len(settlement.Conflicts) > 0 {
+		if _, err := s.store.Commit(fmt.Sprintf("Record %s knowledge conflicts", pending.RunID)); err != nil {
 			conflictCommitOK = false
 			log.Error("conflict task commit failed", "error", err)
 		}
@@ -706,11 +706,11 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		}
 		return // no push: shutdown's final commit carries the record, and a lease loser must not push
 	case settlement.Outcome == runner.Completed:
-		log.Info("run completed", withSessions(res.SessionsDir, "duration", res.Duration)...)
+		log.Info("run completed", withSessions(result.SessionsDir, "duration", result.Duration)...)
 	case abandoned:
 		// abandon() already said so.
 	default:
-		log.Error("attempt failed -- will retry", withSessions(res.SessionsDir, "detail", settlement.Detail)...)
+		log.Error("attempt failed -- will retry", withSessions(result.SessionsDir, "detail", settlement.Detail)...)
 	}
 	if !conflictCommitOK {
 		return // keep completion and remediation together on the next successful push

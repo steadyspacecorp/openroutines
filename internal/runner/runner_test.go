@@ -35,20 +35,20 @@ func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
 	// stale deploy image. The working path runs in bin/smoke's container
 	// stage.
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
-	_, err := Run(t.TempDir(), "daily", ManualOptions{})
+	_, err := RunManual(t.TempDir(), "daily", ManualOptions{})
 	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "cap_setgid") {
 		t.Fatalf("manual run error = %v, want fatal manual-identity contract error", err)
 	}
 }
 
 func TestCleanupReportsWorkspaceRemovalFailure(t *testing.T) {
-	staging := &AttemptWorkspace{workspace: "\x00"}
+	staging := &AttemptWorkspace{root: "\x00"}
 	if err := staging.Cleanup(); !errors.Is(err, ErrAttemptCleanup) {
 		t.Fatalf("cleanup error = %v, want ErrAttemptCleanup", err)
 	}
 }
 
-func genDef(t *testing.T, meta Attempt, fm ...routine.Frontmatter) string {
+func genDef(t *testing.T, attempt Attempt, fm ...routine.Frontmatter) string {
 	t.Helper()
 	ws := t.TempDir()
 	agent := &config.Agent{Name: "a", Description: "d"}
@@ -57,7 +57,7 @@ func genDef(t *testing.T, meta Attempt, fm ...routine.Frontmatter) string {
 		front = fm[0]
 	}
 	r := &routine.Routine{Name: "x", Frontmatter: front}
-	if err := writeAgentDefinition(ws, agent, r, nil, meta); err != nil {
+	if err := writeAgentDefinition(ws, agent, r, nil, attempt); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(ws, ".opencode", "agents", "routine.md"))
@@ -94,13 +94,13 @@ func TestTimeoutIsCappedAtTheAgentCeiling(t *testing.T) {
 }
 
 func TestFrameworkEnvIncludesEffectiveRoutineURL(t *testing.T) {
-	meta := Attempt{RunID: "run_t", Number: 1}
+	attempt := Attempt{RunID: "run_t", Number: 1}
 	r := &routine.Routine{Frontmatter: routine.Frontmatter{}}
-	if got := strings.Join(frameworkEnv("America/New_York", r, meta), "\n"); !strings.Contains(got, "OPENROUTINES_URL=https://openroutines.dev") {
+	if got := strings.Join(frameworkEnv("America/New_York", r, attempt), "\n"); !strings.Contains(got, "OPENROUTINES_URL=https://openroutines.dev") {
 		t.Fatalf("default framework env missing URL:\n%s", got)
 	}
 	r.Frontmatter.URL = "https://example.com/agent"
-	if got := strings.Join(frameworkEnv("America/New_York", r, meta), "\n"); !strings.Contains(got, "OPENROUTINES_URL=https://example.com/agent") {
+	if got := strings.Join(frameworkEnv("America/New_York", r, attempt), "\n"); !strings.Contains(got, "OPENROUTINES_URL=https://example.com/agent") {
 		t.Fatalf("declared framework env missing URL:\n%s", got)
 	}
 }
@@ -500,11 +500,10 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	}
 	stage := func(first bool, boundary string) *AttemptWorkspace {
 		s := &AttemptWorkspace{
-			KnowledgeDir:     t.TempDir(),
-			BaseDir:          t.TempDir(),
-			workspace:        t.TempDir(),
-			ConsumerThrough:  boundary,
-			ConsumerFirstRun: first,
+			KnowledgeDir: t.TempDir(),
+			BaseDir:      t.TempDir(),
+			root:         t.TempDir(),
+			Delivery:     DeliveryBoundary{Through: boundary, FirstRun: first},
 		}
 		if err := store.Snapshot(s.BaseDir); err != nil {
 			t.Fatal(err)
@@ -662,7 +661,7 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	staging := &AttemptWorkspace{KnowledgeDir: t.TempDir(), workspace: t.TempDir()}
+	staging := &AttemptWorkspace{KnowledgeDir: t.TempDir(), root: t.TempDir()}
 	if staging.Consumed() {
 		t.Fatal("Consumed() true with no marker anywhere")
 	}
@@ -680,8 +679,8 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 		t.Fatal("consume marker imported into the knowledge worktree")
 	}
 	// Unsandboxed runs may still drop the marker at the workspace root.
-	legacy := &AttemptWorkspace{KnowledgeDir: t.TempDir(), workspace: t.TempDir()}
-	os.WriteFile(filepath.Join(legacy.workspace, knowledge.ConsumeMarker), nil, 0o644)
+	legacy := &AttemptWorkspace{KnowledgeDir: t.TempDir(), root: t.TempDir()}
+	os.WriteFile(filepath.Join(legacy.root, knowledge.ConsumeMarker), nil, 0o644)
 	if !legacy.Consumed() {
 		t.Fatal("workspace-root marker no longer honored")
 	}
@@ -837,9 +836,9 @@ func TestAuthFailurePatternMatchesBareStatusText(t *testing.T) {
 // and omits them -- never zeroes -- when the runtime didn't report.
 func TestRecordJSONUsage(t *testing.T) {
 	r := &routine.Routine{Name: "x"}
-	meta := Attempt{RunID: "run_1"}
+	attempt := Attempt{RunID: "run_1"}
 
-	bare := recordJSON(r, meta, &AttemptResult{Outcome: Completed})
+	bare := recordJSON(r, attempt, &AttemptResult{Outcome: Completed})
 	for _, absent := range []string{"tokens", "model", "effort", "cost_reported"} {
 		if strings.Contains(bare, absent) {
 			t.Fatalf("unreported %s must be omitted, got %s", absent, bare)
@@ -848,7 +847,7 @@ func TestRecordJSONUsage(t *testing.T) {
 
 	res := &AttemptResult{Outcome: Completed, Model: "fake/model", Effort: "high",
 		Usage: &Usage{Input: 100, Output: 20, Reasoning: 5, CacheRead: 7, CacheWrite: 3, CostReported: 0.01}}
-	rec := recordJSON(r, meta, res)
+	rec := recordJSON(r, attempt, res)
 	for _, want := range []string{`"model":"fake/model"`, `"effort":"high"`, `"input":100`, `"output":20`,
 		`"reasoning":5`, `"cache_read":7`, `"cache_write":3`, `"cost_reported":0.01`} {
 		if !strings.Contains(rec, want) {

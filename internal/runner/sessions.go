@@ -263,7 +263,7 @@ var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // so the model process never touches the volume. Best-effort throughout --
 // broken storage must never fail the run; an export that lands no file at
 // all names nothing.
-func exportSessions(meta Attempt, exports []sessionExport, fetchErr error, log *slog.Logger) string {
+func exportSessions(attempt Attempt, exports []sessionExport, fetchErr error, log *slog.Logger) string {
 	root := os.Getenv(EnvSessionDir)
 	if root == "" {
 		return ""
@@ -276,7 +276,7 @@ func exportSessions(meta Attempt, exports []sessionExport, fetchErr error, log *
 		}
 		return ""
 	}
-	dir := filepath.Join(root, meta.RunID+"."+meta.ID())
+	dir := filepath.Join(root, attempt.RunID+"."+attempt.ID())
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}

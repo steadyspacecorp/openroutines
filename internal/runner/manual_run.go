@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/lock"
 	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/run"
-	"os"
 )
 
 // RehearsalFileName is the fixture document injected into a rehearsal run's
@@ -39,18 +40,18 @@ Follow the routine below exactly, under these restraints.
 
 `
 
-// Run executes routine name manually. Rehearsals always discard knowledge.
+// RunManual executes routine name manually. Rehearsals always discard knowledge.
 // In the production container a manual run reserves the manual attempt
 // identity, so it can never share a uid with a supervisor slot.
-func Run(dir, name string, options ManualOptions) (result *ManualResult, err error) {
-	meta := Attempt{RunID: run.NewID(), Number: 1, Rehearsal: options.Fixture}
+func RunManual(dir, name string, options ManualOptions) (result *ManualResult, err error) {
+	attempt := Attempt{RunID: run.NewID(), Number: 1, Rehearsal: options.Fixture}
 	if mode.Current().Container {
 		uid, releaseIdentity, err := reserveManualIdentity(dir)
 		if err != nil {
 			return nil, err
 		}
 		defer releaseIdentity()
-		meta.AttemptUID = uid
+		attempt.AttemptUID = uid
 	}
 	agent, err := config.Load(dir)
 	if err != nil {
@@ -90,32 +91,32 @@ func Run(dir, name string, options ManualOptions) (result *ManualResult, err err
 	defer release()
 	// A supervisor may be settling runs into the same worktree beside this
 	// process; snapshot and settlement take turns behind its lock.
-	memLock, err := lock.Locker(dir, "knowledge")
+	knowledgeLock, err := lock.Locker(dir, "knowledge")
 	if err != nil {
 		return nil, err
 	}
-	sr, err := Stage(dir, agent, r, meta, memLock)
+	prepared, err := Stage(dir, agent, r, attempt, knowledgeLock)
 	if err != nil {
 		return nil, err
 	}
 	// Echo the run's scrubbed output to the terminal as it streams.
-	sr.echo = os.Stdout
-	exec, staging, err := sr.Run(context.Background())
+	prepared.echo = os.Stdout
+	attemptResult, workspace, err := prepared.Run(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	defer func() { err = errors.Join(err, staging.Cleanup()) }()
+	defer func() { err = errors.Join(err, workspace.Cleanup()) }()
 
-	res := &ManualResult{RunID: meta.RunID, Outcome: exec.Outcome, ExitCode: exec.ExitCode, Duration: exec.Duration, Hint: exec.Hint, SessionsDir: exec.SessionsDir}
+	result = &ManualResult{RunID: attempt.RunID, Outcome: attemptResult.Outcome, ExitCode: attemptResult.ExitCode, Duration: attemptResult.Duration, Hint: attemptResult.Hint, SessionsDir: attemptResult.SessionsDir}
 	if options.DiscardKnowledge {
-		return res, nil
+		return result, nil
 	}
 
-	memLock.Lock()
-	defer memLock.Unlock()
-	settlement, err := Settle(dir, r, staging, exec, meta, "", nil)
-	res.Outcome = settlement.Outcome
-	res.Commit = settlement.Commit
-	res.Conflicted = settlement.Conflicted
-	return res, err
+	knowledgeLock.Lock()
+	defer knowledgeLock.Unlock()
+	settlement, err := Settle(dir, r, workspace, attemptResult, attempt, "", nil)
+	result.Outcome = settlement.Outcome
+	result.Commit = settlement.Commit
+	result.Conflicts = settlement.Conflicts
+	return result, err
 }

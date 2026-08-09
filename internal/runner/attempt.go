@@ -3,15 +3,16 @@ package runner
 import (
 	"errors"
 	"fmt"
-	"github.com/steadyspacecorp/openroutines/internal/config"
-	"github.com/steadyspacecorp/openroutines/internal/knowledge"
-	"github.com/steadyspacecorp/openroutines/internal/routine"
-	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
+	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
 // Outcome classifies how an attempt ended.
@@ -65,27 +66,26 @@ var ErrFatal = errors.New("not retryable")
 // pool, or its next assignee could read the leftover tree.
 var ErrAttemptCleanup = errors.New("attempt workspace cleanup failed")
 
+// DeliveryBoundary fixes the knowledge range prepared for a reporting routine.
+type DeliveryBoundary struct {
+	Through  string
+	FirstRun bool
+}
+
 // AttemptWorkspace is the attempt's staged knowledge, awaiting import or discard.
 type AttemptWorkspace struct {
 	KnowledgeDir string
 	// BaseDir is the pristine snapshot the run started from, outside the
 	// run's reach; the import diffs staged knowledge against it so
 	// concurrent settlements compose.
-	BaseDir   string
-	workspace string
+	BaseDir string
+	root    string
 	// attemptUID is set when the workspace was prepared for an attempt
 	// identity: Cleanup may then need that identity's help to reclaim
 	// paths the model process chmodded away from the group.
 	attemptUID uint32
 
-	// ConsumerThrough is the knowledge commit the delivery change set was
-	// prepared against -- set only for reporting routines, fixed before the
-	// run starts.
-	ConsumerThrough string
-	// ConsumerFirstRun is true when no durable cursor existed at preparation.
-	// A successful empty bootstrap establishes that cursor without asking the
-	// routine to claim it delivered anything.
-	ConsumerFirstRun bool
+	Delivery DeliveryBoundary
 }
 
 // Cleanup discards the whole run workspace, staging and base included. A
@@ -99,8 +99,8 @@ func (s *AttemptWorkspace) Cleanup() error {
 			return fmt.Errorf("%w: reap uid %d before removal: %w", ErrAttemptCleanup, s.attemptUID, err)
 		}
 	}
-	if err := removeAttemptTree(s.attemptUID, s.workspace); err != nil {
-		return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.workspace, err)
+	if err := removeAttemptTree(s.attemptUID, s.root); err != nil {
+		return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.root, err)
 	}
 	if s.BaseDir != "" {
 		if err := os.RemoveAll(s.BaseDir); err != nil {
@@ -117,7 +117,7 @@ func (s *AttemptWorkspace) Consumed() bool {
 	if _, err := os.Stat(filepath.Join(s.KnowledgeDir, knowledge.ConsumeMarker)); err == nil {
 		return true
 	}
-	_, err := os.Stat(filepath.Join(s.workspace, knowledge.ConsumeMarker))
+	_, err := os.Stat(filepath.Join(s.root, knowledge.ConsumeMarker))
 	return err == nil
 }
 
@@ -130,7 +130,7 @@ type ManualResult struct {
 	Commit      string               // knowledge commit hash, when one was made
 	Hint        string               // classified failure cause, when one was recognized
 	SessionsDir string               // the run's exported sessions, "" when no session dir is designated
-	Conflicted  []knowledge.Conflict // semantic edits preserved outside the canonical file
+	Conflicts   []knowledge.Conflict // semantic edits preserved outside the canonical file
 }
 
 // ManualOptions controls knowledge settlement and rehearsal behavior.
