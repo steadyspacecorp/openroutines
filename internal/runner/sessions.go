@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/steadyspacecorp/openroutines/internal/run"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
@@ -21,14 +22,7 @@ import (
 // messages of the attempt's opencode session. CostReported is opencode's
 // own estimate -- informational; tokens with the model and effort are the
 // durable record, and dollars derive at read time.
-type Usage struct {
-	Input        int64   `json:"input"`
-	Output       int64   `json:"output"`
-	Reasoning    int64   `json:"reasoning"`
-	CacheRead    int64   `json:"cache_read"`
-	CacheWrite   int64   `json:"cache_write"`
-	CostReported float64 `json:"-"`
-}
+type Usage = run.Tokens
 
 // Capture is what the run record keeps from the attempt's sessions. Usage is
 // nil when the runtime didn't report -- never zero. Failure is empty unless

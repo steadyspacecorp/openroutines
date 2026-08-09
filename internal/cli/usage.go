@@ -13,16 +13,11 @@ import (
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
+	"github.com/steadyspacecorp/openroutines/internal/run"
 )
 
 // Mirrors the tokens object run records carry.
-type usageTokens struct {
-	Input      int64 `json:"input"`
-	Output     int64 `json:"output"`
-	Reasoning  int64 `json:"reasoning"`
-	CacheRead  int64 `json:"cache_read"`
-	CacheWrite int64 `json:"cache_write"`
-}
+type usageTokens = run.Tokens
 
 // One routine's aggregate over the records the retention window keeps. Runs
 // counts every recorded run; the token sums and RunsReported cover only runs
@@ -130,27 +125,14 @@ func aggregateUsage(dir string) []usageRow {
 		return nil
 	}
 	byName := map[string]*usageRow{}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var rec struct {
-			Routine string       `json:"routine"`
-			Model   string       `json:"model"`
-			Effort  string       `json:"effort"`
-			Cost    float64      `json:"cost_reported"`
-			Tokens  *usageTokens `json:"tokens"`
-		}
-		if json.Unmarshal([]byte(line), &rec) != nil {
-			continue
-		}
+	for _, rec := range run.ParseRecords(raw) {
 		r := byName[rec.Routine]
 		if r == nil {
 			r = &usageRow{Routine: rec.Routine}
 			byName[rec.Routine] = r
 		}
 		r.Runs++
-		r.CostReported += rec.Cost
+		r.CostReported += rec.CostReported
 		if rec.Model != "" {
 			r.Model, r.Effort = rec.Model, rec.Effort
 		}

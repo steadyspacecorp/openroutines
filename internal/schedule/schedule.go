@@ -5,7 +5,6 @@
 package schedule
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -87,20 +86,6 @@ func (s *State) RecordSuccess() {
 // CoolingDown reports whether the breaker currently blocks new runs.
 func (s *State) CoolingDown(now time.Time) bool {
 	return now.Before(s.CooldownUntil)
-}
-
-const runIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
-
-// NewRunID mints a logical run id, stable across every retry attempt.
-func NewRunID() string {
-	buf := make([]byte, 10)
-	if _, err := rand.Read(buf); err != nil {
-		panic(err)
-	}
-	for i, b := range buf {
-		buf[i] = runIDAlphabet[int(b)%len(runIDAlphabet)]
-	}
-	return "run_" + string(buf)
 }
 
 func statePath(stateDir, name string) string {

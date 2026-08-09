@@ -27,6 +27,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/lock"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"github.com/steadyspacecorp/openroutines/internal/run"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
@@ -405,7 +406,7 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 				first, last, n := schedule.Occurrences(spec, st.Watermark, now)
 				if n > 0 {
 					st.Pending = &schedule.Pending{
-						RunID:          schedule.NewRunID(),
+						RunID:          run.NewID(),
 						ScheduledFor:   first,
 						CoveredThrough: last,
 						CreatedAt:      now,
@@ -424,7 +425,7 @@ func (s *Supervisor) plan(now time.Time) ([]dispatch, bool) {
 			if !minted && r.FM.Trigger != nil {
 				if s.evaluateTrigger(r, now) {
 					st.Pending = &schedule.Pending{
-						RunID:          schedule.NewRunID(),
+						RunID:          run.NewID(),
 						ScheduledFor:   now,
 						CoveredThrough: now,
 						CreatedAt:      now,
