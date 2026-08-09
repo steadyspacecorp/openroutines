@@ -122,8 +122,8 @@ func routinesRun(args []string) int {
 	if result.Hint != "" {
 		fmt.Println(result.Hint)
 	}
-	for _, f := range result.Conflicts {
-		fmt.Printf("note: a concurrent run edited the same lines in %s -- both versions kept; curate the file if they disagree\n", f)
+	for _, conflict := range result.Conflicts {
+		fmt.Printf("note: concurrent knowledge edit -- canonical %s left unchanged; competing version saved at %s; curate them if they disagree\n", conflict.Path, conflict.Quarantine)
 	}
 	if !writeKnowledge {
 		fmt.Println("knowledge discarded: external actions were still performed and credentials were available -- pass --write-knowledge for a run that settles (first runs may still have initialized the knowledge worktree)")
