@@ -19,6 +19,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/filetree"
 )
 
 // Knowledge is a dedicated directory backed by its own branch.
@@ -333,23 +335,7 @@ func topSegment(rel string) string {
 // CloneTree copies a snapshot tree verbatim, so the run's staged copy and the
 // import's base come from one worktree read.
 func CloneTree(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil || rel == "." {
-			return err
-		}
-		dest := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(dest, 0o755)
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		return copyFile(path, dest)
-	})
+	return filetree.CopyRegular(src, dst, filetree.Options{Mode: filetree.DataFiles})
 }
 
 // stagedPathPolicy rejects paths that may never enter the worktree: git

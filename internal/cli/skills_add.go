@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/steadyspacecorp/openroutines/internal/filetree"
 	"github.com/steadyspacecorp/openroutines/internal/frontmatter"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 	sourcepkg "github.com/steadyspacecorp/openroutines/internal/source"
@@ -52,36 +53,9 @@ func skillsAdd(args []string) int {
 		return fail(fmt.Errorf("skill %q already exists at %s -- remove it first to re-vendor", s.Name, existing.Dir))
 	}
 
-	// Copy the skill folder (regular files only -- no symlinks, no .git).
-	err = filepath.WalkDir(skillDir, func(path string, d fs.DirEntry, werr error) error {
-		if werr != nil {
-			return werr
-		}
-		rel, _ := filepath.Rel(skillDir, path)
-		if rel == "." {
-			return nil
-		}
-		if d.Name() == ".git" {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		target := filepath.Join(dest, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		raw, rerr := os.ReadFile(path)
-		if rerr != nil {
-			return rerr
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(target, raw, 0o644)
+	err = filetree.CopyRegular(skillDir, dest, filetree.Options{
+		Mode: filetree.PreserveExecutables,
+		Skip: func(rel string, _ fs.DirEntry) bool { return filepath.Base(rel) == ".git" },
 	})
 	if err != nil {
 		_ = os.RemoveAll(dest)
