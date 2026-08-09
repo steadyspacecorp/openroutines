@@ -54,10 +54,10 @@ func cmdCheck(args []string) int {
 	// as a confusing field-level error. Name the real problem first, before
 	// any of those can. Source builds are exempt: development runs against
 	// pinned agents on purpose.
-	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version")); err == nil {
-		if v := strings.TrimSpace(string(pin)); v != version.Version && !strings.Contains(version.Version, "-dev") {
+	if pin, err := readVersionPin(dir); err == nil {
+		if pin != version.Version && !strings.Contains(version.Version, "-dev") {
 			report.section("binary")
-			failf("this binary is %s but the agent pins %s -- every finding below is suspect until they match: update the binary (curl -fsSL https://get.openroutines.dev/install.sh | bash) or the agent (openroutines update)", version.Version, v)
+			failf("this binary is %s but the agent pins %s -- every finding below is suspect until they match: update the binary (curl -fsSL https://get.openroutines.dev/install.sh | bash) or the agent (openroutines update)", version.Version, pin)
 		}
 	}
 
@@ -221,17 +221,16 @@ func cmdCheck(args []string) int {
 	} else {
 		okf("origin %s", strings.TrimSpace(string(out)))
 	}
-	if pin, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version")); err == nil {
-		v := strings.TrimSpace(string(pin))
-		if strings.Contains(v, "-dev") {
-			warnf("pinned %s -- a source-build version; no release exists for it, so this agent cannot deploy until the pin points at a release", v)
+	if pin, err := readVersionPin(dir); err == nil {
+		if strings.Contains(pin, "-dev") {
+			warnf("pinned %s -- a source-build version; no release exists for it, so this agent cannot deploy until the pin points at a release", pin)
 		}
 		if dockerfile, derr := os.ReadFile(filepath.Join(dir, "Dockerfile")); derr != nil {
 			failf("Dockerfile: %v", derr)
-		} else if !dockerfileUsesVersion(dockerfile, v) {
-			failf("Dockerfile version pin does not match .openroutines/version %s", v)
+		} else if !dockerfileUsesVersion(dockerfile, pin) {
+			failf("Dockerfile version pin does not match .openroutines/version %s", pin)
 		} else {
-			okf("Dockerfile version pin matches %s", v)
+			okf("Dockerfile version pin matches %s", pin)
 		}
 	}
 
