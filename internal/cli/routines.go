@@ -107,7 +107,11 @@ func routinesRun(args []string) int {
 			fmt.Println()
 		}
 	}
-	res, err := runner.Run(".", name, !writeKnowledge, rehearse, fixture)
+	res, err := runner.Run(".", name, runner.ManualOptions{
+		DiscardKnowledge: !writeKnowledge,
+		Rehearse:         rehearse,
+		Fixture:          fixture,
+	})
 	if err != nil {
 		return fail(err)
 	}

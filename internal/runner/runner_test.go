@@ -35,20 +35,20 @@ func TestManualRunInContainerRequiresTheManualIdentity(t *testing.T) {
 	// stale deploy image. The working path runs in bin/smoke's container
 	// stage.
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
-	_, err := Run(t.TempDir(), "daily", false, false, "")
+	_, err := Run(t.TempDir(), "daily", ManualOptions{})
 	if !errors.Is(err, ErrFatal) || !strings.Contains(err.Error(), "cap_setgid") {
 		t.Fatalf("manual run error = %v, want fatal manual-identity contract error", err)
 	}
 }
 
 func TestCleanupReportsWorkspaceRemovalFailure(t *testing.T) {
-	staging := &Staging{workspace: "\x00"}
+	staging := &AttemptWorkspace{workspace: "\x00"}
 	if err := staging.Cleanup(); !errors.Is(err, ErrAttemptCleanup) {
 		t.Fatalf("cleanup error = %v, want ErrAttemptCleanup", err)
 	}
 }
 
-func genDef(t *testing.T, meta Meta, fm ...routine.Frontmatter) string {
+func genDef(t *testing.T, meta Attempt, fm ...routine.Frontmatter) string {
 	t.Helper()
 	ws := t.TempDir()
 	agent := &config.Agent{Name: "a", Description: "d"}
@@ -94,7 +94,7 @@ func TestTimeoutIsCappedAtTheAgentCeiling(t *testing.T) {
 }
 
 func TestFrameworkEnvIncludesEffectiveRoutineURL(t *testing.T) {
-	meta := Meta{RunID: "run_t", AttemptID: "attempt_01"}
+	meta := Attempt{RunID: "run_t", Number: 1}
 	r := &routine.Routine{FM: routine.Frontmatter{}}
 	if got := strings.Join(frameworkEnv("America/New_York", r, meta), "\n"); !strings.Contains(got, "OPENROUTINES_URL=https://openroutines.dev") {
 		t.Fatalf("default framework env missing URL:\n%s", got)
@@ -106,7 +106,7 @@ func TestFrameworkEnvIncludesEffectiveRoutineURL(t *testing.T) {
 }
 
 func TestRunDefinitionAllowsActing(t *testing.T) {
-	def := genDef(t, Meta{RunID: "run_t"})
+	def := genDef(t, Attempt{RunID: "run_t"})
 	if strings.Contains(def, "bash: deny") {
 		t.Fatalf("run definition wrongly denies acting:\n%s", def)
 	}
@@ -120,7 +120,7 @@ func TestRunDefinitionAllowsActing(t *testing.T) {
 // a prompt-injection vector. The rule must be explicit either way, so a
 // harness default change can never silently widen a routine's reach.
 func TestWebAccessDeniedByDefault(t *testing.T) {
-	def := genDef(t, Meta{RunID: "run_t"})
+	def := genDef(t, Attempt{RunID: "run_t"})
 	for _, want := range []string{"webfetch: deny", "websearch: deny"} {
 		if !strings.Contains(def, want) {
 			t.Fatalf("definition missing %q:\n%s", want, def)
@@ -131,7 +131,7 @@ func TestWebAccessDeniedByDefault(t *testing.T) {
 // Frontmatter opt-in flips the explicit rule to allow.
 func TestWebAccessOptIn(t *testing.T) {
 	fm := routine.Frontmatter{Webfetch: true, Websearch: true}
-	def := genDef(t, Meta{RunID: "run_t"}, fm)
+	def := genDef(t, Attempt{RunID: "run_t"}, fm)
 	for _, want := range []string{"webfetch: allow", "websearch: allow"} {
 		if !strings.Contains(def, want) {
 			t.Fatalf("opted-in definition missing %q:\n%s", want, def)
@@ -362,7 +362,7 @@ func TestInstructionRendering(t *testing.T) {
 		t.Helper()
 		ws := t.TempDir()
 		r := &routine.Routine{Name: "sample", FM: fm}
-		if err := writeAgentDefinition(ws, agent, r, nil, Meta{RunID: "run_x"}); err != nil {
+		if err := writeAgentDefinition(ws, agent, r, nil, Attempt{RunID: "run_x"}); err != nil {
 			t.Fatal(err)
 		}
 		raw, err := os.ReadFile(filepath.Join(ws, ".opencode", "agents", "routine.md"))
@@ -429,7 +429,7 @@ func TestInstructionRendering(t *testing.T) {
 // teamwork: off is enforced at import, not just instructed: a staged change
 // to events.md is discarded (worktree copy wins) while the rest imports.
 func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
-	setup := func(t *testing.T) (string, *Staging) {
+	setup := func(t *testing.T) (string, *AttemptWorkspace) {
 		t.Helper()
 		dir := t.TempDir()
 		wt := filepath.Join(dir, knowledge.Dir)
@@ -438,7 +438,7 @@ func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
 		}
 		os.WriteFile(filepath.Join(wt, "events.md"), []byte("base\n"), 0o644)
 		os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("none\n"), 0o644)
-		staging := &Staging{KnowledgeDir: t.TempDir(), BaseDir: t.TempDir()}
+		staging := &AttemptWorkspace{KnowledgeDir: t.TempDir(), BaseDir: t.TempDir()}
 		os.WriteFile(filepath.Join(staging.BaseDir, "events.md"), []byte("base\n"), 0o644)
 		os.WriteFile(filepath.Join(staging.BaseDir, "tasks.md"), []byte("none\n"), 0o644)
 		os.WriteFile(filepath.Join(staging.KnowledgeDir, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
@@ -498,8 +498,8 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage := func(first bool, boundary string) *Staging {
-		s := &Staging{
+	stage := func(first bool, boundary string) *AttemptWorkspace {
+		s := &AttemptWorkspace{
 			KnowledgeDir:     t.TempDir(),
 			BaseDir:          t.TempDir(),
 			workspace:        t.TempDir(),
@@ -515,7 +515,7 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 		return s
 	}
 	r := &routine.Routine{Name: "slack-report", FM: routine.Frontmatter{Reports: true}}
-	if _, err := Settle(dir, r, stage(true, through), &ExecResult{Outcome: Completed}, Meta{RunID: "run_first", AttemptID: "attempt_01"}, "", nil); err != nil {
+	if _, err := Settle(dir, r, stage(true, through), &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_first", Number: 1}, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	cursor, err := mem.LoadCursor(r.Name)
@@ -529,7 +529,7 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Settle(dir, r, stage(false, newBoundary), &ExecResult{Outcome: Completed}, Meta{RunID: "run_empty", AttemptID: "attempt_01"}, "", nil); err != nil {
+	if _, err := Settle(dir, r, stage(false, newBoundary), &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_empty", Number: 1}, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	cursor, err = mem.LoadCursor(r.Name)
@@ -544,11 +544,11 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 // was reported crashed is the divergence Settle exists to prevent.
 func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
 	dir := settleFixture(t)
-	staging := &Staging{KnowledgeDir: t.TempDir()}
+	staging := &AttemptWorkspace{KnowledgeDir: t.TempDir()}
 	os.WriteFile(filepath.Join(staging.KnowledgeDir, ".gitignore"), []byte("x"), 0o644)
 
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{}}
-	settlement, err := Settle(dir, r, staging, &ExecResult{Outcome: Completed}, Meta{RunID: "run_reject", AttemptID: "attempt_01"}, "", nil)
+	settlement, err := Settle(dir, r, staging, &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_reject", Number: 1}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +574,7 @@ func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
 func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 	dir := settleFixture(t)
 	mem := knowledge.At(dir)
-	staging := &Staging{KnowledgeDir: t.TempDir()}
+	staging := &AttemptWorkspace{KnowledgeDir: t.TempDir()}
 	if err := mem.Snapshot(staging.KnowledgeDir); err != nil {
 		t.Fatal(err)
 	}
@@ -582,7 +582,7 @@ func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 
 	staged := false
 	r := &routine.Routine{Name: "x", FM: routine.Frontmatter{}}
-	settlement, err := Settle(dir, r, staging, &ExecResult{Outcome: Completed}, Meta{RunID: "run_ok", AttemptID: "attempt_01"}, "", func(fin *Settlement) {
+	settlement, err := Settle(dir, r, staging, &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_ok", Number: 1}, "", func(fin *Settlement) {
 		staged = fin.Outcome == Completed
 		os.WriteFile(filepath.Join(mem.StateDir(), "x.json"), []byte("{}\n"), 0o644)
 	})
@@ -662,7 +662,7 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	staging := &Staging{KnowledgeDir: t.TempDir(), workspace: t.TempDir()}
+	staging := &AttemptWorkspace{KnowledgeDir: t.TempDir(), workspace: t.TempDir()}
 	if staging.Consumed() {
 		t.Fatal("Consumed() true with no marker anywhere")
 	}
@@ -680,7 +680,7 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 		t.Fatal("consume marker imported into the knowledge worktree")
 	}
 	// Unsandboxed runs may still drop the marker at the workspace root.
-	legacy := &Staging{KnowledgeDir: t.TempDir(), workspace: t.TempDir()}
+	legacy := &AttemptWorkspace{KnowledgeDir: t.TempDir(), workspace: t.TempDir()}
 	os.WriteFile(filepath.Join(legacy.workspace, knowledge.ConsumeMarker), nil, 0o644)
 	if !legacy.Consumed() {
 		t.Fatal("workspace-root marker no longer honored")
@@ -837,18 +837,18 @@ func TestAuthFailurePatternMatchesBareStatusText(t *testing.T) {
 // and omits them -- never zeroes -- when the runtime didn't report.
 func TestRecordJSONUsage(t *testing.T) {
 	r := &routine.Routine{Name: "x"}
-	meta := Meta{RunID: "run_1"}
+	meta := Attempt{RunID: "run_1"}
 
-	bare := recordJSON(r, meta, 1, &ExecResult{Outcome: Completed}, false)
+	bare := recordJSON(r, meta, &AttemptResult{Outcome: Completed})
 	for _, absent := range []string{"tokens", "model", "effort", "cost_reported"} {
 		if strings.Contains(bare, absent) {
 			t.Fatalf("unreported %s must be omitted, got %s", absent, bare)
 		}
 	}
 
-	res := &ExecResult{Outcome: Completed, Model: "fake/model", Effort: "high",
+	res := &AttemptResult{Outcome: Completed, Model: "fake/model", Effort: "high",
 		Usage: &Usage{Input: 100, Output: 20, Reasoning: 5, CacheRead: 7, CacheWrite: 3, CostReported: 0.01}}
-	rec := recordJSON(r, meta, 1, res, false)
+	rec := recordJSON(r, meta, res)
 	for _, want := range []string{`"model":"fake/model"`, `"effort":"high"`, `"input":100`, `"output":20`,
 		`"reasoning":5`, `"cache_read":7`, `"cache_write":3`, `"cost_reported":0.01`} {
 		if !strings.Contains(rec, want) {

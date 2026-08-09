@@ -268,7 +268,7 @@ func stubOpencode(t *testing.T, list string, exports map[string]string) opencode
 	}
 }
 
-var testMeta = Meta{RunID: "run_x", AttemptID: "attempt_01"}
+var testMeta = Attempt{RunID: "run_x", Number: 1}
 
 func TestExportDisabledWhenUnset(t *testing.T) {
 	t.Setenv(EnvSessionDir, "")

@@ -582,11 +582,11 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	// Stage takes the knowledge lock itself, only around its worktree reads:
 	// holding memMu through credential resolution would park every other
 	// settlement behind this one's HTTPS round trips.
-	meta := runner.Meta{
+	meta := runner.Attempt{
 		RunID:          p.RunID,
-		AttemptID:      fmt.Sprintf("attempt_%02d", p.Attempts),
-		ScheduledFor:   p.ScheduledFor.Format(time.RFC3339),
-		CoveredThrough: p.CoveredThrough.Format(time.RFC3339),
+		Number:         p.Attempts,
+		ScheduledFor:   p.ScheduledFor,
+		CoveredThrough: p.CoveredThrough,
 		AttemptUID:     attemptUID,
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
@@ -613,11 +613,11 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		return
 	}
 
-	log.Info("attempt starting", "attempt_id", meta.AttemptID, "scheduled_for", meta.ScheduledFor,
+	log.Info("attempt starting", "attempt_id", meta.ID(), "scheduled_for", meta.ScheduledFor,
 		"timeout", runner.EffectiveTimeout(agent, r))
 
-	var res *runner.ExecResult
-	var staging *runner.Staging
+	var res *runner.AttemptResult
+	var staging *runner.AttemptWorkspace
 	if err == nil {
 		res, staging, err = staged.Run(runCtx)
 		if errors.Is(err, runner.ErrAttemptCleanup) {
@@ -630,7 +630,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		// The runner classifies; the supervisor only asks.
 		fatal = errors.Is(err, runner.ErrFatal)
 		log.Error("attempt failed to start", "error", err)
-		res = &runner.ExecResult{Outcome: runner.Crashed, ExitCode: -1}
+		res = &runner.AttemptResult{Outcome: runner.Crashed, ExitCode: -1}
 		detail = err.Error()
 	} else {
 		defer func() { cleanupErr = errors.Join(cleanupErr, staging.Cleanup()) }()
