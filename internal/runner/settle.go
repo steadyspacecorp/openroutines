@@ -53,13 +53,13 @@ func Settle(dir string, r *routine.Routine, workspace *AttemptWorkspace, result 
 			r.Log().Warn("could not record the failure event -- this log line is the only copy", "run_id", attempt.RunID, "error", err)
 		}
 	}
-	if beforeCommit != nil {
-		beforeCommit(settlement)
-	}
 	record := *result
 	record.Outcome = settlement.Outcome
 	if err := store.AppendRunRecord(recordJSON(r, attempt, &record)); err != nil {
 		return settlement, err
+	}
+	if beforeCommit != nil {
+		beforeCommit(settlement)
 	}
 	if settlement.Outcome == Canceled {
 		return settlement, nil

@@ -192,6 +192,30 @@ func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 	}
 }
 
+func TestSettleDoesNotBookkeepWithoutARunRecord(t *testing.T) {
+	dir := settleFixture(t)
+	store := knowledge.NewStore(dir)
+	staging := &AttemptWorkspace{KnowledgeDir: t.TempDir()}
+	if err := store.Snapshot(staging.KnowledgeDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(store.Worktree(), "runs.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	bookkept := false
+	r := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{}}
+	_, err := Settle(dir, r, staging, &AttemptResult{Outcome: Completed}, Attempt{RunID: "run_unrecorded", Number: 1}, "", func(*Settlement) {
+		bookkept = true
+	})
+	if err == nil {
+		t.Fatal("Settle succeeded without writing a run record")
+	}
+	if bookkept {
+		t.Fatal("scheduling bookkeeping ran before the run record was written")
+	}
+}
+
 func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 	dir := t.TempDir()
 	wt := filepath.Join(dir, knowledge.Dir)
