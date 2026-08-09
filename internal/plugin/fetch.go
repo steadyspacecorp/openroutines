@@ -10,9 +10,3 @@ func Fetch(sourceRef, subPath, revision string) (root string, prov Source, clean
 	root, provenance, cleanup, err := source.Fetch(sourceRef, subPath, revision)
 	return root, Source{Repository: provenance.Repository, Path: provenance.Path, Revision: provenance.Revision}, cleanup, err
 }
-
-// Resolves a --path inside the clone, refusing traversal or symlink
-// escapes out of the repository.
-func subdir(root, subPath string) (string, error) {
-	return source.ResolvePath(root, subPath)
-}
