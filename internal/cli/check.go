@@ -328,7 +328,8 @@ func cmdCheck(args []string) int {
 		failf("%v", err)
 	} else {
 		okf("credentials decrypt (%d stored)", len(store))
-		for keyName, users := range providerNeeds {
+		for _, keyName := range slices.Sorted(maps.Keys(providerNeeds)) {
+			users := providerNeeds[keyName]
 			if _, ok := store[keyName]; !ok {
 				failf("%s not set -- %s cannot authenticate (openroutines credentials set %s)", keyName, strings.Join(users, ", "), keyName)
 			}
@@ -346,7 +347,8 @@ func cmdCheck(args []string) int {
 			// value is dormant misconfiguration. One with a stored value
 			// must be able to serve its type -- a truncated key paste
 			// otherwise first surfaces as a failed run in production.
-			for name, spec := range agent.Credentials {
+			for _, name := range slices.Sorted(maps.Keys(agent.Credentials)) {
+				spec := agent.Credentials[name]
 				v, ok := store[name]
 				if !ok {
 					warnf("credential entry %q (type %s) has no stored value in %s", name, spec.Type, creds.FileName)
@@ -360,7 +362,7 @@ func cmdCheck(args []string) int {
 		// A variable sharing a credential's name would be shadowed in the
 		// run environment (the credential wins) -- rename one of them.
 		if agent != nil {
-			for name := range agent.Variables {
+			for _, name := range slices.Sorted(maps.Keys(agent.Variables)) {
 				if _, ok := store[name]; ok {
 					failf("variable %q collides with a stored credential -- the credential wins in the run environment", name)
 				}
