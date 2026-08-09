@@ -1,6 +1,6 @@
 # Features
 
-What OpenRoutines does, grouped by the problem each piece solves. The [README](../README.md) is the big-picture overview, the other pages in this directory show how to use these, and [design.md](design.md) records the full reasoning behind each decision, including the alternatives we rejected.
+What OpenRoutines does, grouped by the problem each piece solves. The [README](../README.md) is the big-picture overview, the other pages in this directory show how to use these, and [design.md](design.md) indexes the full reasoning behind each decision, including the alternatives we rejected.
 
 ## Build and ship an agent like any other software
 

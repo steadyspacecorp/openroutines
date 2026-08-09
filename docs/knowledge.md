@@ -21,4 +21,4 @@ Run `openroutines sync` from an agent checkout to fetch the latest knowledge, th
 
 The working files stay lean, too: entries older than the retention window (`knowledge.retention` in `openroutines.yml`, default 30 days) are trimmed daily, and git history keeps everything forever -- including changes a reporting routine hasn't seen yet. Trimming is housekeeping and is never reported: a routine already past those entries hears nothing about them being pruned.
 
-The full reasoning -- why these primitives, why a branch -- is in [docs/design.md](design.md) ("Knowledge: a dedicated directory on its own branch", "Knowledge records events, tasks, and context").
+The full reasoning -- why these primitives, why a branch -- is in [the knowledge design note](design/knowledge.md) ("Knowledge: a dedicated directory on its own branch", "Knowledge records events, tasks, and context").
