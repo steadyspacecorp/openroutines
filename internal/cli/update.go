@@ -51,10 +51,10 @@ func cmdUpdate(args []string) int {
 	}
 
 	target := version.Version
-	pinPath := filepath.Join(dir, ".openroutines", "version")
+	pinPath := versionPinPath(dir)
 	current := "(none)"
-	if raw, err := os.ReadFile(pinPath); err == nil {
-		current = strings.TrimSpace(string(raw))
+	if pin, err := readVersionPin(dir); err == nil {
+		current = pin
 	}
 	if current == target {
 		fmt.Printf("Already at %s. (update targets the version of the openroutines binary you run -- install a newer binary first.)\n", target)

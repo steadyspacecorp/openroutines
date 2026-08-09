@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -115,12 +114,12 @@ func Run(args []string) int {
 // buried in a command's own output. Source builds are exempt: development
 // runs against pinned agents on purpose.
 func warnOnPinMismatch(dir string) {
-	pin, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version"))
+	pin, err := readVersionPin(dir)
 	if err != nil {
 		return
 	}
-	if v := strings.TrimSpace(string(pin)); v != version.Version && !strings.Contains(version.Version, "-dev") {
-		slog.Warn("this binary does not match the agent's pinned framework version -- update the binary (curl -fsSL https://get.openroutines.dev/install.sh | bash) or the agent (openroutines update)", "binary", version.Version, "pin", v)
+	if pin != version.Version && !strings.Contains(version.Version, "-dev") {
+		slog.Warn("this binary does not match the agent's pinned framework version -- update the binary (curl -fsSL https://get.openroutines.dev/install.sh | bash) or the agent (openroutines update)", "binary", version.Version, "pin", pin)
 	}
 }
 
