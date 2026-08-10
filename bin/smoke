@@ -107,7 +107,9 @@ step "check accepts provider config and flags unreferenced ids"
 # toolkit (skills-only). The grant summary must state what each asks for,
 # each stays grouped under .openroutines/plugins/<name>/, ledger stubs wait for the knowledge
 # worktree, and a reinstall is refused, not overwritten.
-if run plugin add "$repo/testdata/plugins/reporter"; then
+# stdin must be detached: the refusal under test only fires when stdin is not a
+# TTY, so an interactive run would sit on the Install? prompt instead.
+if run plugin add "$repo/testdata/plugins/reporter" </dev/null; then
   die "non-interactive plugin add should require --yes"
 fi
 grep -q 'rerun with --yes' "$work/out" || die "non-interactive plugin refusal did not explain --yes"
