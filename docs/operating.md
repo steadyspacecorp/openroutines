@@ -51,23 +51,20 @@ A few properties fall out of the design (see [docs/design.md](design.md) for the
 - **Knowledge survives.** Code rolls back with the image; knowledge lives on its own branch and persists, like a database, but versioned.
 - **No application ingress.** The shipped container listens on no ports. The supervisor's log goes to stderr -- read it with `docker logs` or your platform's log tooling -- and session history persists as files when `OPENROUTINES_SESSION_DIR` designates storage (see below). This does not replace normal host and deployment access controls.
 
-## Logs and session history
+## Logs
 
 The log carries the supervisor's records plus opencode's own diagnostics, passed through into the same stream. Lines are [logfmt](https://brandur.org/logfmt) -- every part of the record is a `key=value` pair, so a line can be filtered by field instead of matched by shape:
 
 ```
 time=2026-07-31T14:52:07.450-04:00 level=INFO msg="attempt starting" routine=check-in run_id=run_abc attempt=attempt_01
 timestamp=2026-07-31T18:52:08.104Z level=INFO run=c613738c message="creating instance" directory=/work routine=check-in run_id=run_abc
-time=2026-07-31T14:52:31.902-04:00 level=ERROR msg="attempt failed -- will retry" routine=check-in run_id=run_abc detail="exit status 1" sessions=/data/run_abc.attempt_01
+time=2026-07-31T14:52:31.902-04:00 level=ERROR msg="attempt failed -- will retry" routine=check-in run_id=run_abc detail="exit status 1"
 ```
 
 Filter by `level=`, by `routine=`, or by `run_id=` to follow one logical run across its retries -- opencode's lines land with the same identity fields appended, so a run's diagnostics travel with the supervisor's records about it, and each run is asked for the process's own level. opencode's lines otherwise keep their own shape (`message=` rather than `msg=`, UTC timestamps): they are opencode's records, decorated rather than rewritten. The supervisor's timestamps are RFC3339 in the agent's timezone, so a log line and a cron expression can be compared without arithmetic. Your platform will usually add its own ingest timestamp alongside; the one in the line is when the event actually happened.
 
-Run output never flows through the log. Storing session history is an opt-in: point `OPENROUTINES_SESSION_DIR` at a directory and each of the attempt's sessions is exported (`opencode export`, the session's replayable form) to `<dir>/<run_id>.<attempt_id>/<session_id>.json` when the attempt ends, whatever the outcome. The `run completed` and `attempt failed` records name the directory (`sessions=...`). Leave the variable unset and nothing is written.
-
-The exports are verbatim -- exactly what opencode renders, not passed through the secret scrubber, because rewriting stored history would falsify the record (the log and the manual echo are scrubbed). Retention is yours too: nothing is pruned. Treat the directory as sensitively as the credentials your routines can see -- what lands there is written owner-only.
-
-A failed attempt never fails invisibly, session dir or not: opencode's own diagnostics are already in the log under the run's identity, and the failure record carries the classified reason (`hint`) when one was recognized. An export that fails partway -- a full volume, say -- still names the directory holding whatever landed, with a warning in the log; an export that lands nothing names no directory at all. A retry reuses the failed attempt's directory name and replaces it, so what you read there is always one attempt. Run output reaches you in exactly one place: `openroutines routines run` streams it to your terminal as it runs.
+Run output never flows through the log; `openroutines routines run` streams it directly to your terminal.
+A failed attempt still emits opencode's diagnostics under the run's identity, plus a classified reason (`hint`) when one was recognized.
 
 Set `OPENROUTINES_LOG_LEVEL` to change how much of the log survives -- unset means `info` in the deployed container and `warn` for local commands, where the run output streaming to your terminal is the point. The log lands on stderr, so a manual run's output on stdout pipes and redirects clean of diagnostics (`2>run.log` splits them):
 
@@ -76,6 +73,14 @@ Set `OPENROUTINES_LOG_LEVEL` to change how much of the log survives -- unset mea
 - `error` -- failed and abandoned runs, held dispatch, and nothing else.
 
 `debug` is accepted for the standard ladder's sake and currently adds nothing beyond `info`. The environment variable is the only level knob -- there is no configuration-file setting -- so quieting or opening up a live container is an environment change, never a redeploy.
+
+## Session history
+
+Set `OPENROUTINES_SESSION_DIR` to persist each attempt's sessions, whatever its outcome, as owner-only `<UTC timestamp>_<routine>_<run_id>_<session_id>.json` files.
+Leave it unset and nothing is written.
+
+Exports are verbatim and may contain credentials; retention is the operator's responsibility.
+Export failures warn without failing the run.
 
 ## Continuous deployment
 

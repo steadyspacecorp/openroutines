@@ -326,14 +326,21 @@ func (p *PreparedAttempt) Run(ctx context.Context) (result *AttemptResult, retur
 	}
 	errOut.Flush()
 	oclog.Flush()
+
+	var capture Capture
+	sessions, fetchErr := fetchSessions(runtime.exec, attemptLog)
+	if fetchErr != nil {
+		attemptLog.Warn("session history unavailable -- no usage recorded, the session-outcome check did not run, and sessions were not exported", "error", fetchErr)
+	} else {
+		capture = captureSessions(sessions, attemptLog)
+		exportSessions(sessions, r.Name, attempt.RunID, attemptLog)
+	}
+
 	result.Model = model
 	result.Effort = r.Frontmatter.Effort
+	result.Usage = capture.Usage
 	// opencode exits 0 even when its agent loop died mid-turn; the session
 	// record decides whether the run actually finished.
-	sessions, fetchErr := fetchSessions(runtime.exec, attemptLog)
-	capture := captureSessions(sessions, fetchErr, attemptLog)
-	result.Usage = capture.Usage
-	result.SessionsDir = exportSessions(attempt, sessions, fetchErr, attemptLog)
 	if result.Outcome == Completed && capture.Failure != "" {
 		result.Outcome = Crashed
 		result.Hint = capture.Failure

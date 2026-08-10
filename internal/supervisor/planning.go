@@ -124,7 +124,7 @@ func (s *Supervisor) reconcile(r *routine.Routine, now time.Time) *dueRun {
 		return nil
 	}
 	if st.Pending.Attempts >= MaxAttempts {
-		s.abandon(r, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), "", now)
+		s.abandon(r, st, fmt.Sprintf("%d attempts started, none settled -- the supervisor did not survive them", st.Pending.Attempts), now)
 		if err := st.Save(s.stateDir()); err != nil {
 			log.Error("saving scheduling state failed", "error", err)
 		}
@@ -241,7 +241,7 @@ func reserve(pending *schedule.Pending, now time.Time) (giveBack func()) {
 // Gives up on a pending run: the work becomes a human-owned task, the
 // watermark advances, and the breaker counts the abandonment. The caller
 // saves and commits the state.
-func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, sessionsDir string, now time.Time) {
+func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail string, now time.Time) {
 	pending := st.Pending
 	date := now.UTC().Format("2006-01-02")
 	taskID := "task-" + pending.RunID
@@ -259,5 +259,5 @@ func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail, ses
 		}
 		r.Log().Error("circuit breaker tripped", "cooldown", cooldown, "run_id", pending.RunID)
 	}
-	r.Log().Error("run abandoned", withSessions(sessionsDir, "run_id", pending.RunID, "attempts", pending.Attempts)...)
+	r.Log().Error("run abandoned", "run_id", pending.RunID, "attempts", pending.Attempts)
 }

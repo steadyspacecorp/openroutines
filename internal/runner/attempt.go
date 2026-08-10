@@ -36,7 +36,7 @@ type Attempt struct {
 	Rehearsal      string // fixture path; set only for manual rehearsal runs
 }
 
-// Formats the attempt number for logs, environments, and session paths.
+// Formats the attempt number for logs and environments.
 func (a Attempt) ID() string { return fmt.Sprintf("attempt_%02d", a.Number) }
 
 // Reports whether the attempt was dispatched outside the scheduler.
@@ -46,14 +46,13 @@ func (a Attempt) Manual() bool { return a.ScheduledFor.IsZero() }
 // failure (currently: provider authentication) so it surfaces as a
 // configuration problem instead of an opaque crash.
 type AttemptResult struct {
-	Outcome     Outcome
-	ExitCode    int
-	Duration    time.Duration
-	Hint        string
-	Model       string // the resolved model this attempt ran with
-	Effort      string // frontmatter reasoning effort, when set
-	Usage       *Usage // token consumption; nil when the surface was unavailable
-	SessionsDir string // the attempt's exported sessions, "" when no session dir is designated
+	Outcome  Outcome
+	ExitCode int
+	Duration time.Duration
+	Hint     string
+	Model    string // the resolved model this attempt ran with
+	Effort   string // frontmatter reasoning effort, when set
+	Usage    *Usage // token consumption; nil when the surface was unavailable
 }
 
 // Marks a start failure no retry can fix; a caller spending a retry
@@ -123,14 +122,13 @@ func (s *AttemptWorkspace) Consumed() bool {
 
 // A completed manual run.
 type ManualResult struct {
-	RunID       string
-	Outcome     Outcome
-	ExitCode    int
-	Duration    time.Duration
-	Commit      string               // knowledge commit hash, when one was made
-	Hint        string               // classified failure cause, when one was recognized
-	SessionsDir string               // the run's exported sessions, "" when no session dir is designated
-	Conflicts   []knowledge.Conflict // semantic edits preserved outside the canonical file
+	RunID     string
+	Outcome   Outcome
+	ExitCode  int
+	Duration  time.Duration
+	Commit    string               // knowledge commit hash, when one was made
+	Hint      string               // classified failure cause, when one was recognized
+	Conflicts []knowledge.Conflict // semantic edits preserved outside the canonical file
 }
 
 type ManualOptions struct {

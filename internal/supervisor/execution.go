@@ -131,7 +131,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 			st.RecordSuccess()
 		case fatal, pending.Attempts >= MaxAttempts:
 			abandoned = true
-			s.abandon(r, st, settled.Detail, result.SessionsDir, now)
+			s.abandon(r, st, settled.Detail, now)
 		}
 		if err := st.Save(s.stateDir()); err != nil {
 			log.Error("saving scheduling state failed", "error", err)
@@ -184,18 +184,11 @@ func reportSettlement(ctx context.Context, settlement *runner.Settlement, result
 		}
 		return false // shutdown's final commit carries the record, and a lease loser must not push
 	case settlement.Outcome == runner.Completed:
-		log.Info("run completed", withSessions(result.SessionsDir, "duration", result.Duration)...)
+		log.Info("run completed", "duration", result.Duration)
 	case abandoned:
 		// abandon() already said so.
 	default:
-		log.Error("attempt failed -- will retry", withSessions(result.SessionsDir, "detail", settlement.Detail)...)
+		log.Error("attempt failed -- will retry", "detail", settlement.Detail)
 	}
 	return true
-}
-
-func withSessions(sessionsDir string, args ...any) []any {
-	if sessionsDir != "" {
-		args = append(args, "sessions", sessionsDir)
-	}
-	return args
 }

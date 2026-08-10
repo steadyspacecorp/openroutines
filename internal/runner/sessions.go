@@ -1,7 +1,7 @@
 // The attempt's sessions are opencode's own record of the run, fetched once
-// after the model process exits: captureSessions distills token usage and
-// whether the run really finished; exportSessions preserves them verbatim
-// into operator storage. One fetch, so the two can never disagree.
+// after the model process exits. captureSessions distills token usage and
+// whether the run really finished; exportSessions preserves the same payloads
+// verbatim into operator storage.
 
 package runner
 
@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/run"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
@@ -102,15 +102,15 @@ func completeJSON(oc opencodeExec, log *slog.Logger, args ...string) ([]byte, er
 	return nil, fmt.Errorf("opencode %s returned truncated JSON twice (%d bytes)", strings.Join(args, " "), len(raw))
 }
 
-// Distills the attempt's fetched sessions -- bookkeeping
-// must never fail a run, so an unreadable store fails open. Any fetch
-// failure empties the whole capture: a partial sum is a silently wrong
-// usage record.
-func captureSessions(exports []sessionExport, fetchErr error, log *slog.Logger) Capture {
-	sessions, err := sessionMessages(exports, fetchErr)
+// Distills the fetched sessions. Bookkeeping must never fail a run, so an
+// unreadable export fails open.
+func captureSessions(exports []sessionExport, log *slog.Logger) Capture {
+	sessions, err := sessionMessages(exports)
 	if err != nil {
 		log.Warn("session capture unavailable -- no usage recorded and the session-outcome check did not run", "error", err)
-	} else if len(sessions) == 0 {
+		return Capture{}
+	}
+	if len(sessions) == 0 {
 		log.Debug("attempt left no sessions")
 	}
 	return summarize(sessions)
@@ -118,10 +118,7 @@ func captureSessions(exports []sessionExport, fetchErr error, log *slog.Logger) 
 
 // Reads each export's message records, one group per
 // session in fetch order.
-func sessionMessages(exports []sessionExport, fetchErr error) ([][]assistantInfo, error) {
-	if fetchErr != nil {
-		return nil, fetchErr
-	}
+func sessionMessages(exports []sessionExport) ([][]assistantInfo, error) {
 	var groups [][]assistantInfo
 	for _, s := range exports {
 		var export struct {
@@ -248,72 +245,37 @@ func (m assistantInfo) addTo(u *Usage) bool {
 	return true
 }
 
-// Designates operator storage for session history: when set,
-// sessions land at <dir>/<run_id>.<attempt_id>/<session_id>.json whatever the
-// outcome. An env var, not configuration -- storage is wired up where the
-// container is defined, not in the repo.
+// Designates operator storage for session history: when set, sessions land
+// directly in this directory whatever the outcome. An env var, not
+// configuration -- storage is wired up where the container is defined, not
+// in the repo.
 const EnvSessionDir = "OPENROUTINES_SESSION_DIR"
 
-// Gates ids used as filenames: they come from a
-// model-writable store and must not climb out of the attempt's directory.
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+const sessionTimestampLayout = "20060102T150405Z"
 
-// Saves the attempt's session history into operator storage,
-// returning the directory or "". The writes run in the supervisor's process,
-// so the model process never touches the volume. Best-effort throughout --
-// broken storage must never fail the run; an export that lands no file at
-// all names nothing.
-func exportSessions(attempt Attempt, exports []sessionExport, fetchErr error, log *slog.Logger) string {
+// Saves the attempt's session history into operator storage. The writes run
+// in the supervisor's process, so the model process never touches the volume.
+// Best-effort throughout -- broken storage must never fail the run.
+func exportSessions(exports []sessionExport, routineName, runID string, log *slog.Logger) {
 	root := os.Getenv(EnvSessionDir)
-	if root == "" {
-		return ""
+	if root == "" || len(exports) == 0 {
+		return
 	}
-	if len(exports) == 0 {
-		if fetchErr != nil {
-			log.Warn("reading the attempt's sessions failed -- sessions not preserved", "error", fetchErr)
-		} else {
-			log.Debug("attempt left no sessions to export")
-		}
-		return ""
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		log.Warn("session dir not writable -- sessions not preserved", "dir", root, "error", err)
+		return
 	}
-	dir := filepath.Join(root, attempt.RunID+"."+attempt.ID())
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
-	// A retried attempt can reuse its number, so the directory may hold a
-	// previous attempt's files; one directory names one attempt's sessions.
-	_ = os.RemoveAll(dir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Warn("session dir not writable -- sessions not preserved", "dir", dir, "error", err)
-		return ""
-	}
-	wrote := false
-	// A session the fetch could not read is already an incomplete export.
-	firstErr := fetchErr
+	timestamp := time.Now().UTC().Format(sessionTimestampLayout)
+	var firstErr error
 	for _, s := range exports {
-		if err := writeExport(dir, s); err != nil {
+		name := strings.Join([]string{timestamp, routineName, runID, filepath.Base(s.id)}, "_") + ".json"
+		if err := os.WriteFile(filepath.Join(root, name), s.raw, 0o600); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
-			continue
 		}
-		wrote = true
 	}
 	if firstErr != nil {
-		log.Warn("sessions exported incompletely", "dir", dir, "error", firstErr)
+		log.Warn("sessions exported incompletely", "dir", root, "error", firstErr)
 	}
-	if !wrote {
-		_ = os.RemoveAll(dir)
-		return ""
-	}
-	return dir
-}
-
-// Writes one session's export, owner-only: verbatim sessions are
-// as sensitive as the credentials the routine could see.
-func writeExport(dir string, s sessionExport) error {
-	if !sessionIDPattern.MatchString(s.id) {
-		return fmt.Errorf("session id %q is not a safe filename", s.id)
-	}
-	return os.WriteFile(filepath.Join(dir, s.id+".json"), s.raw, 0o600)
 }

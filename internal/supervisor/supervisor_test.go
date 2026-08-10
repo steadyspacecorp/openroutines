@@ -393,9 +393,8 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 		t.Fatalf("run record missing: %q", records)
 	}
 
-	// The attempt's session was exported into its per-attempt directory
-	// under the designated session dir.
-	stored, err := filepath.Glob(filepath.Join(sessionDir, "run_*.attempt_01", "ses_fake.json"))
+	// The attempt's session was exported into the designated session dir.
+	stored, err := filepath.Glob(filepath.Join(sessionDir, "*_every-minute_run_*_ses_fake.json"))
 	if err != nil || len(stored) != 1 {
 		t.Fatalf("expected one exported session, got %v (%v)", stored, err)
 	}
@@ -628,7 +627,7 @@ func TestFailedAttemptDiagnosticsPassThrough(t *testing.T) {
 		sessions := t.TempDir()
 		t.Setenv(runner.EnvSessionDir, sessions)
 		failOnce(t).Expect("boom routine=every-minute run_id=run_")
-		stored, err := filepath.Glob(filepath.Join(sessions, "run_*.attempt_01", "ses_fake.json"))
+		stored, err := filepath.Glob(filepath.Join(sessions, "*_every-minute_run_*_ses_fake.json"))
 		if err != nil || len(stored) != 1 {
 			t.Fatalf("the failed attempt's sessions should have landed, got %v (%v)", stored, err)
 		}
@@ -678,30 +677,6 @@ func TestRetrySameRunIDThenAbandon(t *testing.T) {
 	if got := strings.Count(records, runID); got != MaxAttempts {
 		t.Fatalf("expected %d attempt records for %s, got %d", MaxAttempts, runID, got)
 	}
-}
-
-// The attempt that abandons a run is the one an operator reads first, so
-// its record names the sessions it left -- the outcome that most needs the
-// directory cannot be the one outcome that never mentions it.
-func TestAbandonedRunNamesItsSessions(t *testing.T) {
-	t.Setenv(runner.EnvSessionDir, t.TempDir())
-	s := newSupervisor(t, fixture(t, "fail"))
-	logs := logtest.Capture(t)
-
-	t0 := time.Now().Truncate(time.Minute)
-	s.tickWait(context.Background(), t0) // register
-	driveToAbandonment(t, s, t0)
-
-	for _, line := range strings.Split(logs.String(), "\n") {
-		if !strings.Contains(line, "run abandoned") {
-			continue
-		}
-		if !strings.Contains(line, "sessions=") {
-			t.Fatalf("the abandonment record names no sessions: %q", line)
-		}
-		return
-	}
-	t.Fatalf("no abandonment record in the log: %q", logs.String())
 }
 
 func TestBackoffHoldsBetweenAttempts(t *testing.T) {

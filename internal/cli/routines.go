@@ -116,9 +116,6 @@ func routinesRun(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("\n%s: %s in %s (run %s)\n", name, result.Outcome, result.Duration, result.RunID)
-	if result.SessionsDir != "" {
-		fmt.Printf("sessions: %s\n", result.SessionsDir)
-	}
 	if result.Hint != "" {
 		fmt.Println(result.Hint)
 	}

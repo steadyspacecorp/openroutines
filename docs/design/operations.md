@@ -4,7 +4,7 @@
 
 **Decision.** Run output is not part of the supervisor log, and the framework keeps no private run-artifact format.
 The runner uses opencode's own interfaces: diagnostic stderr is passed through with `routine=` and `run_id=` fields, while interactive progress is discarded for unattended runs.
-When `OPENROUTINES_SESSION_DIR` is set, the supervisor lists and exports the attempt's sessions after it ends into operator storage; the model process cannot access that storage.
+When `OPENROUTINES_SESSION_DIR` is set, the supervisor lists and exports the attempt's sessions after it ends into flat, timestamp-prefixed files carrying the routine, run, and session identities; the model process cannot access that storage.
 Exports are written through the supervisor's capture path and rejected unless complete, so a successful command cannot silently leave a truncated session artifact.
 
 **Why.** Using opencode's log and export interfaces keeps the framework independent of opencode's internal storage layout.

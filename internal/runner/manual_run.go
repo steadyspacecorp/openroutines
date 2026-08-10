@@ -107,7 +107,7 @@ func RunManual(dir, name string, options ManualOptions) (result *ManualResult, e
 	}
 	defer func() { err = errors.Join(err, workspace.Cleanup()) }()
 
-	result = &ManualResult{RunID: attempt.RunID, Outcome: attemptResult.Outcome, ExitCode: attemptResult.ExitCode, Duration: attemptResult.Duration, Hint: attemptResult.Hint, SessionsDir: attemptResult.SessionsDir}
+	result = &ManualResult{RunID: attempt.RunID, Outcome: attemptResult.Outcome, ExitCode: attemptResult.ExitCode, Duration: attemptResult.Duration, Hint: attemptResult.Hint}
 	if options.DiscardKnowledge {
 		return result, nil
 	}
