@@ -9,6 +9,7 @@ import (
 // subprocess boundary is a much cheaper coupling for the supervisor's
 // dependency tree than an in-process one.
 const bwrap = "bwrap"
+const unshare = "unshare"
 
 // How /proc reaches a sandbox, as bwrap arguments.
 type procMount []string
@@ -25,18 +26,25 @@ var (
 )
 
 // The preferred rung: a private mount, pid, ipc, uts and user namespace per
-// attempt. The two variants differ only in how /proc reaches the sandbox,
-// because where the kernel refuses the private mount the weaker variant is
-// still worth far more than nothing.
-type bubblewrap struct{ proc procMount }
+// attempt. The observable variants differ only in how /proc reaches the
+// sandbox. Each can also create its user namespace outside bwrap for runtimes
+// that reject creating it together with the mount namespace.
+type bubblewrap struct {
+	proc               procMount
+	outerUserNamespace bool
+}
 
 func (b bubblewrap) private() bool { return slices.Equal(b.proc, privateProc) }
 
 func (b bubblewrap) Name() string {
-	if b.private() {
-		return "bubblewrap namespaces, private /proc"
+	userNamespace := ""
+	if b.outerUserNamespace {
+		userNamespace = ", outer user namespace"
 	}
-	return "bubblewrap namespaces, shared /proc"
+	if b.private() {
+		return "bubblewrap namespaces" + userNamespace + ", private /proc"
+	}
+	return "bubblewrap namespaces" + userNamespace + ", shared /proc"
 }
 
 // Everything a set of namespaces gives by construction. Only the process list
@@ -68,7 +76,7 @@ func (b bubblewrap) Command(a Attempt, argv ...string) (*exec.Cmd, error) {
 		return nil, err
 	}
 	args := []string{
-		"--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+		"--unshare-pid", "--unshare-ipc", "--unshare-uts",
 		// Try, not require: this namespace only hides which cgroup the attempt
 		// is in, and gVisor -- the sandbox under several managed container
 		// hosts -- rejects CLONE_NEWCGROUP unless cgroup2 is mounted.
@@ -83,6 +91,9 @@ func (b bubblewrap) Command(a Attempt, argv ...string) (*exec.Cmd, error) {
 		"--new-session",
 		"--die-with-parent",
 	}
+	if !b.outerUserNamespace {
+		args = append([]string{"--unshare-user"}, args...)
+	}
 	for _, p := range slices.Concat(readOnlyOS, osConfig) {
 		args = append(args, "--ro-bind-try", p, p)
 	}
@@ -96,5 +107,11 @@ func (b bubblewrap) Command(a Attempt, argv ...string) (*exec.Cmd, error) {
 		args = append(args, "--bind", p, p)
 	}
 	args = append(args, "--chdir", a.Workspace, "--")
+	if b.outerUserNamespace {
+		// gVisor rejects bwrap's combined user-and-mount namespace clone but
+		// permits the same namespaces when the mapped user namespace exists first.
+		args = append([]string{"--user", "--map-root-user", "--", bwrap}, args...)
+		return exec.Command(unshare, append(args, argv...)...), nil
+	}
 	return exec.Command(bwrap, append(args, argv...)...), nil
 }
