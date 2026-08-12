@@ -127,11 +127,17 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt,
 	if err := func() error {
 		knowledgeLock.Lock()
 		defer knowledgeLock.Unlock()
-		if err := store.Ensure(); err != nil {
-			return err
-		}
-		if err := store.Snapshot(workspace.BaseDir); err != nil {
-			return err
+		if attempt.SnapshotDir != "" {
+			if err := knowledge.CloneTree(attempt.SnapshotDir, workspace.BaseDir); err != nil {
+				return err
+			}
+		} else {
+			if err := store.Ensure(); err != nil {
+				return err
+			}
+			if err := store.Snapshot(workspace.BaseDir); err != nil {
+				return err
+			}
 		}
 		if err := knowledge.CloneTree(workspace.BaseDir, workspace.KnowledgeDir); err != nil {
 			return err

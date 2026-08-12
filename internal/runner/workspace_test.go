@@ -30,6 +30,15 @@ func genDef(t *testing.T, attempt Attempt, fm ...routine.Frontmatter) string {
 	return string(raw)
 }
 
+func TestReadOnlyDefinitionDeniesActingAndMutationTools(t *testing.T) {
+	def := genDef(t, Attempt{ReadOnly: true})
+	for _, want := range []string{"\"*\": deny", "read: allow", "glob: allow", "grep: allow", "webfetch: deny", "websearch: deny"} {
+		if !strings.Contains(def, want) {
+			t.Fatalf("read-only definition missing %q:\n%s", want, def)
+		}
+	}
+}
+
 func TestRunDefinitionAllowsActing(t *testing.T) {
 	def := genDef(t, Attempt{RunID: "run_t"})
 	if strings.Contains(def, "bash: deny") {

@@ -34,6 +34,8 @@ type Attempt struct {
 	CoveredThrough time.Time
 	AttemptUID     uint32 // production-only identity, from the supervisor's pool or the manual-run reservation
 	Rehearsal      string // fixture path; set only for manual rehearsal runs
+	SnapshotDir    string // immutable knowledge tree supplied by a read-only CLI view
+	ReadOnly       bool   // deny acting and writing tools; no settlement path exists
 }
 
 // Formats the attempt number for logs and environments.

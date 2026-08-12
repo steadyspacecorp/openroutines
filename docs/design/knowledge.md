@@ -87,16 +87,19 @@ Entry age comes from `git blame`, not timestamp parsing, so routines aren't forc
 `tasks.md` is exempt -- it's a living list, and age doesn't make a task done -- as are the per-routine ledgers, which their routines already prune.
 A still-relevant long-lived fact gets refreshed when a run reaffirms it; an untouched one ages out of the working view without leaving history.
 
-## The files are the read surface
+## Knowledge is inspectable from origin
 
-**Decision.** There is no knowledge read command.
-`openroutines sync` reconciles the local knowledge worktree with origin; after that, the primitives are read as the ordinary Markdown files they are -- `knowledge/tasks.md`, `knowledge/events.md`, `knowledge/context.md`, and the per-routine ledgers.
-The composed view is the check-in routine's ledger: `knowledge/ledgers/check-in.md` always holds the latest delivered check-in.
-A check-in composed on the spot is `openroutines routines run check-in` -- manual runs discard their knowledge writes, so the feed is not consumed.
+**Decision.** `openroutines knowledge` fetches and pins one read-only snapshot of `origin/knowledge`, warns when the local worktree differs, and presents an interactive terminal picker for a model-backed summary, file browsing, and statistics; the same operations are direct subcommands for scripts.
+It never adopts or changes the local knowledge worktree.
+`summarize` uses the agent's default model to render the last 24 hours of committed knowledge changes (`--since` selects another duration), current knowledge, and the current routine schedule as `Recently`, `Next`, and `Waiting on a human`; it confirms the token-spending call, prints its usage, receives only model-provider authentication, and has no routine grants or settlement path.
+`sync` remains the explicit command that reconciles the local worktree with origin.
 
-**Why.** The retired `openroutines knowledge` command (and its `teamwork` alias) fetched and rendered the raw primitives, which made it a pager over Markdown files a person could open directly -- and the raw records were never what a person opening knowledge wanted, since the check-in already compresses them into "what I did, what I intend to do, where I need a human."
-Once the check-in's delivery leaves that report in its ledger, the command's remaining job was the fetch, which is `sync`'s whole purpose.
-Two commands whose only difference is whether files get printed afterwards is one command too many; operational reporting stays with `status` and `usage`.
+**Why.** `openroutines knowledge` is the human and scripting inspection surface for the branch that otherwise stays deliberately separate from the checkout.
+It fetches and pins one read-only snapshot of `origin/knowledge` without adopting, rebasing, committing, or pushing it, then offers an interactive terminal picker (and equivalent direct subcommands) to summarize the snapshot, browse its files, or inspect statistics.
+The summary is an ephemeral default-model call over that snapshot and the current routine schedule: it asks before spending tokens, receives no routine credentials, skills, MCP servers, or web grants, writes no knowledge, advances no reporting cursor, and prints its usage with the result.
+It is therefore a requested view, not a reporting routine or a second delivery mechanism.
+`sync` remains the command that adopts origin into the local knowledge worktree; `status` and `usage` continue to report local operational state and warn when it is stale.
+The earlier command with this name merely fetched and printed the raw primitives, which made it a redundant pager; the remote-first explorer earns the surface by making opaque branch state directly inspectable and by giving a person the compressed briefing they were actually asking for.
 
 ## Alerting degrades to durability when the datastore breaks
 

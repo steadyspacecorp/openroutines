@@ -9,6 +9,7 @@ openroutines scaffold <path>      create a new agent repository
 openroutines configure            fill in openroutines.yml, generate the master key
 openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
+openroutines knowledge            inspect and summarize knowledge from origin
 openroutines usage                token use and reported cost per routine (--json)
 openroutines sync                 pull the agent's latest knowledge from origin (--push)
 openroutines routines <command>   new, list, run, edit, activate, deactivate, remove
@@ -64,6 +65,20 @@ A pending run is followed by what actually becomes of it, which the attempt coun
 
 These lines come out of the `knowledge` branch as your checkout last fetched it, so status says when that reading is behind origin. Run `openroutines sync` for the current picture.
 
+## knowledge
+
+```
+openroutines knowledge
+openroutines knowledge summarize [--since 24h] [--yes]
+openroutines knowledge list [path] [--json]
+openroutines knowledge show <path>
+openroutines knowledge stats [--json]
+```
+
+Fetches and pins one read-only snapshot of `origin/knowledge` without adopting it into local `knowledge/`. In a terminal, the bare command opens a small interactive explorer with Summarize, Browse files, and View stats; when piped, it prints the overview and direct-command help. Every view names a local worktree that is behind, ahead, divergent, or uncommitted while still showing origin.
+
+`summarize` is an ephemeral briefing from the last 24 hours of knowledge changes and the current knowledge and routine schedule, rendered by the agent's default model as Recently, Next, and Waiting on a human. `--since` accepts another Go duration when a different window is useful. It asks before spending tokens (`--yes` confirms non-interactively), prints the captured usage, and has no routine credentials, skills, MCP servers, web grants, knowledge writes, run record, or reporting cursor. `list` and `stats` offer JSON for scripts; `show` prints one file verbatim.
+
 ## usage
 
 ```
@@ -80,13 +95,13 @@ openroutines sync [--push]
 
 Reconciles `knowledge/` with origin. A deployed agent writes its knowledge on the `knowledge` branch, and `git pull` in the agent repository moves the remote-tracking ref without touching the knowledge worktree -- so a checkout keeps reading old knowledge until you sync it. `status` and `usage` say when that has happened and name this command.
 
-Syncing is also how you read the agent: the knowledge primitives are ordinary Markdown files under `knowledge/`, and `knowledge/ledgers/check-in.md` holds the latest check-in the agent delivered -- the teammate-style update as of the last scheduled run. For one composed right now, `openroutines routines run check-in` echoes a fresh report -- manual runs discard their knowledge writes, so the change feed is not consumed.
+Syncing is how you adopt knowledge for local curation; `openroutines knowledge` inspects or summarizes origin without changing the local worktree. After a sync, the knowledge primitives are ordinary Markdown files under `knowledge/`, and `knowledge/ledgers/check-in.md` holds the latest check-in the agent delivered -- the teammate-style update as of the last scheduled run. For one composed right now, `openroutines routines run check-in` echoes a fresh report -- manual runs discard their knowledge writes, so the change feed is not consumed.
 
 Fast-forwards when behind, rebases local commits when both sides moved, and refuses rather than resolving anything itself: a conflict is left for you to resolve inside `knowledge/`, and rewritten upstream history is refused outright. `--push` also publishes local knowledge commits.
 
 When a refusal happens, sync also says whether the deployed agent stranded knowledge on `refs/openroutines/blocked` -- a snapshot of what a supervisor whose own sync is blocked could not write to the branch, typically carrying the blocker task that explains this same refusal. Sync fetches the ref for you (git replicates nothing outside `refs/heads` and `refs/tags` on its own), so `git -C knowledge show refs/openroutines/blocked:tasks.md` reads it and `git -C knowledge diff knowledge refs/openroutines/blocked` shows what the agent has that the branch does not. If the container that stranded it is still running, repairing the branch is what puts that state back on it, and the ref is deleted; if that container has since been replaced, the snapshot is a record to read -- apply from it what you want, then drop the ref with `git push origin :refs/openroutines/blocked`.
 
-`status` and `usage` never sync on their own. This command fetches, can rebase, and publishes the accepted-tip baseline that makes rewrite refusal durable -- none of which belongs in a command whose job is to report state.
+`status` and `usage` never sync on their own. This command fetches, can rebase, and publishes the accepted-tip baseline that makes rewrite refusal durable -- none of which belongs in a command whose job is to report local state. `knowledge` fetches too, but only to export a pinned read-only origin snapshot; it never reconciles the worktree or publishes a ref.
 
 ## routines
 
