@@ -85,10 +85,11 @@ func printKnowledgeOverview(mem *knowledge.Store, snap *knowledge.OriginSnapshot
 	return 0
 }
 
+// A missing local knowledge/ is not worth a line: the explorer always shows
+// origin, and with nothing materialized there is nothing to differ from it.
 func printSnapshotRelation(out io.Writer, r knowledge.SnapshotRelation) {
 	switch {
 	case !r.Materialized:
-		_, _ = fmt.Fprintf(out, "%s knowledge/ is not materialized locally; showing origin\n", warnMark)
 	case r.Diverged:
 		_, _ = fmt.Fprintf(out, "%s local knowledge/ and the origin snapshot have diverged; showing origin\n", warnMark)
 	case r.Behind > 0:
@@ -258,6 +259,16 @@ func knowledgeBrowse(snap *knowledge.OriginSnapshot, in *bufio.Reader) int {
 		if code := knowledgeShow(snap, []string{files[n-1].Path}); code != 0 {
 			return code
 		}
+		// The list would bury the file just shown; hold until the reader is
+		// done with it.
+		fmt.Print("\nb for the file list: ")
+		after, err := in.ReadString('\n')
+		if err != nil {
+			return 0
+		}
+		if s := strings.TrimSpace(after); s == "q" {
+			return 0
+		}
 	}
 }
 
@@ -376,7 +387,7 @@ func knowledgeSummarizeWithReader(snap *knowledge.OriginSnapshot, window time.Du
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return fail(fmt.Errorf("summarize calls %s and spends tokens; pass --yes in non-interactive use", agent.Defaults.Model))
 		}
-		fmt.Printf("Summarize the last %s with %s and spend tokens. Continue? [Y/n] ", window, agent.Defaults.Model)
+		fmt.Printf("Summarize the last %s with %s. Continue? [Y/n] ", window, agent.Defaults.Model)
 		answer, _ := in.ReadString('\n')
 		answer = strings.ToLower(strings.TrimSpace(answer))
 		if answer == "n" || answer == "no" {
