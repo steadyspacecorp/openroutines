@@ -82,7 +82,9 @@ type Backend interface {
 func candidates() []Backend {
 	return []Backend{
 		bubblewrap{proc: privateProc},
+		bubblewrap{proc: privateProc, outerUserNamespace: true},
 		bubblewrap{proc: sharedProc},
+		bubblewrap{proc: sharedProc, outerUserNamespace: true},
 		landlockDomain{},
 	}
 }
