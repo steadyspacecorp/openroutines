@@ -49,6 +49,39 @@ func TestFetchOriginSnapshotDoesNotAdoptLocalKnowledge(t *testing.T) {
 	}
 }
 
+// The export must leave the agent repository exactly as it found it: the
+// checkout that writes the snapshot's files also writes the index it finds,
+// which without a scratch index stages the whole branch there.
+func TestFetchOriginSnapshotLeavesRepositoryStateUntouched(t *testing.T) {
+	a, b := twoClones(t)
+	writeKnowledge(t, a, "events.md", "remote fact\n")
+	if _, err := NewStore(a).Commit("remote fact"); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewStore(a).Push(); err != nil {
+		t.Fatal(err)
+	}
+	before := gitT(t, b, "status", "--porcelain")
+
+	snap, err := NewStore(b).FetchOriginSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snap.Close()
+	if after := gitT(t, b, "status", "--porcelain"); after != before {
+		t.Fatalf("snapshot changed repository state:\nbefore: %q\nafter:  %q", before, after)
+	}
+	files, err := snap.Files("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.Contains(f.Path, "export-index") {
+			t.Fatalf("scratch index left in snapshot: %s", f.Path)
+		}
+	}
+}
+
 func TestSnapshotRejectsPathsOutsideTree(t *testing.T) {
 	dir := t.TempDir()
 	snap := &OriginSnapshot{Dir: dir}

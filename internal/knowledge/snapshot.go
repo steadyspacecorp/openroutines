@@ -71,7 +71,15 @@ func (store *Store) FetchOriginSnapshot() (*OriginSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := git(store.repoDir, "--work-tree="+dir, "checkout", "--quiet", commit, "--", "."); err != nil {
+	// checkout <commit> -- <paths> writes whatever index it finds -- the agent
+	// repository's own, which would leave the whole branch staged there. A
+	// scratch index keeps the read-only export read-only.
+	index := filepath.Join(dir, ".openroutines-export-index")
+	if _, err := gitEnv(store.repoDir, []string{"GIT_INDEX_FILE=" + index}, "--work-tree="+dir, "checkout", "--quiet", commit, "--", "."); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, fmt.Errorf("exporting origin/%s: %w", Branch, err)
+	}
+	if err := os.Remove(index); err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("exporting origin/%s: %w", Branch, err)
 	}

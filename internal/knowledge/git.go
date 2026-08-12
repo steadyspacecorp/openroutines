@@ -132,6 +132,19 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Runs a git command like git, with extra environment entries appended
+// after the constructed hermetic environment.
+func gitEnv(dir string, env []string, args ...string) (string, error) {
+	cmd := newGitCmd(dir, append(hermeticConfig, args...))
+	defer cmd.cancel()
+	cmd.Env = append(cmd.Env, env...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", cmd.fail(args, err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // Reports the status git exited with, or -1 when it never got to
 // exit -- "git answered no" versus "git could not answer".
 func gitExitCode(err error) int {
