@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -32,13 +33,49 @@ type gitCmd struct {
 	cancel context.CancelFunc
 }
 
+// The one carve-out from the suppressed system and global git
+// configuration: credential.* entries, re-injected as -c flags. HTTPS
+// remotes authenticate through credential helpers declared exactly there
+// (macOS ships osxkeychain in the system gitconfig), so suppressing them
+// left every HTTPS fetch with no way to ask for credentials. The
+// passthrough already trusts the operator's SSH auth surface (HOME,
+// SSH_AUTH_SOCK); this is the same trust for HTTPS, and nothing else from
+// those files leaks in. Reading configuration executes nothing; a helper
+// runs only when git itself asks for credentials.
+var credentialConfig = sync.OnceValue(readCredentialConfig)
+
+func readCredentialConfig() []string {
+	var flags []string
+	for _, scope := range []string{"--system", "--global"} {
+		cmd := exec.Command("git", "config", scope, "-z", "--get-regexp", `^credential\.`)
+		cmd.Env = []string{}
+		for _, name := range gitPassthrough {
+			if v, ok := os.LookupEnv(name); ok {
+				cmd.Env = append(cmd.Env, name+"="+v)
+			}
+		}
+		out, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		for entry := range strings.SplitSeq(string(out), "\x00") {
+			if entry == "" {
+				continue
+			}
+			key, value, _ := strings.Cut(entry, "\n")
+			flags = append(flags, "-c", key+"="+value)
+		}
+	}
+	return flags
+}
+
 // Builds a git invocation with a constructed environment and no
 // system or global config. Inheriting the environment would publish
 // OPENROUTINES_MASTER_KEY in the child's /proc/<pid>/environ -- non-dumpable
 // does not survive execve.
 func newGitCmd(dir string, args []string) *gitCmd {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
-	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(originRewrite), args...)...)
+	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(originRewrite), append(credentialConfig(), args...)...)...)
 	cmd.Dir = dir
 	cmd.Env = []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
 	for _, name := range gitPassthrough {

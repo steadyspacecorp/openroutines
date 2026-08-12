@@ -15,6 +15,16 @@ Each attempt has an intent commit before spawn and a completion commit after set
 
 **Why.** Model-directed processes write only disposable staging, so an interrupted run cannot corrupt future context, plant Git behavior, or overwrite human edits.
 The extra validation at import is required because the model can change the staging tree after the initial walk.
+## Hermetic git keeps the operator's credential configuration
+
+**Decision.** Every git child runs with a constructed environment and suppressed system and global configuration, with one carve-out: `credential.*` entries from the system and global scopes are read once per process and re-injected as `-c` flags.
+Nothing else from those files reaches a git child; repository-local configuration still loads as before.
+
+**Why.** The suppression exists so machine configuration cannot change git's behavior under the supervisor -- hooks, transfer tweaks, URL rewrites.
+But credential helpers live in exactly those suppressed files (macOS ships `osxkeychain` in the system gitconfig), so `sync` and `knowledge` could not fetch from an HTTPS origin at all, while plain `git ls-remote` in the same repository succeeded.
+The passthrough already trusts the operator's SSH authentication surface -- HOME reaches ssh's keys and config, SSH_AUTH_SOCK reaches the agent -- and credential configuration is the same surface for HTTPS.
+Reading configuration executes nothing; a helper runs only when git itself asks for credentials, exactly as it would in the operator's own shell.
+In the deployed container no system or global credential configuration exists, so production behavior is unchanged.
 ## Shutdown: terminate fast, lean on at-least-once
 
 **Decision.** On SIGTERM the supervisor stops launching work, terminates active process groups, discards staging, records interrupted attempts, returns unused reservations, makes a final knowledge commit-and-push, and exits.
