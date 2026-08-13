@@ -335,7 +335,7 @@ func checkRoutine(dir string, agent *config.Agent, oc *config.OpenCode, r *routi
 		if err := trigger.Validate(); err != nil {
 			errs = append(errs, err.Error())
 		} else if strings.HasPrefix(trigger.Poll, "http://") {
-			report.warnf("%s: trigger polls over plain http -- the bearer credential and response travel unencrypted", r.Name)
+			report.warnf("%s: trigger polls over plain http -- the credential and response travel unencrypted", r.Name)
 		}
 		if trigger.Credential != "" && !slices.Contains(r.Frontmatter.Credentials, trigger.Credential) {
 			errs = append(errs, fmt.Sprintf("trigger credential %q must also be listed in credentials", trigger.Credential))

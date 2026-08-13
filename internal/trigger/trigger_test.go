@@ -41,6 +41,10 @@ func TestValidate(t *testing.T) {
 	if err := good.Validate(); err != nil {
 		t.Fatalf("valid spec rejected: %v", err)
 	}
+	placeholder := Spec{Poll: "https://api.telegram.org/bot{credential}/getUpdates", Credential: "telegram_bot_token"}
+	if err := placeholder.Validate(); err != nil {
+		t.Fatalf("placeholder spec rejected: %v", err)
+	}
 	bad := []Spec{
 		{},
 		{Poll: "ftp://example.com"},
@@ -48,6 +52,8 @@ func TestValidate(t *testing.T) {
 		{Poll: "https://example.com", Select: "no-slash"},
 		{Poll: "https://example.com", Select: "/x~2y"},
 		{Poll: "https://example.com", Interval: "often"},
+		{Poll: "https://api.telegram.org/bot{credential}/getUpdates"},
+		{Poll: "https://{credential}.example.com/x", Credential: "token"},
 	}
 	for i, s := range bad {
 		if err := s.Validate(); err == nil {
@@ -62,10 +68,12 @@ type pollServer struct {
 	status int
 	got304 int
 	auth   string
+	path   string
 }
 
 func (p *pollServer) handler(w http.ResponseWriter, r *http.Request) {
 	p.auth = r.Header.Get("Authorization")
+	p.path = r.URL.Path
 	if p.etag != "" && r.Header.Get("If-None-Match") == p.etag {
 		p.got304++
 		w.WriteHeader(http.StatusNotModified)
@@ -147,6 +155,30 @@ func TestPollRawBodyHashAndETag(t *testing.T) {
 	}
 	if res.Next.Value == prior.Value {
 		t.Fatal("hash should differ for new body")
+	}
+}
+
+func TestPollCredentialPlaceholder(t *testing.T) {
+	ps := &pollServer{body: `{"ok":true,"result":[]}`}
+	srv := httptest.NewServer(http.HandlerFunc(ps.handler))
+	defer srv.Close()
+	spec := Spec{Poll: srv.URL + "/bot{credential}/getUpdates"}
+
+	res, err := Poll(srv.Client(), spec, "12345:secret", "r", nil)
+	if err != nil || res.Changed {
+		t.Fatalf("baseline poll: changed=%v err=%v", res.Changed, err)
+	}
+	if ps.path != "/bot12345:secret/getUpdates" {
+		t.Fatalf("credential not substituted into the URL: %q", ps.path)
+	}
+	if ps.auth != "" {
+		t.Fatalf("substituted credential must not also travel as a bearer: %q", ps.auth)
+	}
+
+	if _, err := Poll(srv.Client(), spec, "", "r", nil); err == nil {
+		t.Fatal("placeholder with no credential value should be an error")
+	} else if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("error leaks material: %v", err)
 	}
 }
 

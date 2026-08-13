@@ -42,6 +42,12 @@ const (
 // holding per-routine trigger state.
 const StateDirName = "triggers"
 
+// Marks where in the poll URL the credential is substituted at
+// request time, for APIs (Telegram among them) that authenticate in the URL
+// rather than a header. The committed URL carries the placeholder, never the
+// secret.
+const CredentialPlaceholder = "{credential}"
+
 // One routine's durable trigger record: the last comparison value
 // and the conditional-request validators that produced it. Poll timing is
 // deliberately absent -- persisting it would dirty the knowledge worktree on
@@ -109,6 +115,12 @@ func (t Spec) Validate() error {
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
 		return fmt.Errorf("trigger: poll %q is not an http(s) URL", t.Poll)
 	}
+	if strings.Contains(u.Host, CredentialPlaceholder) {
+		return fmt.Errorf("trigger: %s cannot appear in the poll host -- the destination must be reviewable", CredentialPlaceholder)
+	}
+	if strings.Contains(t.Poll, CredentialPlaceholder) && t.Credential == "" {
+		return fmt.Errorf("trigger: poll has a %s placeholder but no credential", CredentialPlaceholder)
+	}
 	if t.Select != "" {
 		if err := validatePointer(t.Select); err != nil {
 			return fmt.Errorf("trigger: select: %w", err)
@@ -138,16 +150,26 @@ type Result struct {
 
 // Performs one change-detection request. prior may be nil (first
 // sight): the first observation establishes the baseline and never reports a
-// change. The credential, when present, is sent as a bearer token and never
+// change. The credential, when present, is sent as a bearer token -- or
+// substituted for the URL's {credential} placeholder instead -- and never
 // appears in errors.
 func Poll(client *http.Client, spec Spec, credential string, name string, prior *State) (Result, error) {
-	req, err := http.NewRequest(http.MethodGet, spec.Poll, nil)
+	pollURL := spec.Poll
+	substituted := strings.Contains(pollURL, CredentialPlaceholder)
+	if substituted {
+		if credential == "" {
+			return Result{}, fmt.Errorf("poll has a %s placeholder but no credential value", CredentialPlaceholder)
+		}
+		pollURL = strings.ReplaceAll(pollURL, CredentialPlaceholder, credential)
+	}
+	req, err := http.NewRequest(http.MethodGet, pollURL, nil)
 	if err != nil {
-		return Result{}, err
+		// The substituted URL may carry the credential; the error would echo it.
+		return Result{}, errors.New("poll URL does not form a valid request")
 	}
 	req.Header.Set("User-Agent", "openroutines-trigger")
 	req.Header.Set("Accept", "*/*")
-	if credential != "" {
+	if credential != "" && !substituted {
 		req.Header.Set("Authorization", "Bearer "+credential)
 	}
 	if prior != nil {
