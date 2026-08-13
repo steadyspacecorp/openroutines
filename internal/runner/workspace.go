@@ -19,6 +19,8 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
+const openCodeGitignore = "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore"
+
 // Assembles the run workspace by allow-list: the configuration
 // file, opencode.json, and routines/ -- everything else a run sees is staged
 // deliberately by the pipeline. (A deny-list once missed exactly one entry,
@@ -57,7 +59,13 @@ func buildWorkspace(dir, workspace, name string) error {
 			return err
 		}
 	}
-	return nil
+	// OpenCode creates this file at startup when it is absent. Stage its
+	// canonical contents so the generated config directory can stay read-only.
+	opencodeDir := filepath.Join(workspace, ".opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(opencodeDir, ".gitignore"), []byte(openCodeGitignore), 0o644)
 }
 
 // Places exactly the routine's declared skills into the
