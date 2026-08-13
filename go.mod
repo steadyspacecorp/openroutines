@@ -1,6 +1,6 @@
 module github.com/steadyspacecorp/openroutines
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/landlock-lsm/go-landlock v0.9.0
