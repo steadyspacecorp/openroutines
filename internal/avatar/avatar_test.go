@@ -27,7 +27,12 @@ func TestGenerateIsDeterministic(t *testing.T) {
 }
 
 func TestGenerateGolden(t *testing.T) {
-	for _, name := range []string{"product-assistant", "market-scout"} {
+	names := []string{
+		"product-assistant", "engineering-assistant", "knowledge-librarian",
+		"market-scout", "deploy-sentry", "changelog-scribe", "inbox-triager",
+		"release-drummer",
+	}
+	for _, name := range names {
 		svg, _, err := Generate(name)
 		if err != nil {
 			t.Fatal(err)
