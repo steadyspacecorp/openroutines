@@ -27,25 +27,16 @@ Per attempt, not per run: a run-level figure would double-count retries.
 Absence means the runtime didn't report -- never zero -- and bookkeeping never fails a run.
 `openroutines usage` aggregates the window per routine (`--json` for scripts and monitors; status shows the one-line total); local container runs point the container's HOME at the same disposable attempt home, which matches production hygiene and keeps the capture surface readable after `--rm`.
 
-**The capture step itself runs with an empty home.**
-It is an ordinary child of the supervisor, not the model process behind the sandbox shim, so its `HOME` must not be the attempt's own: opencode auto-loads plugins from its config dir at startup, and that dir resolves under `HOME` when `XDG_CONFIG_HOME` is unset -- code execution in the process holding the master and deploy keys.
-Verified, not assumed (opencode 1.18.3, the pinned version): a plugin planted in `$HOME/.config/opencode/plugin` executed under both `session list` and `export`; setting `XDG_CONFIG_HOME` to a clean directory shut the channel, and the same plugin under `$XDG_DATA_HOME/opencode/plugin` did not execute.
-Each capture exec therefore gets a fresh, supervisor-owned empty directory as `HOME` with `XDG_CONFIG_HOME` under it, removed when the exec returns -- a `tmpfs` at `/capture-home` in the local-container variant, which keeps it outside `/work` and needs no world-writable host directory.
-It reaches the attempt's session store through `XDG_DATA_HOME` alone: that path carries the attempt's data, never its code, and `opencode.db` follows it, so detaching `HOME` does not orphan the store.
-The home is minted in `TMPDIR`, so capture **fails closed** if that ever resolves inside the workspace.
-In the production container the exec is an ordinary child of the supervisor at the supervisor's own uid -- a sandboxed run keeps that uid too, so everything under the attempt's store is already the supervisor's to read and remove.
-The minted home is removed the way the run workspace is: opencode may leave modes under it that stop a plain walk, so a denied removal retries after restoring owner access on the way down (`removeTree`).
+**The capture step re-enters the run's boundary.**
+Reading the finished session requires a second opencode startup, and opencode loads project and home plugins during commands such as `session list` and `export`.
+A routine can plant startup code after its own process has loaded; running the follow-up as an ordinary supervisor child would then turn that delayed execution into an authority increase.
+Instead, production capture builds a fresh sandbox with the attempt's same boundary, and local capture uses the same disposable container shape, workspace, and attempt home as the run.
+The follow-up receives no routine credentials; production also withholds write access to staged knowledge, while local capture retains only the workspace access the routine already had.
+Code the run planted therefore gains no new authority from the second startup.
+Native mode remains the explicit unconfined opt-in and reuses the developer's home without the routine environment.
 
-The working directory stays the run workspace, because opencode scopes sessions to the directory they ran in.
-opencode also auto-loads `.opencode/plugin` from that directory and its ancestors, and mounting the workspace read-only would not help -- loading needs only that the file exist.
-In production the sandbox rules close it: the workspace root is outside the model process's writable set.
-Locally it is not closed, because bind-mounted workspace roots are writable by the container's uid: a prompt-injected routine can plant `/work/.opencode/plugin` and the capture container will load it.
-That residual is accepted at the level local runs are already pitched at -- the code executes in a discarded container with a secret-free environment and the workspace access the routine already had, not in the supervisor.
-Sandboxing the capture step instead was rejected: it would bound the blast radius of attacker code rather than keep it from running, covers only the production spawn path, and hangs confinement on a bookkeeping step that must never fail a run.
-
-One cost follows from the cold home, and it lands on **opencode plugins** -- the `plugin` array in `opencode.json`, unrelated to an OpenRoutines plugin.
-To resolve a plugin's imports opencode installs `node_modules` into its config dir, so an agent declaring one pays that install on every capture exec instead of reusing the attempt's warmed home: measured at ~55MB (3645 files) and about four seconds against the 30s capture timeout, where an agent declaring none costs well under a second.
-The failure mode stays benign -- a capture that times out records no usage and does not fail the run -- and pre-baking a warm capture config home into the runtime image is the fix if it ever bites, in the layer that pins `OPENCODE_VERSION` (the gate is the directory's existence alone, so a stale one from a different opencode version would be used silently).
+Capture remains bounded and best-effort: failure or timeout omits usage and completion evidence but never changes the run's outcome by itself.
+Reusing the warmed attempt home also avoids reinstalling declared opencode plugins solely for bookkeeping.
 
 The run workspace excludes the repo's `AGENTS.md` (and `CLAUDE.md`): opencode loads a project-root rules file into any session's context, and that file is written for humans' coding agents in development sessions.
 A routine's instructions come only from the generated definition and its own body, so runtime behavior never silently depends on dev-session guidance.
@@ -103,4 +94,3 @@ The choice between MCP and a hand-written skill is call-density and taste, not e
 Filtering the workspace copy is hygiene layered on the grant, not the enforcement: the deny rule and the withheld credential close an ungranted server's surface even when its entry is present.
 What removal adds is that the run stops contacting servers it was never going to use -- opencode probes every configured server at session start, so before the filter every ungranted run hit the remote endpoint credential-less and logged a needs_auth refusal that read like a problem on runs behaving exactly as scoped.
 Skills got the same treatment for the same reason.
-

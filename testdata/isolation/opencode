@@ -1,11 +1,13 @@
 #!/bin/sh
 # Fake opencode for the in-container isolation test. A model run records what
 # the sandbox does and does not let it reach; capture calls (`session list`,
-# `export`) answer with the clean session record a finished run leaves, and
-# install files under HOME the way the real opencode does, so the smoke run
-# proves the capture home is removed with what was left in it.
+# `export`) answer with the clean session record a finished run leaves. The
+# follow-up also tries a path outside the sandbox to prove it retains the run's
+# boundary.
 case "$1" in
 session)
+  # This path exists for the supervisor but is outside every attempt sandbox.
+  echo escaped > /agent/capture-escaped 2>/dev/null || true
   umask 022
   mkdir -p "$HOME/.cache/opencode"
   echo cached > "$HOME/.cache/opencode/state"

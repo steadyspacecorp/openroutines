@@ -24,14 +24,15 @@ echo "HOME=$HOME"
 echo "XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
 echo "XDG_DATA_HOME=$XDG_DATA_HOME"
 echo "HOME_ENTRIES=$(ls -A "$HOME" 2>/dev/null | tr '\n' ',')"
+echo "ROUTINE_SECRET=${ROUTINE_SECRET-unset}"
 [ -f cwd-marker ] && echo "CWD=workspace"
 `
 
-// The capture step runs unsandboxed as a child of the supervisor, so its
-// HOME must be a supervisor-owned empty directory -- never the attempt's
-// own home, whose config dir opencode auto-loads plugins from.
-func TestHostCaptureRunsWithAnEmptyHome(t *testing.T) {
+// Capture re-enters the attempt's world to read its session store, but routine
+// credentials do not return with it.
+func TestHostCaptureUsesTheAttemptHomeWithoutCredentials(t *testing.T) {
 	ws := t.TempDir()
+	t.Setenv("OPENROUTINES_DISABLE_SANDBOX", "1")
 	if err := os.WriteFile(filepath.Join(ws, "cwd-marker"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -39,17 +40,17 @@ func TestHostCaptureRunsWithAnEmptyHome(t *testing.T) {
 	writeMsg(t, filepath.Join(ws, ".home", ".config", "opencode", "plugin"), "evil.js", "export const Evil = async () => ({})")
 	fakeBin(t, "opencode", reportEnv)
 
-	out, err := sandboxedRuntime{workspace: ws}.exec("session", "list")
+	out, err := sandboxedRuntime{workspace: ws, tempDir: filepath.Join(ws, ".runtmp"), env: []string{"ROUTINE_SECRET=secret"}}.exec("session", "list")
 	if err != nil {
 		t.Fatal(err)
 	}
 	env := parseEnv(t, string(out))
 
-	if env["HOME"] == "" || strings.HasPrefix(env["HOME"], ws) {
-		t.Fatalf("HOME must be outside the attempt's workspace, got %q", env["HOME"])
+	if want := filepath.Join(ws, attemptHomeName); env["HOME"] != want {
+		t.Fatalf("HOME = %q, want the attempt home %q", env["HOME"], want)
 	}
-	if env["HOME_ENTRIES"] != "" {
-		t.Fatalf("capture home must be empty, holds %q", env["HOME_ENTRIES"])
+	if !strings.Contains(env["HOME_ENTRIES"], ".config") {
+		t.Fatalf("capture did not re-enter the attempt home: %q", env["HOME_ENTRIES"])
 	}
 	if want := filepath.Join(env["HOME"], ".config"); env["XDG_CONFIG_HOME"] != want {
 		t.Fatalf("XDG_CONFIG_HOME = %q, want %q", env["XDG_CONFIG_HOME"], want)
@@ -58,34 +59,10 @@ func TestHostCaptureRunsWithAnEmptyHome(t *testing.T) {
 		t.Fatalf("XDG_DATA_HOME = %q, want %q", env["XDG_DATA_HOME"], want)
 	}
 	if env["CWD"] != "workspace" {
-		t.Fatal("capture must run in the workspace -- opencode scopes sessions to it")
+		t.Fatal("capture must run in the attempt workspace")
 	}
-	if _, err := os.Stat(env["HOME"]); !os.IsNotExist(err) {
-		t.Fatalf("capture home must be removed after the exec: %v", err)
-	}
-}
-
-// The capture home comes from TMPDIR, so a TMPDIR inside the workspace
-// would hand the attempt the home this exists to deny it. Fail closed:
-// no exec at all, rather than one with an attempt-writable home.
-func TestHostCaptureRefusesAHomeInsideTheWorkspace(t *testing.T) {
-	ws := t.TempDir()
-	marker := filepath.Join(t.TempDir(), "ran")
-	fakeBin(t, "opencode", "#!/bin/sh\ntouch "+marker+"\n")
-	t.Setenv("TMPDIR", ws)
-
-	if _, err := (sandboxedRuntime{workspace: ws}).exec("session", "list"); err == nil {
-		t.Fatal("capture must refuse a home inside the workspace")
-	}
-	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("capture must not exec opencode once the home check fails")
-	}
-	entries, err := os.ReadDir(ws)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("the rejected home must be cleaned up, workspace holds %v", entries)
+	if env["ROUTINE_SECRET"] != "unset" {
+		t.Fatal("capture must not receive the routine's credentials")
 	}
 }
 
@@ -100,6 +77,7 @@ if [ -p /dev/stdout ]; then printf '{"messages":[{"in'; else printf '{"messages"
 `
 
 func TestHostCaptureSurvivesOpencodesLossyPipeWrites(t *testing.T) {
+	t.Setenv("OPENROUTINES_DISABLE_SANDBOX", "1")
 	fakeBin(t, "opencode", truncateOnPipe)
 	out, err := sandboxedRuntime{workspace: t.TempDir()}.exec("export", "ses_x")
 	if err != nil {
@@ -130,15 +108,13 @@ func fakeDocker(t *testing.T, ws string) {
 	fakeBin(t, "docker", "#!/bin/sh\necho pipe-noise\nfor a in \"$@\"; do echo \"$a\"; done > "+ws+"/"+captureOutName+"\n")
 }
 
-// The local-container variant re-enters the image; its empty home is a
-// tmpfs outside /work, so the attempt cannot reach it either. opencode's
-// stdout is redirected to a file inside the container, because a file is
-// what defeats its lossy exit and docker's own stdout is a pipe end to end.
-func TestContainerCaptureRunsWithAnEmptyHome(t *testing.T) {
+// Local capture re-enters the same disposable container world as the run,
+// without forwarding the run's credential environment.
+func TestContainerCaptureUsesTheAttemptHomeWithoutCredentials(t *testing.T) {
 	ws := t.TempDir()
 	fakeDocker(t, ws)
 
-	out, err := containerRuntime{workspace: ws, image: "img"}.exec("export", "ses_x")
+	out, err := containerRuntime{workspace: ws, image: "img", env: []string{"ROUTINE_SECRET=secret"}}.exec("export", "ses_x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,14 +123,10 @@ func TestContainerCaptureRunsWithAnEmptyHome(t *testing.T) {
 	if slices.Contains(args, "pipe-noise") {
 		t.Fatalf("the exec must read the workspace file, never docker's stdout: %s", joined)
 	}
-	if slices.Contains(args, "HOME=/work/"+attemptHomeName) {
-		t.Fatalf("capture must not take its home from the mounted workspace: %s", joined)
-	}
 	for _, want := range []string{
-		"HOME=" + captureHomeMount,
-		"XDG_CONFIG_HOME=" + captureHomeMount + "/.config",
+		"HOME=/work/" + attemptHomeName,
 		"XDG_DATA_HOME=/work/.home/.local/share",
-		"--tmpfs", captureHomeMount + ":mode=0777,exec",
+		"TMPDIR=/work/.runtmp",
 		"-w", "/work", "img",
 		"sh", "-c", `exec opencode "$@" > /work/` + captureOutName,
 		"opencode", "export", "ses_x",
@@ -163,10 +135,8 @@ func TestContainerCaptureRunsWithAnEmptyHome(t *testing.T) {
 			t.Fatalf("missing %q in docker args: %s", want, joined)
 		}
 	}
-	for i, a := range args {
-		if a == "-v" && strings.HasSuffix(args[i+1], ":"+captureHomeMount) {
-			t.Fatalf("the home must be a tmpfs, not a bind mount: %s", joined)
-		}
+	if slices.Contains(args, "ROUTINE_SECRET") {
+		t.Fatalf("capture must not receive the routine's credentials: %s", joined)
 	}
 	if _, err := os.Stat(filepath.Join(ws, captureOutName)); !os.IsNotExist(err) {
 		t.Fatalf("the landing file must be removed after the exec: %v", err)
@@ -196,7 +166,7 @@ func TestContainerCaptureClearsAPlantedLandingFile(t *testing.T) {
 }
 
 // Local capture accepts that a planted workspace plugin runs inside the
-// capture container (docs/design.md, "Execution"), bounded by the container.
+// capture container (docs/design/execution.md), bounded by the container.
 // Swapping the landing file for an absolute symlink mid-exec must not
 // breach that bound by walking the host filesystem with the supervisor's
 // eyes: the read must come from the descriptor opened before the exec,
