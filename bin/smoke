@@ -392,7 +392,7 @@ SCRIPT
   grep -q 'supervisor-environ=Permission denied' "$work/out" || die "an unconfined run could read the supervisor's environment"
   step "the sandbox escape hatch runs unconfined, noted at boot, with the supervisor still protected"
 
-  # A routine lock file another identity created must not cost the owner that
+  # A routine lock file created by another OS user must not cost the owner that
   # routine. Reproduced the way it happened: a manual run made as root over
   # `fly ssh console` takes the routine lock before it touches git, then dies
   # on git refusing a repository it does not own -- leaving a root-owned lock
@@ -414,8 +414,8 @@ SCRIPT
       cat /tmp/owner.out
       exit 1
     fi
-  ' >"$work/out" 2>&1 || die "routine lock left by another identity"
-  step "a routine lock file another identity created still locks"
+  ' >"$work/out" 2>&1 || die "routine lock left by another OS user"
+  step "a routine lock file created by another OS user still locks"
 else
   step "run isolation in-container test SKIPPED (docker not installed)"
 fi

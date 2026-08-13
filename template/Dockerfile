@@ -49,10 +49,6 @@ FROM base AS agent
 ARG OPENROUTINES_VERSION={{OPENROUTINES_VERSION}}
 RUN curl -fsSL https://get.openroutines.dev/install.sh | OPENROUTINES_INSTALL_DIR=/usr/local/bin bash
 COPY --chown=agent . /agent
-RUN chmod 0700 /agent \
-    && find /agent -type d -exec chmod 0700 {} + \
-    && find /agent -type f -perm /0111 -exec chmod 0700 {} + \
-    && find /agent -type f ! -perm /0111 -exec chmod 0600 {} +
 
 # The same drop runtime makes: sibling stages each end by shedding root.
 USER agent

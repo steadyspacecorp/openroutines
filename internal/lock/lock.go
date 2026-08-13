@@ -50,7 +50,7 @@ type fileLock struct {
 
 // Opens, creating if absent, the file behind a named lock. Read-only
 // and 0666 on purpose: flock works regardless of open mode, and a lock file
-// created by another identity (root, over `fly ssh console`) with a narrower
+// created by another OS user (root, over `fly ssh console`) with a narrower
 // mode locked the supervisor out of that routine until container replacement.
 // The chmod after creation beats umask and is best effort.
 func open(dir, name string) (*fileLock, error) {

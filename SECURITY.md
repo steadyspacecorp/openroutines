@@ -46,7 +46,7 @@ When deployed as documented:
 - **No application ingress:** the shipped agent runtime does not listen on a network port. This does not prevent outbound connections or host-level access configured by an operator. Routine triggers stay outbound: the supervisor polls a frontmatter-declared URL (no redirects, bounded reads), sends either a granted raw bearer or short-lived bearer material derived from a granted typed credential, cleans up derived material immediately after the poll, and treats the response as an opaque comparison value that is never logged raw and never enters model context.
 - **Rewrite detection:** knowledge synchronization rejects a remote history that no longer descends from the last accepted tip, while the accepted reference remains available and trustworthy.
 
-These controls are layered. Production model processes run as the supervisor's own unprivileged user, so isolation between concurrent runs -- and between a run and the supervisor -- rests on the run's own confinement rather than on distinct identities. Supervisor secrets are additionally protected by a constructed child environment, file-based key delivery, and a non-dumpable supervisor.
+These controls are layered. Production model processes run as the supervisor's own unprivileged user, so isolation between concurrent runs -- and between a run and the supervisor -- comes from confinement, not Unix ownership. Supervisor secrets are additionally protected by a constructed child environment, file-based key delivery, and a non-dumpable supervisor.
 
 ### The confinement rungs
 

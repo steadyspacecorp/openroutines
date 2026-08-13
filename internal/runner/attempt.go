@@ -82,10 +82,9 @@ type AttemptWorkspace struct {
 	Delivery DeliveryBoundary
 }
 
-// Discards the whole run workspace, staging and base included. A run
-// keeps the supervisor's own uid, so everything the model process created is
-// owned by this process: no identity to negotiate with, and no mode a run can
-// set that the supervisor cannot set back.
+// Discards the whole run workspace, staging and base included. A run keeps the
+// supervisor's uid, so this process owns everything the model created and can
+// restore any modes it changed.
 func (s *AttemptWorkspace) Cleanup() error {
 	if err := removeTree(s.root); err != nil {
 		return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.root, err)

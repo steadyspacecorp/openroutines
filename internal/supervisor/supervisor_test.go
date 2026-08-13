@@ -757,8 +757,8 @@ func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
 }
 
 // A rewritten origin must halt dispatch -- and stay halted on every later
-// tick. Runs taken while blocked would act under identities that exist only
-// in this container: lost on replacement, duplicated on recovery.
+// tick. Runs taken while blocked would act on intent that exists only in this
+// container: lost on replacement, duplicated on recovery.
 func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	dir := fixture(t, "ok")
 	base := t.TempDir()

@@ -16,7 +16,6 @@ COPY opencode /usr/local/bin/opencode
 COPY openroutines /usr/local/bin/openroutines
 RUN chmod 0755 /usr/local/bin/opencode /usr/local/bin/openroutines
 COPY --chown=agent agent /agent
-RUN chmod 0700 /agent
 ENV OPENROUTINES_IN_CONTAINER=1
 USER agent
 ENV HOME=/home/agent
