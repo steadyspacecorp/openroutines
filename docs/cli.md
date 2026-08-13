@@ -1,11 +1,11 @@
 # CLI reference
 
-Run any command from inside an agent repository (except `scaffold`).
+Run any command from inside an agent repository (except `new`).
 
 Commands that change the agent -- routines, skills, plugins, credentials -- edit files in the repository, not a running container. Local runs see the change immediately; a deployed agent runs the copy baked into its image and picks the change up on the next rebuild and redeploy (see [Operating in production](operating.md)).
 
 ```
-openroutines scaffold <path>      create a new agent repository
+openroutines new <path>           create a new agent repository
 openroutines configure            fill in openroutines.yml, generate the master key
 openroutines check                validate the agent; made for CI
 openroutines status               show what the agent has and still needs
@@ -21,10 +21,10 @@ openroutines update               bump the pinned framework version
 openroutines version              print the version
 ```
 
-## scaffold
+## new
 
 ```
-openroutines scaffold <path>
+openroutines new <path>
 ```
 
 Creates a fresh git repository with the agent's skeleton: `openroutines.yml`, a starter check-in routine, an empty `skills/` directory, `AGENTS.md` (with `CLAUDE.md` symlinked to it), a baseline `opencode.json` permission policy, `.gitignore`, Dockerfile, and pinned framework version.

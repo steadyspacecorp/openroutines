@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on the OpenRoutines framework itself. (If you are working on a *scaffolded agent*, this is the wrong file -- see the AGENTS.md that `openroutines scaffold` placed in that repo.)
+Guidance for coding agents working on the OpenRoutines framework itself. (If you are working on a *scaffolded agent*, this is the wrong file -- see the AGENTS.md that `openroutines new` placed in that repo.)
 
 ## What this is
 

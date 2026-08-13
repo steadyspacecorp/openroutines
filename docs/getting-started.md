@@ -5,7 +5,7 @@ From nothing to a running agent: install the CLI, scaffold an agent, configure i
 ## Prerequisites
 
 - **git**
-- **Docker** -- needed by `routines run`, which executes in the same container it runs in when deployed; `scaffold`, `configure`, `check`, and `routines new` don't need it
+- **Docker** -- needed by `routines run`, which executes in the same container it runs in when deployed; `new`, `configure`, `check`, and `routines new` don't need it
 - **An API key for at least one model provider** (Anthropic, OpenAI, ...) -- `configure` encrypts it into the agent's credentials
 
 That's the whole list. You don't install opencode or any language runtime -- everything the agent runs on ships inside the container.
@@ -24,12 +24,12 @@ The installer verifies the checksum and installs to `~/.local/bin` (override wit
 ## Scaffold and configure
 
 ```bash
-openroutines scaffold my-agent
+openroutines new my-agent
 cd my-agent
 openroutines configure
 ```
 
-`scaffold` creates a fresh git repository with the agent's skeleton:
+`new` creates a fresh git repository with the agent's skeleton:
 
 - `openroutines.yml` -- the agent's identity and defaults
 - `routines/` -- a starter check-in routine, active by default (once a day, your agent reports what it did, what it intends to do, and where it's blocked -- after `openroutines sync`, `knowledge/ledgers/check-in.md` holds the latest one, until you point it somewhere better)

@@ -15,19 +15,19 @@ import (
 
 const templateRoot = "template"
 
-const scaffoldUsage = "usage: openroutines scaffold <path>"
+const newUsage = "usage: openroutines new <path>"
 
-func cmdScaffold(args []string) int {
+func cmdNew(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {
 		return fail(err)
 	}
 	if help {
-		fmt.Println(scaffoldUsage)
+		fmt.Println(newUsage)
 		return 0
 	}
 	if len(positional) != 1 {
-		return fail(fmt.Errorf("%s", scaffoldUsage))
+		return fail(fmt.Errorf("%s", newUsage))
 	}
 	target := positional[0]
 	name := filepath.Base(target)

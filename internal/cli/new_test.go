@@ -13,10 +13,10 @@ import (
 // Claude Code reads CLAUDE.md, not AGENTS.md, so the scaffold links one to
 // the other -- a symlink, not a copy, so template updates to AGENTS.md can
 // never leave a stale CLAUDE.md behind.
-func TestScaffoldLinksClaudeMdToAgentsMd(t *testing.T) {
+func TestNewLinksClaudeMdToAgentsMd(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent")
-	if code := cmdScaffold([]string{dir}); code != 0 {
-		t.Fatalf("scaffold exited %d", code)
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
 	}
 	link := filepath.Join(dir, "CLAUDE.md")
 	fi, err := os.Lstat(link)
@@ -35,10 +35,10 @@ func TestScaffoldLinksClaudeMdToAgentsMd(t *testing.T) {
 	}
 }
 
-func TestScaffoldWritesAvatar(t *testing.T) {
+func TestNewWritesAvatar(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent")
-	if code := cmdScaffold([]string{dir}); code != 0 {
-		t.Fatalf("scaffold exited %d", code)
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
 	}
 	svg, err := os.ReadFile(filepath.Join(dir, "avatar.svg"))
 	if err != nil {
@@ -56,10 +56,10 @@ func TestScaffoldWritesAvatar(t *testing.T) {
 	}
 }
 
-func TestScaffoldKeepsFrameworkFilesUnderOpenRoutines(t *testing.T) {
+func TestNewKeepsFrameworkFilesUnderOpenRoutines(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent")
-	if code := cmdScaffold([]string{dir}); code != 0 {
-		t.Fatalf("scaffold exited %d", code)
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version"))
 	if err != nil {

@@ -8,7 +8,7 @@ If the branch doesn't exist at boot, the supervisor creates and pushes it -- fir
 All of this presumes a git origin: deploying an ORA requires one (any git host -- GitHub, GitLab, Gitea, a bare repo on a VPS), since that's the only durable home for knowledge.
 Local development needs no origin; `openroutines check` verifies one exists before you deploy.
 Which protocol that origin speaks is not the operator's problem: the deploy key is an SSH credential, so a supervisor holding one rewrites an HTTPS origin to SSH on its own git invocations, leaving `.git/config` and the built image as written.
-Without that, the common case -- `scaffold` adds no origin and `gh` defaults to https -- deploys an agent with no usable credential for its own repository, and the container restart-loops before it supervises anything.
+Without that, the common case -- `new` adds no origin and `gh` defaults to https -- deploys an agent with no usable credential for its own repository, and the container restart-loops before it supervises anything.
 
 **Why.** The analogy is Docker's own: `main` is the image (immutable, what you deploy), the `knowledge` branch is the volume (mutable, survives redeploys).
 Keeping knowledge off `main` means agent commits never trigger CI/CD, never race human pushes, and never pollute the history of human intent.
