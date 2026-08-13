@@ -325,6 +325,9 @@ EOF
     kill -TERM "$supervisor"
     wait "$supervisor"
     cat /tmp/supervise.out
+    if [ -z "${OPENROUTINES_DISABLE_SANDBOX:-}" ] && [ -e /agent/capture-escaped ]; then
+      echo "capture escaped the run sandbox"; exit 1
+    fi
     git -C /agent show knowledge:ledgers/isolation.md
     git -C /agent show knowledge:ledgers/escapee.md >/dev/null
     if ls /tmp | grep -q openroutines-; then echo "run workspace not cleaned"; exit 1; fi
