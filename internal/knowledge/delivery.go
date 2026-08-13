@@ -233,7 +233,7 @@ func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 }
 
 const (
-	// Injected read-only into a reporting routine's workspace.
+	// Injected as a generated snapshot into a reporting routine's workspace.
 	ChangesFileName = "changes.md"
 	// Created by the routine to consume the whole change set.
 	ConsumeMarker = "CONSUMED"

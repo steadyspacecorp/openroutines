@@ -46,7 +46,7 @@ Fail-closed stays the default for the one case where the loss is total: with no 
 ## Runs are sandboxed -- and local runs use the production container
 
 **Decision.** In production every model process runs inside its own sandbox; the next decision covers which mechanism builds it.
-Whichever is in force, the sandbox holds a read-only OS (`/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, and `/etc` entry by named entry rather than whole), `/proc`, a `/dev` assembled without the container's shared `/dev/shm`, the run workspace read-only, and read-write access to exactly three trees inside it: staged knowledge, the run tmp, and a disposable per-attempt HOME.
+Whichever is in force, the sandbox holds a read-only OS (`/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, and `/etc` entry by named entry rather than whole), `/proc`, a `/dev` assembled without the container's shared `/dev/shm`, and one writable disposable run workspace.
 Out of reach: the agent repository, the knowledge worktree, the supervisor's `~/.ssh`, and every concurrent attempt's workspace.
 The per-attempt HOME exists because a shared writable opencode home is a cross-routine channel -- opencode persists session state and auto-loads global plugins from its config dir -- and `/dev/shm` is withheld for the weaker form of the same reason.
 Every run gets the network, because the model it calls is across it; per-routine egress is a proxy problem rather than a sandbox one.
@@ -63,6 +63,7 @@ In both cases the model sees only the assembled workspace and declared skills.
 
 **Why.** Skill grants are context hygiene, not an access wall -- a routine with bash can `cat` any file it can reach.
 The sandbox turns declare-or-it-doesn't-exist into kernel enforcement: a path never granted cannot be opened, raced, guessed, or chmodded into reach, so there is no rule to get wrong, only a list to keep short.
+Making the whole assembled workspace writable gives coding agents ordinary scratch-project semantics without widening that list: mutations outside staged knowledge disappear with the workspace, while knowledge still crosses the boundary only through validation and import.
 Because a run holds the supervisor's own uid, a `0600` file inside a granted path is a readable file: modes protect nothing from a run, only absence from the grant does.
 `/etc` was the concrete trap -- bound whole it looks like inert OS config, but it is where hosting platforms mount secret files, so a deployment that put its master key where its platform documents would have handed that key to every routine.
 The boot check exists because the allow-list is necessary and not sufficient: it fixes the trap that is known, and the check catches the next one.

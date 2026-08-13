@@ -40,10 +40,9 @@ func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 			return nil, fmt.Errorf("opencode not found in PATH (native mode) -- install it: https://opencode.ai")
 		}
 		return sandboxedRuntime{
-			workspace:    p.workspace.root,
-			tempDir:      p.tempDir,
-			knowledgeDir: p.workspace.KnowledgeDir,
-			env:          p.env,
+			workspace: p.workspace.root,
+			tempDir:   p.tempDir,
+			env:       p.env,
 		}, nil
 	case mode.LocalNative:
 		if _, err := exec.LookPath("opencode"); err != nil {
@@ -58,18 +57,13 @@ func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 		if err := ensureRuntimeImage(p.agentDir, image); err != nil {
 			return nil, err
 		}
-		// Pre-create the attempt home world-writable: the container's agent
-		// uid (10001) is not the host user's, and the workspace is a bind
-		// mount discarded after the run.
-		for _, path := range []string{
-			filepath.Join(p.workspace.root, attemptHomeName),
-			filepath.Join(p.workspace.root, attemptHomeName, ".local"),
-			filepath.Join(p.workspace.root, attemptHomeName, ".local", "share"),
-		} {
-			if err := os.MkdirAll(path, 0o777); err != nil {
-				return nil, err
-			}
-			_ = os.Chmod(path, 0o777)
+		if err := os.MkdirAll(filepath.Join(p.workspace.root, attemptHomeName, ".local", "share"), 0o755); err != nil {
+			return nil, err
+		}
+		// A bind mount preserves the host's ownership, while the runtime image
+		// uses uid 10001. This tree is disposable and contains no stored secrets.
+		if err := makeWorldWritable(p.workspace.root); err != nil {
+			return nil, err
 		}
 		return containerRuntime{
 			workspace: p.workspace.root,
@@ -81,29 +75,47 @@ func (p *PreparedAttempt) runtime() (attemptRuntime, error) {
 	return nil, fmt.Errorf("unsupported deployment mode %d", currentMode)
 }
 
+func makeWorldWritable(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if entry.IsDir() {
+			return os.Chmod(path, 0o777)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			return os.Chmod(path, info.Mode().Perm()|0o666)
+		}
+		return nil
+	})
+}
+
 // Production: opencode from the image's PATH, each run confined in a sandbox of
 // its own -- the strongest rung the host allowed, probed at boot -- holding the
 // read-only OS, this workspace, and nothing else.
 type sandboxedRuntime struct {
 	processGroup
-	workspace    string
-	tempDir      string
-	knowledgeDir string
-	env          []string
+	workspace string
+	tempDir   string
+	env       []string
 }
 
 func (h sandboxedRuntime) home() string { return filepath.Join(h.workspace, attemptHomeName) }
 
 func (h sandboxedRuntime) dataHome() string { return filepath.Join(h.home(), ".local", "share") }
 
-func (h sandboxedRuntime) command(ocArgs, writable []string) (*exec.Cmd, error) {
+func (h sandboxedRuntime) command(ocArgs []string) (*exec.Cmd, error) {
 	cmd := exec.Command("opencode", ocArgs...)
 	if !sandbox.Disabled() {
 		var err error
-		if cmd, err = sandbox.Command(sandbox.Attempt{
-			Workspace: h.workspace,
-			Writable:  writable,
-		}, append([]string{"opencode"}, ocArgs...)...); err != nil {
+		if cmd, err = sandbox.Command(h.workspace, append([]string{"opencode"}, ocArgs...)...); err != nil {
 			return nil, err
 		}
 	}
@@ -121,7 +133,7 @@ func (h sandboxedRuntime) command(ocArgs, writable []string) (*exec.Cmd, error) 
 // not a policy decision. HOME is disposable and the attempt's alone: a shared
 // writable home let one routine persist plugins into a later routine's session.
 func (h sandboxedRuntime) run(ocArgs []string) (*exec.Cmd, error) {
-	cmd, err := h.command(ocArgs, []string{h.knowledgeDir, h.tempDir, h.home()})
+	cmd, err := h.command(ocArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -145,10 +157,10 @@ func (h sandboxedRuntime) reap(cmd *exec.Cmd) {
 	}
 }
 
-// Runs one bookkeeping subcommand inside the attempt's boundary, with no
-// routine credentials and no write access to staged knowledge.
+// Runs one bookkeeping subcommand inside the attempt's boundary, without the
+// routine's credentials.
 func (h sandboxedRuntime) exec(args ...string) ([]byte, error) {
-	cmd, err := h.command(args, []string{h.tempDir, h.home()})
+	cmd, err := h.command(args)
 	if err != nil {
 		return nil, err
 	}

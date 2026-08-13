@@ -114,14 +114,9 @@ func removeTree(path string) error {
 	return os.RemoveAll(path)
 }
 
-// Reports whether the routine created the consume marker. The staged
-// knowledge directory is canonical -- writable to the run in every isolation
-// shape; the workspace root is still accepted for unconfined runs.
+// Reports whether the routine created the consume marker in staged knowledge.
 func (s *AttemptWorkspace) Consumed() bool {
-	if _, err := os.Stat(filepath.Join(s.KnowledgeDir, knowledge.ConsumeMarker)); err == nil {
-		return true
-	}
-	_, err := os.Stat(filepath.Join(s.root, knowledge.ConsumeMarker))
+	_, err := os.Stat(filepath.Join(s.KnowledgeDir, knowledge.ConsumeMarker))
 	return err == nil
 }
 

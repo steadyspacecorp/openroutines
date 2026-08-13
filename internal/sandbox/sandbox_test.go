@@ -21,9 +21,9 @@ const envRequireSandbox = "OPENROUTINES_REQUIRE_SANDBOX"
 
 type probeBackend struct{ name string }
 
-func (b probeBackend) Name() string                                { return b.name }
-func (probeBackend) Capabilities() Capabilities                    { return Capabilities{} }
-func (probeBackend) Command(Attempt, ...string) (*exec.Cmd, error) { return nil, nil }
+func (b probeBackend) Name() string                               { return b.name }
+func (probeBackend) Capabilities() Capabilities                   { return Capabilities{} }
+func (probeBackend) Command(string, ...string) (*exec.Cmd, error) { return nil, nil }
 
 func TestSandboxProbeResultsAreLoggedTogether(t *testing.T) {
 	var logs bytes.Buffer
@@ -112,7 +112,7 @@ func TestTheSandboxKeepsAPeerAttemptsFilesOutOfReach(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		out, err := run(t, b, Attempt{Workspace: t.TempDir()}, "cat", peer)
+		out, err := run(t, b, t.TempDir(), "cat", peer)
 		if err == nil {
 			t.Fatalf("a peer attempt's file was readable from inside the sandbox: %s", out)
 		}
@@ -131,29 +131,26 @@ func TestTheSandboxKeepsAPeerAttemptsFilesOutOfReach(t *testing.T) {
 	})
 }
 
-func TestTheWorkspaceIsReadOnlyExceptWhereTheRunMayWrite(t *testing.T) {
+func TestTheWorkspaceIsWritableAndEverythingOutsideItIsNot(t *testing.T) {
 	eachRung(t, func(t *testing.T, b Backend) {
 		workspace := t.TempDir()
-		staged := filepath.Join(workspace, "memory")
-		if err := os.Mkdir(staged, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		spec := Attempt{Workspace: workspace, Writable: []string{staged}}
+		outside := filepath.Join(t.TempDir(), "outside")
 
-		if out, err := run(t, b, spec, "sh", "-c", "echo tampered > "+filepath.Join(workspace, "routine.md")); err == nil {
-			t.Fatalf("the run rewrote the routine it was staged from: %s", out)
+		if out, err := run(t, b, workspace, "sh", "-c", "echo changed > "+filepath.Join(workspace, "routine.md")); err != nil {
+			t.Fatalf("the run could not write its disposable workspace: %v: %s", err, out)
 		}
-		if out, err := run(t, b, spec, "sh", "-c", "echo settled > "+filepath.Join(staged, "events.md")); err != nil {
-			t.Fatalf("the run could not write its own staged memory: %v: %s", err, out)
+		if out, err := run(t, b, workspace, "sh", "-c", "echo escaped > "+outside); err == nil {
+			t.Fatalf("the run wrote outside its workspace: %s", out)
 		}
-		// The supervisor imports and deletes this holding no capability at all,
-		// which works only because a run keeps the supervisor's own uid.
-		info, err := os.Stat(filepath.Join(staged, "events.md"))
+		if _, err := os.Stat(outside); !os.IsNotExist(err) {
+			t.Fatalf("the run left a file outside its workspace: %v", err)
+		}
+		info, err := os.Stat(filepath.Join(workspace, "routine.md"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if owner := info.Sys().(*syscall.Stat_t).Uid; owner != uint32(os.Getuid()) {
-			t.Fatalf("staged file owner = %d, want the supervisor's own uid %d", owner, os.Getuid())
+			t.Fatalf("workspace file owner = %d, want the supervisor's own uid %d", owner, os.Getuid())
 		}
 	})
 }
@@ -178,7 +175,7 @@ func TestWhatTheRunCanLearnAboutAPeerProcess(t *testing.T) {
 		pid := strconv.Itoa(peer.Process.Pid)
 
 		if b.Capabilities().PrivateProcessList {
-			out, err := run(t, b, Attempt{Workspace: t.TempDir()}, "ls", "/proc/"+pid)
+			out, err := run(t, b, t.TempDir(), "ls", "/proc/"+pid)
 			if err == nil {
 				t.Fatalf("this rung claims a private process list, but a peer was visible inside it: %s", out)
 			}
@@ -192,7 +189,7 @@ func TestWhatTheRunCanLearnAboutAPeerProcess(t *testing.T) {
 			{"memory", "/proc/" + pid + "/mem"},
 			{"filesystem", "/proc/" + pid + "/root/"},
 		} {
-			out, err := run(t, b, Attempt{Workspace: t.TempDir()}, "cat", probe.path)
+			out, err := run(t, b, t.TempDir(), "cat", probe.path)
 			if err == nil {
 				t.Fatalf("a peer's %s was readable on this rung: %s", probe.what, out)
 			}
@@ -203,7 +200,7 @@ func TestWhatTheRunCanLearnAboutAPeerProcess(t *testing.T) {
 				t.Fatalf("peer %s failed for the wrong reason: %s", probe.what, out)
 			}
 		}
-		if out, err := run(t, b, Attempt{Workspace: t.TempDir()}, "cat", peerSecret); err == nil {
+		if out, err := run(t, b, t.TempDir(), "cat", peerSecret); err == nil {
 			t.Fatalf("a peer's staged memory was readable: %s", out)
 		}
 	})
@@ -222,7 +219,7 @@ func TestWhetherARunCanSignalAProcessOutsideIt(t *testing.T) {
 
 		// Signal 0 asks the kernel the permission question without delivering
 		// anything, which is the question this test is about.
-		out, err := run(t, b, Attempt{Workspace: t.TempDir()}, "sh", "-c", "kill -0 "+strconv.Itoa(peer.Process.Pid))
+		out, err := run(t, b, t.TempDir(), "sh", "-c", "kill -0 "+strconv.Itoa(peer.Process.Pid))
 		if b.Capabilities().UnsignalablePeers {
 			if err == nil {
 				t.Fatalf("this rung claims peers cannot be signaled, but a process outside the sandbox was reachable: %s", out)
@@ -248,7 +245,7 @@ func TestWhetherKillingTheSandboxKillsAnEscapedDescendant(t *testing.T) {
 		}
 		beat := filepath.Join(marker, "beat")
 		pidfile := filepath.Join(marker, "escapee-pid")
-		cmd, err := b.Command(Attempt{Workspace: workspace, Writable: []string{marker}},
+		cmd, err := b.Command(workspace,
 			"sh", "-c", "setsid sh -c 'echo $$ > "+pidfile+"; while :; do echo x >> "+beat+"; sleep 0.05; done' & sleep 30")
 		if err != nil {
 			t.Fatal(err)
@@ -306,7 +303,7 @@ func TestTheSandboxGrantsOnlyTheNamedPartsOfEtc(t *testing.T) {
 			// Walking /etc only answers where an ungranted entry is absent; where
 			// it is merely denied the listing still shows it, so ask file by file.
 			for _, path := range []string{"/etc/shadow", "/etc/secrets", "/etc/ssl/private"} {
-				if out, err := run(t, b, Attempt{Workspace: t.TempDir()}, "cat", path); err == nil {
+				if out, err := run(t, b, t.TempDir(), "cat", path); err == nil {
 					t.Errorf("%s was readable inside the sandbox: %s", path, out)
 				}
 			}
@@ -314,7 +311,7 @@ func TestTheSandboxGrantsOnlyTheNamedPartsOfEtc(t *testing.T) {
 		}
 		// Two levels deep, so an entry granted for its useful siblings cannot
 		// smuggle a directory in with it -- /etc/ssl/private being the case.
-		out, err := run(t, b, Attempt{Workspace: t.TempDir()}, "find", "/etc", "-mindepth", "1", "-maxdepth", "2")
+		out, err := run(t, b, t.TempDir(), "find", "/etc", "-mindepth", "1", "-maxdepth", "2")
 		if err != nil {
 			t.Fatalf("walking /etc failed: %v: %s", err, out)
 		}
@@ -383,48 +380,29 @@ func TestExposureFollowsSymlinksAndRelativePaths(t *testing.T) {
 	}
 }
 
-// A writable grant is the one argument in an Attempt that can hand a run the
-// host, so it is refused on every rung -- which is why the check lives on
-// Attempt rather than in a backend.
-func TestAWritablePathOutsideTheWorkspaceIsRefused(t *testing.T) {
-	workspace := t.TempDir()
+func TestAnInvalidWorkspaceIsRefused(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
 	for _, b := range candidates() {
-		if _, err := b.Command(Attempt{Workspace: workspace, Writable: []string{"/etc"}}, "true"); err == nil {
-			t.Errorf("%s: a writable grant outside the workspace was accepted", b.Name())
+		if _, err := b.Command("workspace", "true"); err == nil {
+			t.Errorf("%s: a relative workspace was accepted", b.Name())
 		}
-		if _, err := b.Command(Attempt{Workspace: workspace, Writable: []string{"memory"}}, "true"); err == nil {
-			t.Errorf("%s: a relative writable grant was accepted, though the backend would resolve it differently", b.Name())
+		if _, err := b.Command(missing, "true"); err == nil {
+			t.Errorf("%s: a missing workspace was accepted", b.Name())
 		}
-		missing := filepath.Join(workspace, "missing")
-		if _, err := b.Command(Attempt{Workspace: workspace, Writable: []string{missing}}, "true"); err == nil {
-			t.Errorf("%s: a missing writable grant was accepted", b.Name())
-		}
-	}
-
-	// The name is inside the workspace; what it opens is not. A backend grants
-	// the target, so a check on the name alone would expose an arbitrary tree.
-	escape := filepath.Join(workspace, "memory")
-	if err := os.Symlink(t.TempDir(), escape); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Command(Attempt{Workspace: workspace, Writable: []string{escape}}, "true"); err == nil {
-		t.Fatal("a writable symlink out of the workspace was accepted")
-	}
-
-	staged := filepath.Join(workspace, "staged")
-	if err := os.Mkdir(staged, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Command(Attempt{Workspace: workspace, Writable: []string{staged}}, "true"); err != nil && !strings.Contains(err.Error(), ErrUnavailable.Error()) {
-		t.Fatalf("a writable path inside the workspace was refused: %v", err)
 	}
 }
 
-func TestARelativeWorkspaceIsRefusedWithoutWritablePaths(t *testing.T) {
-	for _, b := range candidates() {
-		if _, err := b.Command(Attempt{Workspace: "workspace"}, "true"); err == nil {
-			t.Errorf("%s: a relative workspace was accepted", b.Name())
-		}
+func TestLandlockGrantsWorkspaceWritable(t *testing.T) {
+	workspace := t.TempDir()
+	cmd, err := (landlockDomain{}).Command(workspace, "true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSequence(cmd.Args, "--rw", workspace) {
+		t.Fatalf("workspace is not writable in the Landlock command: %q", cmd.Args)
+	}
+	if containsSequence(cmd.Args, "--ro", workspace) {
+		t.Fatalf("workspace is still read-only in the Landlock command: %q", cmd.Args)
 	}
 }
 
@@ -451,14 +429,14 @@ func TestDisablingTheSandboxClaimsNothingAndBuildsNothing(t *testing.T) {
 	if _, err := Verify(); !errors.Is(err, ErrDisabled) {
 		t.Errorf("Verify should report the hatch rather than a rung: %v", err)
 	}
-	if _, err := Command(Attempt{Workspace: t.TempDir()}, "true"); !errors.Is(err, ErrDisabled) {
+	if _, err := Command(t.TempDir(), "true"); !errors.Is(err, ErrDisabled) {
 		t.Errorf("Command should refuse rather than hand back an unconfined command: %v", err)
 	}
 }
 
-func run(t *testing.T, b Backend, a Attempt, argv ...string) (string, error) {
+func run(t *testing.T, b Backend, workspace string, argv ...string) (string, error) {
 	t.Helper()
-	cmd, err := b.Command(a, argv...)
+	cmd, err := b.Command(workspace, argv...)
 	if err != nil {
 		t.Fatal(err)
 	}

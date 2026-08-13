@@ -68,11 +68,11 @@ func (b bubblewrap) Capabilities() Capabilities {
 // fresh pid namespace as pid 2 -- pid 1 is a trivial bwrap init that reaps
 // orphans -- so killing this process collapses the namespace and takes every
 // descendant with it, including any that escaped into its own session.
-func (b bubblewrap) Command(a Attempt, argv ...string) (*exec.Cmd, error) {
+func (b bubblewrap) Command(workspace string, argv ...string) (*exec.Cmd, error) {
 	// Validated here, but the argv below uses the names as given: bwrap
 	// resolves a bind's source itself, and the destination has to keep the
 	// name the run was told to use, which is the unresolved one.
-	if err := a.validate(); err != nil {
+	if err := validateWorkspace(workspace); err != nil {
 		return nil, err
 	}
 	args := []string{
@@ -101,12 +101,9 @@ func (b bubblewrap) Command(a Attempt, argv ...string) (*exec.Cmd, error) {
 	args = append(args,
 		"--dev", "/dev", // a fresh minimal devtmpfs: /dev/shm is this attempt's alone
 		"--tmpfs", "/tmp", // the workspace binds over this, so it must come first
-		"--ro-bind", a.Workspace, a.Workspace,
+		"--bind", workspace, workspace,
 	)
-	for _, p := range a.Writable {
-		args = append(args, "--bind", p, p)
-	}
-	args = append(args, "--chdir", a.Workspace, "--")
+	args = append(args, "--chdir", workspace, "--")
 	if b.outerUserNamespace {
 		// gVisor rejects bwrap's combined user-and-mount namespace clone but
 		// permits the same namespaces when the mapped user namespace exists first.

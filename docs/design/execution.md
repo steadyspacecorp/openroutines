@@ -31,7 +31,7 @@ Absence means the runtime didn't report -- never zero -- and bookkeeping never f
 Reading the finished session requires a second opencode startup, and opencode loads project and home plugins during commands such as `session list` and `export`.
 A routine can plant startup code after its own process has loaded; running the follow-up as an ordinary supervisor child would then turn that delayed execution into an authority increase.
 Instead, production capture builds a fresh sandbox with the attempt's same boundary, and local capture uses the same disposable container shape, workspace, and attempt home as the run.
-The follow-up receives no routine credentials; production also withholds write access to staged knowledge, while local capture retains only the workspace access the routine already had.
+The follow-up receives no routine credentials and retains only the writable disposable workspace the routine already had.
 Code the run planted therefore gains no new authority from the second startup.
 Native mode remains the explicit unconfined opt-in and reuses the developer's home without the routine environment.
 

@@ -72,7 +72,7 @@ case "$mode" in
      echo $! > "$d/detached.pid"
      echo "detached" ;;
   consume) cp changes.md knowledge/changes-copy.md
-     : > CONSUMED
+     : > knowledge/CONSUMED
      echo "consumed" ;;
   probe) [ -d "$d/replacement" ] || git clone -q -b knowledge "$(cat "$d/origin")" "$d/replacement" || true
      echo "probed" ;;

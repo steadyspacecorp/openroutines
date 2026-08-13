@@ -20,6 +20,37 @@ func fakeBin(t *testing.T, name, script string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+func TestLocalContainerCanWriteTheWholeWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	paths := []string{
+		workspace,
+		filepath.Join(workspace, "opencode.json"),
+		filepath.Join(workspace, ".opencode"),
+		filepath.Join(workspace, ".opencode", "agents", "routine.md"),
+	}
+	if err := os.MkdirAll(filepath.Dir(paths[3]), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{paths[1], paths[3]} {
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := makeWorldWritable(workspace); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm()&0o222 != 0o222 {
+			t.Errorf("%s mode = %o, want writable by the container uid", path, info.Mode().Perm())
+		}
+	}
+}
+
 // A stand-in opencode that prints the environment it was
 // handed instead of doing any work.
 const reportEnv = `#!/bin/sh
