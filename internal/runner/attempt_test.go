@@ -19,7 +19,7 @@ func TestCleanupReportsWorkspaceRemovalFailure(t *testing.T) {
 // the timeout -- not left to a `check` the operator may never run. The
 // declared value stays readable for `check` to warn about.
 func TestTimeoutIsCappedAtTheAgentCeiling(t *testing.T) {
-	agent := &config.Agent{Name: "a", Description: "d"}
+	agent := &config.Agent{Name: "a", Instructions: "d"}
 	agent.Defaults.Timeout = "90m"
 	marathon := &routine.Routine{Name: "marathon"}
 	if got := DeclaredTimeout(agent, marathon); got != 90*time.Minute {

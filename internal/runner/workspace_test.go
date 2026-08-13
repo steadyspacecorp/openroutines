@@ -14,7 +14,7 @@ import (
 func genDef(t *testing.T, attempt Attempt, fm ...routine.Frontmatter) string {
 	t.Helper()
 	ws := t.TempDir()
-	agent := &config.Agent{Name: "a", Description: "d"}
+	agent := &config.Agent{Name: "a", Instructions: "d"}
 	front := routine.Frontmatter{Skills: []string{"s1"}}
 	if len(fm) > 0 {
 		front = fm[0]
@@ -246,7 +246,7 @@ func TestApplyDeclaredMCPFiltersUngrantedServers(t *testing.T) {
 // conditional block must appear exactly when its flag is set, and no
 // template syntax may leak into the prompt.
 func TestInstructionRendering(t *testing.T) {
-	agent := &config.Agent{Name: "test-agent", Description: "Tests things"}
+	agent := &config.Agent{Name: "test-agent", Instructions: "Tests things"}
 	render := func(fm routine.Frontmatter) string {
 		t.Helper()
 		ws := t.TempDir()
@@ -265,6 +265,7 @@ func TestInstructionRendering(t *testing.T) {
 	full := render(routine.Frontmatter{Reports: true, Teamwork: routine.TeamworkFull})
 	for _, want := range []string{
 		"You are test-agent",
+		"Your standing instructions: Tests things",
 		"routine \"sample\" (run run_x)",
 		"knowledge/ledgers/sample.md",
 		"Every run appends at least one event",
@@ -312,6 +313,10 @@ func TestInstructionRendering(t *testing.T) {
 	agent.Variables = nil
 	if got := render(routine.Frontmatter{}); strings.Contains(got, "configuration variables") {
 		t.Fatalf("variables block rendered with no variables configured:\n%s", got)
+	}
+	agent.Instructions = ""
+	if got := render(routine.Frontmatter{}); strings.Contains(got, "standing instructions") || !strings.Contains(got, "You are test-agent, an autonomous agent.\n") {
+		t.Fatalf("unset instructions must render a bare identity line:\n%s", got)
 	}
 }
 

@@ -1,5 +1,4 @@
 name: "{{AGENT_NAME}}"
-description: "{{JOB_DESCRIPTION}}"
 owner:
   name: "{{OWNER_NAME}}"
   email: "{{OWNER_EMAIL}}"

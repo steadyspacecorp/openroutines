@@ -68,7 +68,6 @@ func cmdConfigure(args []string) int {
 	}
 
 	agent.Name = prompt("Agent name", agent.Name)
-	agent.Description = prompt("Job description", strings.TrimSpace(agent.Description))
 	agent.Owner.Name = prompt("Owner name", agent.Owner.Name)
 	agent.Owner.Email = prompt("Owner email", agent.Owner.Email)
 	agent.Timezone = prompt("Timezone (IANA)", defaultTimezone(agent.Timezone))

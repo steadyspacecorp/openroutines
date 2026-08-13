@@ -1,14 +1,15 @@
 # Foundation
 
-## One agent, one job description, one runtime
+## One agent, one job, one runtime
 
 **Decision.** An OpenRoutines agent (ORA) is a single agent with a single mandate, defined in `openroutines.yml`.
-Its name and description are standing context, not repository metadata: the runtime injects both into every run before the routine-specific instructions.
-The description states the durable mandate; routine bodies define the individual recurring ways the agent carries it out.
+Its name -- and the optional `instructions` -- are standing context, not repository metadata: the runtime injects them into every run before the routine-specific instructions.
+When set, `instructions` states the durable mandate; routine bodies define the individual recurring ways the agent carries it out.
+The key was originally a required `description`, renamed and made optional because the name hid that it is injected prompt context, and requiring it forced standing prompt context on agents that want none (#160).
 There is no fleet management, no orchestration graph, no agent-to-agent protocol.
 
 **Why.** Most of the complexity -- and most of the failure modes -- in agent frameworks comes from coordination between agents.
-A single agent with a clear job description is easy to reason about, easy to secure, and easy to hold accountable: "what did it do?" is one log and one knowledge.
+A single agent with a clear job is easy to reason about, easy to secure, and easy to hold accountable: "what did it do?" is one log and one knowledge.
 If you need two jobs done, deploy two agents.
 It also makes the security model tractable: exactly one runtime means exactly one writer to knowledge, one credential set, one blast radius.
 

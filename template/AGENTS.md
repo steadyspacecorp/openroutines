@@ -10,9 +10,10 @@ instructions -- so nothing written here reaches the deployed agent.
 
 ## What this repository is
 
-This repo *is* an agent: one job description (`openroutines.yml`), a set of
-scheduled routines (`routines/*.md`), the skills they may use (`skills/`),
-encrypted credentials (`.openroutines/credentials.yml.enc`), and the agent's knowledge (a
+This repo *is* an agent: one job (`openroutines.yml`, with optional
+standing `instructions`), a set of scheduled routines (`routines/*.md`),
+the skills they may use (`skills/`), encrypted credentials
+(`.openroutines/credentials.yml.enc`), and the agent's knowledge (a
 `knowledge/` directory backed by its own git branch). A supervisor in the
 deployed container runs whatever routine is due.
 

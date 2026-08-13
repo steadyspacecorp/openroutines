@@ -150,7 +150,7 @@ esac
 
 func agentYAML(tz string) string {
 	return fmt.Sprintf(`name: test-agent
-description: Tests the supervisor
+instructions: Tests the supervisor
 owner:
   name: CI
   email: ci@example.invalid

@@ -14,7 +14,7 @@ import (
 )
 
 const credentialsAgentYAML = `name: test-agent
-description: Tests credentials
+instructions: Tests credentials
 owner:
   name: CI
   email: ci@example.invalid

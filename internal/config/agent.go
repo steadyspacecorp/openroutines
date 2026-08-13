@@ -1,5 +1,5 @@
 // Loads and validates openroutines.yml -- the agent's identity:
-// name, job description, owner, timezone, and routine defaults.
+// name, standing instructions, owner, timezone, and routine defaults.
 package config
 
 import (
@@ -75,23 +75,25 @@ type Knowledge struct {
 	Retention string `yaml:"retention,omitempty"`
 }
 
-// The parsed configuration file. Description is the agent's job
-// description. Variables are non-secret values injected into every run's
+// The parsed configuration file. Instructions is the agent's optional
+// standing prompt -- injected into every run before the routine's own
+// instructions; absent means the runs get only the routine bodies.
+// Variables are non-secret values injected into every run's
 // environment (product_repo -> PRODUCT_REPO); secrets belong in credentials.
 // Credentials is optional per-credential metadata giving a stored credential
 // a derived type (design decision "Credentials have types"); an entry-less
 // credential is raw, injected verbatim.
 type Agent struct {
-	Name        string                `yaml:"name"`
-	Description string                `yaml:"description"`
-	Owner       Owner                 `yaml:"owner"`
-	Timezone    string                `yaml:"timezone"`
-	Defaults    Defaults              `yaml:"defaults"`
-	MaxTimeout  string                `yaml:"max_timeout,omitempty"`
-	Concurrency int                   `yaml:"concurrency,omitempty"`
-	Knowledge   *Knowledge            `yaml:"knowledge,omitempty"`
-	Variables   map[string]string     `yaml:"variables,omitempty"`
-	Credentials map[string]creds.Spec `yaml:"credentials,omitempty"`
+	Name         string                `yaml:"name"`
+	Instructions string                `yaml:"instructions,omitempty"`
+	Owner        Owner                 `yaml:"owner"`
+	Timezone     string                `yaml:"timezone"`
+	Defaults     Defaults              `yaml:"defaults"`
+	MaxTimeout   string                `yaml:"max_timeout,omitempty"`
+	Concurrency  int                   `yaml:"concurrency,omitempty"`
+	Knowledge    *Knowledge            `yaml:"knowledge,omitempty"`
+	Variables    map[string]string     `yaml:"variables,omitempty"`
+	Credentials  map[string]creds.Spec `yaml:"credentials,omitempty"`
 
 	// Retired, replaced by Knowledge. Parsed only so Load can reject it
 	// with the rename: strict decoding alone would call it an unknown
@@ -180,8 +182,8 @@ func (a *Agent) Problems() []string {
 	if a.Name == "" || isPlaceholder(a.Name) {
 		out = append(out, "name is not set")
 	}
-	if a.Description == "" || isPlaceholder(a.Description) {
-		out = append(out, "description (the job description) is not set")
+	if isPlaceholder(a.Instructions) {
+		out = append(out, "instructions still holds a scaffold placeholder -- write the standing instructions or remove the key")
 	}
 	if a.Owner.Email == "" || isPlaceholder(a.Owner.Email) {
 		out = append(out, "owner email is not set")

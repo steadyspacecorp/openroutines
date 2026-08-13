@@ -23,7 +23,7 @@ printf 'smoke: testing %s\n' "$("$bin" version)"
 run scaffold "$work/agent" || die "scaffold"
 [ "$(readlink "$work/agent/CLAUDE.md")" = "AGENTS.md" ] || die "CLAUDE.md is not a symlink to AGENTS.md"
 cd "$work/agent"
-printf 'smoke-agent\nSmoke-tests the openroutines CLI\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
+printf 'smoke-agent\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
   | "$bin" configure >"$work/out" 2>&1 || die "configure"
 step "scaffold + configure"
 
@@ -249,7 +249,7 @@ if command -v docker >/dev/null 2>&1; then
   mkdir -p "$ctx"
   run scaffold "$ctx/agent" || die "scaffold isolation agent"
   cd "$ctx/agent"
-  printf 'isolation-agent\nSmoke-tests uid isolation\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
+  printf 'isolation-agent\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
     | "$bin" configure >"$work/out" 2>&1 || die "configure isolation agent"
   "$bin" sync >"$work/out" 2>&1 || die "materialize isolation knowledge"
   cat > routines/isolation.md <<'EOF'
