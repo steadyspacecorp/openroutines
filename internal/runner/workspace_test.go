@@ -73,10 +73,10 @@ func TestWebAccessOptIn(t *testing.T) {
 }
 
 // The workspace is built by allow-list: exactly openroutines.yml,
-// opencode.json, and routines/ travel in; .opencode/ is generated here. This
-// is the audit's headline test -- no secret-shaped file (the encrypted store,
-// keys) and no dev-session rules file (AGENTS.md/CLAUDE.md, which opencode
-// would load into run context) may ever reach a run.
+// opencode.json, and routines/ travel in. This is the audit's headline test --
+// no secret-shaped file (the encrypted store, keys) and no dev-session rules
+// file (AGENTS.md/CLAUDE.md, which opencode would load into run context) may
+// ever reach a run.
 func TestBuildWorkspaceAllowList(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
@@ -118,28 +118,11 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{"openroutines.yml": true, "opencode.json": true, "routines": true, ".opencode": true}
+	allowed := map[string]bool{"openroutines.yml": true, "opencode.json": true, "routines": true}
 	for _, e := range entries {
 		if !allowed[e.Name()] {
 			t.Errorf("%s leaked into the run workspace", e.Name())
 		}
-	}
-}
-
-func TestBuildWorkspacePreseedsOpenCodeGitignore(t *testing.T) {
-	dir := t.TempDir()
-	workspace := t.TempDir()
-	if err := buildWorkspace(dir, workspace, "daily"); err != nil {
-		t.Fatal(err)
-	}
-
-	raw, err := os.ReadFile(filepath.Join(workspace, ".opencode", ".gitignore"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore"
-	if string(raw) != want {
-		t.Fatalf(".opencode/.gitignore = %q, want %q", raw, want)
 	}
 }
 

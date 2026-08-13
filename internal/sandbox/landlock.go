@@ -77,8 +77,8 @@ var devices = []string{
 // grants plus this attempt's own paths, by re-executing this binary as the
 // shim. This process's own path, not a lookup: an attempt is confined by the
 // code that spawned it, never by whatever `openroutines` is on PATH.
-func (landlockDomain) Command(a Attempt, argv ...string) (*exec.Cmd, error) {
-	if err := a.validate(); err != nil {
+func (landlockDomain) Command(workspace string, argv ...string) (*exec.Cmd, error) {
+	if err := validateWorkspace(workspace); err != nil {
 		return nil, err
 	}
 	self, err := os.Executable()
@@ -99,13 +99,10 @@ func (landlockDomain) Command(a Attempt, argv ...string) (*exec.Cmd, error) {
 	}
 	// Not /tmp: the attempt's temporary directory lives inside its workspace,
 	// so the container's shared /tmp is simply never granted.
-	args = append(args, "--ro", a.Workspace)
-	for _, p := range a.Writable {
-		args = append(args, "--rw", p)
-	}
+	args = append(args, "--rw", workspace)
 	args = append(args, "--")
 	cmd := exec.Command(self, append(args, argv...)...)
-	cmd.Dir = a.Workspace
+	cmd.Dir = workspace
 	return cmd, nil
 }
 

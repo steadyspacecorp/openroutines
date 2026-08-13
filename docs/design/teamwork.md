@@ -19,7 +19,7 @@ Retired keys (`events`, `consumes`) hard-error in `check` with their replacement
 **Why.** A closed vocabulary keeps the user-facing model aligned with the files and keys the runtime actually reads, instead of accumulating metaphors for the same artifacts.
 ## The forward schedule is injected, never derived
 
-**Decision.** Every run workspace receives a read-only `schedule.md`, rendered by the runtime with the same cron parser the supervisor schedules with: each active routine's next fires (routines below full participation as `fact:` lines -- fires to know about, not to report on), and, when the running routine is scheduled, its **window** -- now through its first fire on its next fire-day, same-day retry slots skipped -- with the other full-participation routines split in-window/out.
+**Decision.** Every run workspace receives a generated `schedule.md`, rendered by the runtime with the same cron parser the supervisor schedules with: each active routine's next fires (routines below full participation as `fact:` lines -- fires to know about, not to report on), and, when the running routine is scheduled, its **window** -- now through its first fire on its next fire-day, same-day retry slots skipped -- with the other full-participation routines split in-window/out.
 Trigger fires never appear (a wake-up cannot be computed ahead), and the running routine's own window remains operational self-knowledge regardless of its teamwork tier.
 The standing instruction names the file and forbids deriving fire times from `routines/` frontmatter.
 A routine without a schedule gets the facts without a window.

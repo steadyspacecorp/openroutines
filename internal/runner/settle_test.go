@@ -226,7 +226,7 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 	if staging.Consumed() {
 		t.Fatal("Consumed() true with no marker anywhere")
 	}
-	// The sandbox leaves only staged knowledge writable: the marker there counts.
+	// Only the canonical receipt inside staged knowledge counts.
 	os.WriteFile(filepath.Join(staging.KnowledgeDir, knowledge.ConsumeMarker), nil, 0o644)
 	if !staging.Consumed() {
 		t.Fatal("marker in staged knowledge not honored")
@@ -239,11 +239,10 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(wt, knowledge.ConsumeMarker)); !os.IsNotExist(err) {
 		t.Fatal("consume marker imported into the knowledge worktree")
 	}
-	// Unsandboxed runs may still drop the marker at the workspace root.
-	legacy := &AttemptWorkspace{KnowledgeDir: t.TempDir(), root: t.TempDir()}
-	os.WriteFile(filepath.Join(legacy.root, knowledge.ConsumeMarker), nil, 0o644)
-	if !legacy.Consumed() {
-		t.Fatal("workspace-root marker no longer honored")
+	other := &AttemptWorkspace{KnowledgeDir: t.TempDir(), root: t.TempDir()}
+	os.WriteFile(filepath.Join(other.root, knowledge.ConsumeMarker), nil, 0o644)
+	if other.Consumed() {
+		t.Fatal("a marker outside staged knowledge was honored")
 	}
 }
 

@@ -69,12 +69,12 @@ type Capabilities struct {
 	CollapsesTree bool
 }
 
-// A Backend is one rung of the ladder: a way to build the sandbox an Attempt
-// describes, together with an honest account of what that sandbox is worth.
+// A Backend is one rung of the ladder: a way to build one run's sandbox,
+// together with an honest account of what that sandbox is worth.
 type Backend interface {
 	Name() string
 	Capabilities() Capabilities
-	Command(a Attempt, argv ...string) (*exec.Cmd, error)
+	Command(workspace string, argv ...string) (*exec.Cmd, error)
 }
 
 // The rungs, strongest first. Probing decides between them because the answer
@@ -150,13 +150,13 @@ func Provides() Capabilities {
 	return Capabilities{}
 }
 
-// Command wraps argv in the sandbox a describes, built by the active rung.
-func Command(a Attempt, argv ...string) (*exec.Cmd, error) {
+// Command wraps argv and its workspace in the active sandbox rung.
+func Command(workspace string, argv ...string) (*exec.Cmd, error) {
 	b, err := settle()
 	if err != nil {
 		return nil, err
 	}
-	return b.Command(a, argv...)
+	return b.Command(workspace, argv...)
 }
 
 // The operating system an attempt gets: one shared policy each backend
@@ -227,38 +227,14 @@ func within(path, root string) bool {
 	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
-// An Attempt is everything one model process may reach. Every mount into a
-// sandbox is potential privilege escalation (bubblewrap's own README), so this
-// policy should stay as short as it reads.
-type Attempt struct {
-	// Workspace is the attempt's staged tree, mounted read-only.
-	Workspace string
-	// Writable are the paths the attempt may mutate, each inside Workspace: a
-	// writable bind is the one argument here that can hand a run the host.
-	Writable []string
-}
-
-// Checks that every writable grant really lands inside the workspace, resolved
-// rather than lexically: a backend confines what a path resolves to, so an
-// entry that symlinks out would pass a check on its name. Absolute is required
-// rather than inferred because this process and the sandbox helper resolve a
-// relative path against different directories. Resolving is for the check
-// only -- a backend must name paths to the run exactly as the runner named them.
-func (a Attempt) validate() error {
-	if !filepath.IsAbs(a.Workspace) {
-		return fmt.Errorf("attempt workspace must be absolute: %s", a.Workspace)
+// Absolute is required rather than inferred because this process and the
+// sandbox helper resolve a relative workspace against different directories.
+func validateWorkspace(workspace string) error {
+	if !filepath.IsAbs(workspace) {
+		return fmt.Errorf("attempt workspace must be absolute: %s", workspace)
 	}
-	workspace := resolve(a.Workspace)
-	for _, p := range a.Writable {
-		if !filepath.IsAbs(p) {
-			return fmt.Errorf("attempt writable path must be absolute: %s", p)
-		}
-		if _, err := os.Stat(p); err != nil {
-			return fmt.Errorf("attempt writable path %s: %w", p, err)
-		}
-		if !within(resolve(p), workspace) {
-			return fmt.Errorf("writable path %s is outside the attempt workspace %s", p, a.Workspace)
-		}
+	if _, err := os.Stat(workspace); err != nil {
+		return fmt.Errorf("attempt workspace %s: %w", workspace, err)
 	}
 	return nil
 }
@@ -271,11 +247,8 @@ func probe(b Backend) error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	scratch := filepath.Join(dir, "rw")
-	if err := os.Mkdir(scratch, 0o755); err != nil {
-		return err
-	}
-	cmd, err := b.Command(Attempt{Workspace: dir, Writable: []string{scratch}}, "true")
+	scratch := filepath.Join(dir, "probe")
+	cmd, err := b.Command(dir, "sh", "-c", `echo writable > "$1"`, "sh", scratch)
 	if err != nil {
 		return err
 	}
