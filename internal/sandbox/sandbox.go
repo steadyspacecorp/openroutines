@@ -120,18 +120,11 @@ var probeLadder = sync.OnceValues(func() (Backend, error) {
 // mid-run.
 func Verify() (Backend, error) { return settle() }
 
-// Active is the settled rung, or nil where nothing works. Callers that only
-// need what the boundary is worth should ask Provides instead.
-func Active() Backend {
-	b, _ := settle()
-	return b
-}
-
 // Provides reports what the active rung's confinement is worth, and the zero
 // value when there is none -- so keying behavior on a property gets the
 // conservative branch rather than an assumption about a sandbox that is absent.
 func Provides() Capabilities {
-	if b := Active(); b != nil {
+	if b, _ := settle(); b != nil {
 		return b.Capabilities()
 	}
 	return Capabilities{}

@@ -20,7 +20,6 @@ esac
 
 mkdir -p knowledge/ledgers
 {
-  echo "uid=$(id -u) gid=$(id -g)"
   # Where the sandbox can mount its own procfs the supervisor is not listed
   # at all; where /proc is shared the process list leaks. Either way the thing
   # that matters -- the environment holding the master key -- stays

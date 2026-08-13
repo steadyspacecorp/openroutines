@@ -10,7 +10,7 @@ Validation and import both reject symlinks, hard links, Git control files, super
 Import happens beside the worktree and is promoted only after every file passes, so a rejected run leaves the worktree unchanged.
 Git runs with pinned configuration, a constructed environment, and argument-safe invocation.
 
-The worktree must be clean for human-curated knowledge; a blocked sync stops dispatch rather than acting on identities that could disappear with the container.
+The worktree must be clean for human-curated knowledge; a blocked sync stops dispatch rather than acting on intent that has not reached origin and would disappear with the container.
 Each attempt has an intent commit before spawn and a completion commit after settlement.
 
 **Why.** Model-directed processes write only disposable staging, so an interrupted run cannot corrupt future context, plant Git behavior, or overwrite human edits.
@@ -70,7 +70,6 @@ Network egress and resource use remain uncovered, and are documented as hardenin
 ## The run boundary is a per-run sandbox, the strongest the host allows
 
 **Decision.** The boundary between the supervisor and the model process, and between concurrent model processes, is a per-run sandbox built by the strongest mechanism the host actually permits, chosen by probing at boot rather than by configuration.
-This supersedes "The required boundary is a per-attempt UID; Landlock is defense-in-depth"; the reserved identity pool and its lifecycle are retired with it.
 
 There are two mechanisms, tried strongest-first, and the supervisor takes the first that can really build a throwaway sandbox here.
 Bubblewrap is preferred: private mount, pid, ipc, uts and user namespaces per attempt, plus a cgroup namespace where the host allows one.
