@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	openroutines "github.com/steadyspacecorp/openroutines"
+	"github.com/steadyspacecorp/openroutines/internal/avatar"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
@@ -71,6 +72,17 @@ func cmdScaffold(args []string) int {
 	// of truth so update's AGENTS.md rewrites flow through it. Created here
 	// (not in template/) because go:embed refuses symlinks.
 	if err := os.Symlink("AGENTS.md", filepath.Join(target, "CLAUDE.md")); err != nil {
+		return fail(err)
+	}
+
+	avatarSVG, avatarPNG, err := avatar.Generate(name)
+	if err != nil {
+		return fail(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "avatar.svg"), avatarSVG, 0o644); err != nil {
+		return fail(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "avatar.png"), avatarPNG, 0o644); err != nil {
 		return fail(err)
 	}
 

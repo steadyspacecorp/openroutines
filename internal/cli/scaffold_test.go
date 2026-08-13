@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/version"
@@ -30,6 +32,27 @@ func TestScaffoldLinksClaudeMdToAgentsMd(t *testing.T) {
 	}
 	if dest != "AGENTS.md" {
 		t.Fatalf("CLAUDE.md points at %q, want AGENTS.md", dest)
+	}
+}
+
+func TestScaffoldWritesAvatar(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	if code := cmdScaffold([]string{dir}); code != 0 {
+		t.Fatalf("scaffold exited %d", code)
+	}
+	svg, err := os.ReadFile(filepath.Join(dir, "avatar.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(svg), "<svg") {
+		t.Fatalf("avatar.svg does not start with an <svg> tag: %.40q", svg)
+	}
+	png, err := os.ReadFile(filepath.Join(dir, "avatar.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(png, []byte("\x89PNG")) {
+		t.Fatalf("avatar.png lacks the PNG signature: %.8q", png)
 	}
 }
 
