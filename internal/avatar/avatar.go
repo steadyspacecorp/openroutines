@@ -253,29 +253,32 @@ type palette struct{ bg, fg, body string }
 
 type hue struct {
 	name        string
+	weight      int
 	light, dark palette
 }
 
+// Weights skew the fleet toward the cool end of the palette -- the brand's
+// ultramarine most of all -- without ever excluding the warm hues.
 var hues = []hue{
-	{"ultramarine",
+	{"ultramarine", 5,
 		palette{"#d8e0ff", "#4738f2", "#2f11b6"},
 		palette{"#171361", "#b7c4ff", "#7484ff"}},
-	{"aqua",
+	{"aqua", 3,
 		palette{"#bceceb", "#007272", "#004d4d"},
 		palette{"#002b2b", "#6fdcdb", "#45a3a3"}},
-	{"grape",
+	{"grape", 3,
 		palette{"#e6daff", "#7d24d3", "#57009b"},
 		palette{"#2f0b54", "#d1b9ff", "#a670f4"}},
-	{"sky",
+	{"sky", 3,
 		palette{"#cbe4ff", "#0065b0", "#004479"},
 		palette{"#002546", "#9cccff", "#5497d9"}},
-	{"lemon",
+	{"lemon", 2,
 		palette{"#f4e19b", "#766200", "#4f4100"},
 		palette{"#2c2300", "#eac500", "#ac9000"}},
-	{"orange",
+	{"orange", 2,
 		palette{"#ffd7cf", "#ba0d01", "#800500"},
 		palette{"#490402", "#ffb0a3", "#e36654"}},
-	{"rhubarb",
+	{"rhubarb", 2,
 		palette{"#ffd5da", "#b80049", "#7e002f"},
 		palette{"#480219", "#ffadb9", "#e1627c"}},
 }
@@ -286,7 +289,19 @@ func scene(name string) (shapes []shape, fills []string) {
 	sum := sha256.Sum256([]byte(name))
 	h := heads[int(sum[0])%len(heads)]
 	e := eyeStyles[int(sum[1])%len(eyeStyles)]
-	hu := hues[int(sum[2])%len(hues)]
+	total := 0
+	for _, c := range hues {
+		total += c.weight
+	}
+	n := int(sum[2]) % total
+	var hu hue
+	for _, c := range hues {
+		if n < c.weight {
+			hu = c
+			break
+		}
+		n -= c.weight
+	}
 	pal := hu.light
 	if sum[3]%2 == 1 {
 		pal = hu.dark
