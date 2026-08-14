@@ -393,6 +393,10 @@ func TestAWritablePathOutsideTheWorkspaceIsRefused(t *testing.T) {
 		if _, err := b.Command(Attempt{Workspace: workspace, Writable: []string{"memory"}}, "true"); err == nil {
 			t.Errorf("%s: a relative writable grant was accepted, though the backend would resolve it differently", b.Name())
 		}
+		missing := filepath.Join(workspace, "missing")
+		if _, err := b.Command(Attempt{Workspace: workspace, Writable: []string{missing}}, "true"); err == nil {
+			t.Errorf("%s: a missing writable grant was accepted", b.Name())
+		}
 	}
 
 	// The name is inside the workspace; what it opens is not. A backend grants

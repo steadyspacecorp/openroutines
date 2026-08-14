@@ -253,6 +253,9 @@ func (a Attempt) validate() error {
 		if !filepath.IsAbs(p) {
 			return fmt.Errorf("attempt writable path must be absolute: %s", p)
 		}
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("attempt writable path %s: %w", p, err)
+		}
 		if !within(resolve(p), workspace) {
 			return fmt.Errorf("writable path %s is outside the attempt workspace %s", p, a.Workspace)
 		}
