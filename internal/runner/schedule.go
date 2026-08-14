@@ -12,7 +12,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
 
-// The read-only forward schedule injected into every
+// The generated forward schedule injected into every
 // run workspace: what fires when, computed by the same parser that
 // schedules runs, so the model never derives fire times from cron by hand.
 const ScheduleFileName = "schedule.md"

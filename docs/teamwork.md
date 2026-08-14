@@ -21,7 +21,7 @@ There's one piece you never see in a prompt: the runtime injects standing instru
 
 ## Declaring intentions
 
-Declaring intentions is a reporting routine's job, and the runtime does the hard part. It parses every routine's `schedule`, works out which ones will run before the next report, and hands the reporting run that list as a read-only `./schedule.md`. The reporting routine pairs those routines with any open Agent-owned tasks in `tasks.md` they can pick up within the reporting window. See [Creating routines](routines.md#scheduling) for the file's details.
+Declaring intentions is a reporting routine's job, and the runtime does the hard part. It parses every routine's `schedule`, works out which ones will run before the next report, and hands the reporting run that list as a generated `./schedule.md`. The reporting routine pairs those routines with any open Agent-owned tasks in `tasks.md` they can pick up within the reporting window. See [Creating routines](routines.md#scheduling) for the file's details.
 
 ## Reporting progress
 

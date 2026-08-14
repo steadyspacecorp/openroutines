@@ -77,7 +77,7 @@ docker run ... \
 
 Of those three, `systempaths=unconfined` is the only optional one: without it the kernel refuses the sandbox a `/proc` of its own, so a run can see that a peer exists and read its command line. That is a metadata leak between routines and not a credential leak -- reading another run's environment fails across a user-namespace boundary even at the same uid. The supervisor works this out by itself. Take the upgrade if your platform offers it; do not block a deployment on it.
 
-If neither mechanism works on your host -- an old or unusual kernel with no Landlock, on a runtime that also denies user namespaces -- the supervisor will not start, and says so. (Run it at `debug` level for what each mechanism reported.) Fix the host if you can. If you cannot, and you would rather run your agent unconfined than not at all, that is your call to make:
+If neither mechanism works on your host -- an old or unusual kernel with no Landlock, on a runtime that also denies user namespaces -- the supervisor will not start, and its boot log records what every mechanism reported. Fix the host if you can. If you cannot, and you would rather run your agent unconfined than not at all, that is your call to make:
 
 ```bash
 docker run -e OPENROUTINES_DISABLE_SANDBOX=1 ... my-agent
@@ -124,7 +124,7 @@ Set `OPENROUTINES_LOG_LEVEL` to change how much of the log survives -- unset mea
 - `warn` -- the local default: degraded-but-running conditions (unreachable origin, a routine that stopped loading, a disabled sandbox) and everything `error` shows.
 - `error` -- failed and abandoned runs, held dispatch, and nothing else.
 
-`debug` adds the supervisor's working-out, most usefully the sandbox probe's: which rung the boot check settled on, or what each mechanism reported where none could be built (see [run confinement](#run-confinement)). The environment variable is the only level knob -- there is no configuration-file setting -- so quieting or opening up a live container is an environment change, never a redeploy.
+`debug` adds the supervisor's working-out -- tick planning, skipped routines, and trigger and knowledge details too noisy for normal operation. Sandbox probe results stay at `info` because they describe the boundary actually in force. The environment variable is the only level knob -- there is no configuration-file setting -- so quieting or opening up a live container is an environment change, never a redeploy.
 
 ## Session history
 
