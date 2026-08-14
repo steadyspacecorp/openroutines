@@ -21,7 +21,7 @@ Plenty of tools will run a prompt on a schedule. OpenRoutines helps you run auto
 
 ### 📦 The repo is the agent
 
-Everything your agent is -- routines, skills, knowledge, encrypted credentials -- lives in one git repository that deploys as one Docker container. Routines are markdown files: frontmatter declares the scope, the body is the prompt. It runs anywhere a container runs -- a VPS, Fly, Render, your homelab -- with no database, queue, or secrets platform behind it, on any model provider opencode supports. Simple, easy to reason about, shipped like the rest of your software.
+Everything your agent is -- routines, skills, knowledge, encrypted credentials -- lives in one git repository that deploys as one Docker container. Routines are markdown files: frontmatter declares the scope, the body is the prompt. It runs anywhere a container runs -- a VPS, Fly, Render, your homelab -- with no database, queue, or secrets platform behind it, on any model provider opencode supports. Every run is [confined in a sandbox](docs/operating.md#run-confinement) with nothing to pass and nothing to configure. Simple, easy to reason about, shipped like the rest of your software.
 
 ### 🤝 A teammate, not a black box
 

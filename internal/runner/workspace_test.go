@@ -72,11 +72,11 @@ func TestWebAccessOptIn(t *testing.T) {
 	}
 }
 
-// The workspace is built by allow-list: exactly openroutines.yml, opencode.json,
-// and routines/ travel in. This is the audit's headline test -- no
-// secret-shaped file (the encrypted store, keys) and no dev-session rules
-// file (AGENTS.md/CLAUDE.md, which opencode would load into run context)
-// may ever reach a run.
+// The workspace is built by allow-list: exactly openroutines.yml,
+// opencode.json, and routines/ travel in. This is the audit's headline test --
+// no secret-shaped file (the encrypted store, keys) and no dev-session rules
+// file (AGENTS.md/CLAUDE.md, which opencode would load into run context) may
+// ever reach a run.
 func TestBuildWorkspaceAllowList(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{

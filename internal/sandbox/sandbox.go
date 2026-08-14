@@ -1,103 +1,293 @@
-// Confines model processes to declared filesystem paths
-// with Landlock on Linux; other platforms report ErrUnsupported.
+// Package sandbox confines a model process to the strongest boundary this host
+// permits: a ladder of backends, probed strongest-first at boot, settling on
+// the first that can really build a sandbox here.
+//
+// Bubblewrap is preferred -- a private mount, pid, ipc, uts and user namespace
+// per attempt -- but needs a host permissive enough to create unprivileged user
+// namespaces (docs/operating.md, "Run confinement"). A Landlock domain is the
+// fallback: it denies paths rather than building namespaces, asks the host for
+// nothing, and keeps the property that makes falling back safe -- every route
+// to a peer's secrets runs through the kernel's ptrace check. It gives up the
+// rest, so code that depends on a property asks by name (Capabilities).
+//
+// Neither gives an attempt a network namespace, and a run keeps the
+// supervisor's uid: absence from the sandbox, never a file's mode, is what
+// protects the supervisor's secrets.
 package sandbox
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 )
 
-// Reports that Landlock does not exist on this platform.
-// Local runs are confined by the run container instead; native mode off
-// Linux is an explicit development opt-in.
-var ErrUnsupported = errors.New("landlock is unavailable on this platform")
+// ErrUnavailable reports that no rung could confine a run here. Production
+// fails closed on it: an unconfined run reaches every peer's credentials and
+// the supervisor's own keys.
+var ErrUnavailable = errors.New("no run sandbox is available here")
 
-// The first identity in the reserved production attempt
-// pool. The supervisor's run slots use AttemptUIDBase through
-// AttemptUIDBase+concurrency-1; the identity one past the concurrency
-// ceiling is reserved for manual runs (`routines run` inside the container),
-// so a manual attempt can never collide with a supervisor slot. The template
-// Dockerfile pre-creates all of them and puts the agent user in each
-// identity's group.
-const AttemptUIDBase = 20000
+// EnvDisable is the escape hatch for a host that can build no rung at all.
+// Deliberately a deployment decision and never a routine's.
+const EnvDisable = "OPENROUTINES_DISABLE_SANDBOX"
 
-// Makes this process a member of every attempt group,
-// joining the missing ones with the binary's cap_setgid. The image grants the membership via
-// useradd -G, but whether it reaches the process depends on the init that
-// booted the container: some call initgroups, others set only uid and gid
-// and clear the supplementary groups. So membership is asserted here, not
-// assumed from /etc/group.
-func EnsureAttemptGroups(identities int) error {
-	current, err := os.Getgroups()
-	if err != nil {
-		return fmt.Errorf("attempt group check: %w", err)
+// ErrDisabled reports that the hatch is open -- a choice already made, which
+// callers must tell apart from "no rung worked".
+var ErrDisabled = errors.New("the run sandbox is disabled by " + EnvDisable + "=1")
+
+// Disabled reports whether the hatch is open. Read per call rather than settled
+// once: it answers about intent rather than about the host.
+func Disabled() bool { return os.Getenv(EnvDisable) == "1" }
+
+// Capabilities is what a backend's confinement actually provides. The zero
+// value claims nothing, so a caller with no active backend takes the safe
+// branch.
+type Capabilities struct {
+	// UnnameablePaths: an ungranted path is absent rather than denied --
+	// nothing to race, guess, or chmod into reach. Landlock cannot give it.
+	UnnameablePaths bool
+	// PrivateProcessList: a peer attempt is invisible. Without it, peers are
+	// listed and their command lines readable.
+	PrivateProcessList bool
+	// UnsignalablePeers: an attempt cannot signal a process outside its own
+	// confinement. Lacking it is a denial of service between routines, never a
+	// disclosure -- a peer's secrets stay behind the ptrace check every rung
+	// keeps.
+	UnsignalablePeers bool
+	// PrivateIPC: its own System V IPC and POSIX message queue namespace.
+	PrivateIPC bool
+	// PrivateTmp: /tmp and /dev/shm are this attempt's alone.
+	PrivateTmp bool
+	// CollapsesTree: killing the leader kills every descendant, including one
+	// that escaped into its own session. Without it the runner sweeps the
+	// process group itself.
+	CollapsesTree bool
+}
+
+// A Backend is one rung of the ladder: a way to build one run's sandbox,
+// together with an honest account of what that sandbox is worth.
+type Backend interface {
+	Name() string
+	Capabilities() Capabilities
+	Command(workspace string, argv ...string) (*exec.Cmd, error)
+}
+
+// The rungs, strongest first. Probing decides between them because the answer
+// depends on masked paths, the seccomp profile, AppArmor policy and the kernel
+// at once.
+func candidates() []Backend {
+	return []Backend{
+		bubblewrap{proc: privateProc},
+		bubblewrap{proc: privateProc, outerUserNamespace: true},
+		bubblewrap{proc: sharedProc},
+		landlockDomain{},
 	}
-	var missing []int
-	for i := range identities {
-		if gid := AttemptUIDBase + i; !slices.Contains(current, gid) {
-			missing = append(missing, gid)
+}
+
+// Reports the rung in force, or why there is none. The hatch is answered
+// outside the probe so every answer stays consistent with it: with the sandbox
+// off, Provides claims nothing and Command refuses rather than handing back a
+// rung that was never applied.
+func settle() (Backend, error) {
+	if Disabled() {
+		return nil, ErrDisabled
+	}
+	return probeLadder()
+}
+
+// Picks the strongest rung that can really build a sandbox here, once per
+// process. Every failure is kept in the error: "no sandbox" alone gives whoever
+// is debugging the host nothing to act on.
+var probeLadder = sync.OnceValues(func() (Backend, error) {
+	return probeCandidates(candidates(), probe)
+})
+
+func probeCandidates(backends []Backend, runProbe func(Backend) error) (Backend, error) {
+	rejected := []error{ErrUnavailable}
+	results := make([]slog.Attr, 0, len(backends))
+	for _, b := range backends {
+		err := runProbe(b)
+		if err == nil {
+			results = append(results, slog.Bool(b.Name(), true))
+			logProbeResults(results, b)
+			return b, nil
+		}
+		results = append(results, slog.Bool(b.Name(), false))
+		rejected = append(rejected, fmt.Errorf("%s: %w", b.Name(), err))
+	}
+	logProbeResults(results, nil)
+	return nil, errors.Join(rejected...)
+}
+
+func logProbeResults(results []slog.Attr, selected Backend) {
+	args := []any{slog.GroupAttrs("probes", results...)}
+	if selected == nil {
+		args = append(args, "selected", "none")
+	} else {
+		args = append(args, "selected", selected.Name())
+	}
+	slog.Info("run sandbox probes complete", args...)
+}
+
+// Verify reports which rung confines runs here, building a throwaway sandbox
+// exactly as attempts will so the fail-closed policy fires at boot rather than
+// mid-run.
+func Verify() (Backend, error) { return settle() }
+
+// Provides reports what the active rung's confinement is worth, and the zero
+// value when there is none -- so keying behavior on a property gets the
+// conservative branch rather than an assumption about a sandbox that is absent.
+func Provides() Capabilities {
+	if b, _ := settle(); b != nil {
+		return b.Capabilities()
+	}
+	return Capabilities{}
+}
+
+// Command wraps argv and its workspace in the active sandbox rung.
+func Command(workspace string, argv ...string) (*exec.Cmd, error) {
+	b, err := settle()
+	if err != nil {
+		return nil, err
+	}
+	return b.Command(workspace, argv...)
+}
+
+// The operating system an attempt gets: one shared policy each backend
+// expresses in its own vocabulary, which is what keeps Exposes correct on every
+// rung. A path that does not exist is skipped rather than failing the sandbox.
+var readOnlyOS = []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt"}
+
+// The part of /etc an attempt gets, named entry by entry rather than granted
+// whole: /etc is where container platforms deliver mounted secrets, and a run
+// shares the supervisor's uid, so a granted 0600 key file is a readable one.
+var osConfig = []string{
+	"/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
+	// Trust roots only, not `/etc/ssl` whole: Debian keeps `/etc/ssl/private`
+	// there.
+	"/etc/ssl/certs", "/etc/ssl/openssl.cnf", "/etc/ca-certificates.conf",
+	"/etc/resolv.conf", "/etc/hosts", "/etc/host.conf", "/etc/nsswitch.conf", "/etc/gai.conf",
+	// Not in the shipped image, bound if a base image has them: libc resolves
+	// a named service like "https" through /etc/services.
+	"/etc/services", "/etc/protocols",
+	"/etc/passwd", "/etc/group",
+	"/etc/gitconfig",
+	"/etc/localtime", "/etc/timezone",
+	"/etc/alternatives", "/etc/os-release",
+}
+
+// Exposes reports whether a host path would be readable from inside a sandbox
+// -- a property of the two lists above rather than of the file's mode, which is
+// why the supervisor asks it of its own key files at boot. The answer is the
+// same on every rung: a weaker one reads no more of the host, it just protects
+// the rest by denial rather than by absence.
+func Exposes(path string) bool {
+	target := resolve(path)
+	for _, root := range slices.Concat(readOnlyOS, osConfig) {
+		if within(target, resolve(root)) {
+			return true
 		}
 	}
-	// Called even when nothing is missing: setgroups requires cap_setgid no
-	// matter what it sets, so this doubles as the boot-time proof that the
-	// binary can perform the credential transitions every attempt depends on.
-	if err := syscall.Setgroups(append(current, missing...)); err != nil {
-		return fmt.Errorf("joining the attempt groups: %w -- the binary needs cap_setgid; rebuild the deploy image from the current template Dockerfile", err)
+	return false
+}
+
+// Puts a path in the form the kernel will bind: absolute, every symlink
+// followed. Both sides need it -- a key reached through a symlink into a bound
+// tree is exposed, and a bound entry that is itself a symlink exposes its
+// target. EvalSymlinks refuses a leaf that does not exist, the common case here
+// (an unmounted key file), so resolve the deepest ancestor that does exist and
+// re-attach the rest.
+func resolve(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	path = filepath.Clean(path)
+	for rest := ""; ; {
+		if target, err := filepath.EvalSymlinks(path); err == nil {
+			return filepath.Join(target, rest)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return filepath.Join(path, rest)
+		}
+		rest, path = filepath.Join(filepath.Base(path), rest), parent
+	}
+}
+
+// Reports whether path is root or lies beneath it, lexically. Callers resolve
+// first: comparing unresolved paths answers a question about names rather than
+// about what the kernel will open.
+func within(path, root string) bool {
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+// Absolute is required rather than inferred because this process and the
+// sandbox helper resolve a relative workspace against different directories.
+func validateWorkspace(workspace string) error {
+	if !filepath.IsAbs(workspace) {
+		return fmt.Errorf("attempt workspace must be absolute: %s", workspace)
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		return fmt.Errorf("attempt workspace %s: %w", workspace, err)
 	}
 	return nil
 }
 
-// The capless production re-exec target. The supervisor binary is
-// executable only by the agent identity because it carries UID-switching
-// capabilities; attempts may execute this copy, but it carries no capability
-// with which to change identity.
-const HelperPath = "/usr/local/lib/openroutines/sandbox-exec"
+// Building a local namespace normally takes milliseconds. Ten seconds leaves
+// room for an oversubscribed host without letting a stuck helper hold boot.
+const probeTimeout = 10 * time.Second
 
-// Deliberately disables the fail-closed sandbox policy.
-// The name is ugly on purpose.
-const EnvUnsafeOverride = "OPENROUTINES_UNSAFE_NO_SANDBOX"
+// Builds one throwaway sandbox on the given rung. The helpers explain their own
+// failures well, so their output is the error.
+func probe(b Backend) error { return probeWithin(b, probeTimeout) }
 
-// Env vars carrying rule paths from the runner to sandbox-exec
-// (os.PathListSeparator-joined).
-const (
-	EnvRO         = "OPENROUTINES_SANDBOX_RO"
-	EnvRW         = "OPENROUTINES_SANDBOX_RW"
-	EnvAttemptUID = "OPENROUTINES_ATTEMPT_UID"
-)
-
-// Computes the rule sets for one attempt: read on the workspace, the OS,
-// and the opencode installation; read-write on the staged knowledge the
-// runner names, the run tmp, and the attempt's disposable HOME.
-//
-// Landlock rules are additive, so /tmp is deliberately absent -- the
-// workspace lives inside it, and a blanket grant would make the whole
-// workspace writable. The real HOME's dotdirs, the repo, and the
-// supervisor's ~/.ssh are excluded for the same reason.
-//
-// /proc stays readable (needed for /dev/fd and cgroup access); the
-// supervisor protects its own secrets separately via ProtectProcess and
-// constructed, secret-free child environments, since Landlock can't cover
-// ptrace-style procfs access.
-func Paths(workspace, knowledgeDir, runTmp, home, attemptHome string) (ro, rw []string) {
-	ro = []string{
-		workspace,
-		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/etc", "/proc",
-		filepath.Join(home, ".opencode"), // opencode's per-user install (native mode; absent in the container)
+func probeWithin(b Backend, timeout time.Duration) error {
+	dir, err := os.MkdirTemp("", "openroutines-sandbox-probe-*")
+	if err != nil {
+		return err
 	}
-	rw = []string{
-		knowledgeDir,
-		runTmp,
-		attemptHome,
-		"/dev",
+	defer func() { _ = os.RemoveAll(dir) }()
+	scratch := filepath.Join(dir, "probe")
+	cmd, err := b.Command(dir, "sh", "-c", `echo writable > "$1"`, "sh", scratch)
+	if err != nil {
+		return err
 	}
-	return ro, rw
-}
-
-func JoinPaths(paths []string) string {
-	return strings.Join(paths, string(os.PathListSeparator))
+	cmd.Env = []string{}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	cmd.WaitDelay = time.Second
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err = <-done:
+	case <-timer.C:
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		return fmt.Errorf("timed out after %s", timeout)
+	}
+	if err == nil {
+		return nil
+	}
+	if out.Len() == 0 {
+		return err
+	}
+	return errors.New(strings.TrimSpace(out.String()))
 }

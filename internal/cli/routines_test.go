@@ -1,14 +1,45 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
 func TestRoutinesTestCommandIsRemoved(t *testing.T) {
 	if got := cmdRoutines([]string{"test", "digest"}); got != 2 {
 		t.Fatalf("exit code = %d, want 2 for an unknown command", got)
+	}
+}
+
+// A manual run in the production container spawns the same sandboxed model
+// process a supervised one does, so a key layout boot would refuse has to be
+// refused here too.
+func TestManualRunRefusesAKeyFileTheSandboxWouldGrant(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(creds.EnvMasterKeyFile, "/usr/local/etc/master.key")
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = w
+	code := cmdRoutines([]string{"run", "digest"})
+	os.Stderr = stderr
+	w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code == 0 {
+		t.Fatal("a master key inside the granted read-only OS was accepted")
+	}
+	if !strings.Contains(string(out), creds.EnvMasterKeyFile) {
+		t.Fatalf("the refusal should be the key preflight, not a later failure: %s", out)
 	}
 }
 

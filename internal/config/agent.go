@@ -122,9 +122,9 @@ func (a *Agent) RunSlots() int {
 	return 1
 }
 
-// Bounds the reserved production UID pool. Each concurrent
-// attempt needs a distinct identity; a finite ceiling keeps that security
-// boundary explicit in the image and configuration.
+// Ceiling on run slots. Nothing structural requires one -- each attempt
+// builds its own sandbox -- but dozens of model processes in one container
+// is a configuration mistake worth catching at load.
 const MaxConcurrency = 32
 
 func (a *Agent) Retention() string {

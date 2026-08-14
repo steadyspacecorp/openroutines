@@ -1,6 +1,6 @@
 # Operating in production
 
-An ORA deploys as a plain Docker container. Anything that runs a container runs your agent -- a VPS, Fly, Render, Kamal, your homelab. There is nothing else to provision: no database, no queue, no secrets platform.
+An ORA deploys as a plain Docker container -- a VPS, Fly, Render, Kamal, your homelab -- with nothing else to provision: no database, no queue, no secrets platform. Every run is confined in a sandbox, and the supervisor builds the strongest one your host permits, working that out by probing at boot rather than making you configure it. A platform that only takes a Dockerfile needs nothing from you; a platform that lets you pass runtime flags can give runs a stronger boundary in exchange for weakening the container's own. See [run confinement](#run-confinement) below.
 
 The one prerequisite is a git origin the agent can push to -- GitHub, GitLab, Gitea, even a bare repo on a VPS -- since that's where knowledge durably lives. (Local development needs no origin, and `openroutines check` verifies one before you deploy.)
 
@@ -33,12 +33,64 @@ docker run -d --name my-agent --restart unless-stopped --stop-timeout 30 \
   my-agent
 ```
 
+### Run confinement
+
+Each run executes inside its own sandbox, which is what keeps two concurrently running routines from reading each other's credentials -- and keeps both away from your master key and deploy key. Your routines are code you wrote and reviewed, so this is not about defending against them; it is about bounding what one costs you when it gets prompt-injected by something it fetched, or simply goes wrong.
+
+There are two mechanisms, and the supervisor takes the strongest one your host permits rather than making you choose. There is nothing to configure and nothing to decide: it logs which one it took at boot and gets on with it. It **refuses to start** only if it can build no sandbox at all, rather than running your routines unconfined without telling you.
+
+**What you get by default asks for nothing.** Before the supervisor execs a model process it puts that process in a [Landlock](https://docs.kernel.org/userspace-api/landlock.html) domain granting the read-only OS, the run's own writable disposable workspace, and nothing else -- no runtime flag, no capability, no privilege, so there is nothing to configure unless you want the stronger mechanism. That is what lets an agent deploy unmodified to a platform whose whole interface is a repository with a Dockerfile. Its one requirement is Landlock in the kernel: Linux 5.13 or newer, compiled in, which current distribution kernels have. What Landlock can deny has grown by kernel version -- the boot log names the ABI it negotiated, and [SECURITY.md](../SECURITY.md#the-confinement-rungs) records what older ABIs cannot restrict.
+
+Bubblewrap is the stronger mechanism, and it does cost something: it needs unprivileged user namespaces, which three separate things can deny. All three are host or runtime configuration rather than anything about your agent.
+
+| What denies it | How you grant it | Where it applies |
+|---|---|---|
+| The runtime's default **seccomp** profile refuses the namespace-creating syscalls | `--security-opt seccomp=unconfined` | always, on Docker and Podman |
+| The runtime's default **AppArmor** profile contains a bare `deny mount,`, which stops the sandbox's first mount | `--security-opt apparmor=unconfined` | wherever AppArmor is loaded -- Ubuntu, and Debian since 10 |
+| The **host** restricts unprivileged user namespaces through AppArmor, so creating one costs `CAP_SYS_ADMIN` | `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` **on the host**, or an AppArmor profile granting `userns` for `/usr/bin/bwrap` | Ubuntu 24.04 and later, where it is the default |
+
+The third one surprises people, so state it plainly: **no `docker run` flag lifts it.** The restriction applies to the container's processes too, so both `unconfined` flags succeed and the sandbox still fails. On such a host that sysctl is the setting to change -- and if you would rather not, nothing above touches the Landlock rung, which creates no namespace to be restricted. A host that boots the image in a microVM has neither profile nor sysctl in the way, and reaches the strongest configuration with nothing passed at all.
+
+The two are not equivalent. What Landlock gives up:
+
+| | bubblewrap | Landlock |
+|---|---|---|
+| A run can read a peer run's or the supervisor's credentials, memory, or files | no | no |
+| A run can signal or ptrace a peer or the supervisor | no | ptrace no; signals no from Linux 6.12, **yes** below it |
+| An ungranted path is *absent* rather than permission-denied | yes | **no** |
+| A run can see that a peer exists, and read its command line | no (unless `/proc` stays masked, below) | **yes** |
+| `/tmp` and `/dev/shm` are the run's own | yes | **no** -- withheld rather than shared |
+| Killing a run collapses its whole process tree | yes | **no** |
+| Needs a permissive container runtime | yes | no |
+
+The first line is the one that matters most, and it is the one that does not differ. [SECURITY.md](../SECURITY.md#the-confinement-rungs) has the rest of the detail, including what the lost process-tree collapse costs.
+
+To take the stronger one, add what your platform allows:
+
+```bash
+docker run ... \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=unconfined \
+  --security-opt systempaths=unconfined \
+  my-agent
+```
+
+Of those three, `systempaths=unconfined` is the only optional one: without it the kernel refuses the sandbox a `/proc` of its own, so a run can see that a peer exists and read its command line. That is a metadata leak between routines and not a credential leak -- reading another run's environment fails across a user-namespace boundary even at the same uid. The supervisor works this out by itself. Take the upgrade if your platform offers it; do not block a deployment on it.
+
+If neither mechanism works on your host -- an old or unusual kernel with no Landlock, on a runtime that also denies user namespaces -- the supervisor will not start, and its boot log records what every mechanism reported. Fix the host if you can. If you cannot, and you would rather run your agent unconfined than not at all, that is your call to make:
+
+```bash
+docker run -e OPENROUTINES_DISABLE_SANDBOX=1 ... my-agent
+```
+
+What it costs: runs then share a user and a filesystem with each other and with the supervisor, so one routine can read another's credentials, your key files, and the agent repository. The supervisor notes the setting once at boot. Unsetting it puts the sandbox back.
+
 The image contains the pinned `openroutines` binary, opencode, git, `gh` (can authenticate via `GH_TOKEN`/`GITHUB_TOKEN`; the typed `github_app` credential injects `GH_TOKEN`), `jq`, and your repo's `main` branch. The entrypoint is the supervisor: every minute it re-reads your routines' frontmatter -- from the copy of the repo baked into the image -- and runs whatever is due. Two secrets arrive at boot, and neither is ever in the image:
 
 - **The master key** (a copy of `master.key`) decrypts the credentials file. Routines receive only the credentials their frontmatter declares.
 - **The deploy key** lets the agent push its knowledge. On boot the supervisor fetches the `knowledge` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
 
-Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEPLOY_KEY_FILE` at the paths, as above -- file delivery keeps key material out of the process environment. On platforms where mounting a file is awkward, the values can arrive directly in `OPENROUTINES_MASTER_KEY` / `OPENROUTINES_DEPLOY_KEY` instead, but environment delivery has a weaker process-exposure posture and is not the recommended production configuration. When the master key value is in its environment the supervisor logs a warning once at boot, so a deployment that chose env delivery years ago is told rather than left to remember -- if you see it after moving to file delivery, the old `OPENROUTINES_MASTER_KEY` is still set and should be unset.
+Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEPLOY_KEY_FILE` at the paths, as above -- file delivery keeps key material out of the process environment. Mount them somewhere like `/run/secrets`, outside the OS paths every run's sandbox grants: a run holds the supervisor's own user, so a key file inside one of those is readable by your routines whatever its permissions are. The sandbox grants `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, and a named list of `/etc` entries -- not `/etc` as a whole, precisely because that is where several platforms mount secret files, so a platform default like `/etc/secrets` is fine. You do not have to work this out: the supervisor resolves both paths at boot and refuses to start rather than run with a readable key, naming the variable to fix. On platforms where mounting a file is awkward, the values can arrive directly in `OPENROUTINES_MASTER_KEY` / `OPENROUTINES_DEPLOY_KEY` instead, but environment delivery has a weaker process-exposure posture and is not the recommended production configuration. When a key value is in its environment the supervisor logs a warning once at boot -- if you see it after moving to file delivery, the old variable is still set and should be unset.
 
 ## Operational properties
 
@@ -69,10 +121,10 @@ A failed attempt still emits opencode's diagnostics under the run's identity, pl
 Set `OPENROUTINES_LOG_LEVEL` to change how much of the log survives -- unset means `info` in the deployed container and `warn` for local commands, where the run output streaming to your terminal is the point. The log lands on stderr, so a manual run's output on stdout pipes and redirects clean of diagnostics (`2>run.log` splits them):
 
 - `info` -- the container default: lifecycle records (attempt starting, run completed, registered) and everything below.
-- `warn` -- the local default: degraded-but-running conditions (unreachable origin, a routine that stopped loading, sandbox warnings) and everything `error` shows.
+- `warn` -- the local default: degraded-but-running conditions (unreachable origin, a routine that stopped loading, a disabled sandbox) and everything `error` shows.
 - `error` -- failed and abandoned runs, held dispatch, and nothing else.
 
-`debug` is accepted for the standard ladder's sake and currently adds nothing beyond `info`. The environment variable is the only level knob -- there is no configuration-file setting -- so quieting or opening up a live container is an environment change, never a redeploy.
+`debug` adds the supervisor's working-out -- tick planning, skipped routines, and trigger and knowledge details too noisy for normal operation. Sandbox probe results stay at `info` because they describe the boundary actually in force. The environment variable is the only level knob -- there is no configuration-file setting -- so quieting or opening up a live container is an environment change, never a redeploy.
 
 ## Session history
 

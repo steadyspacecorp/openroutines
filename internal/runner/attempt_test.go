@@ -2,16 +2,44 @@ package runner
 
 import (
 	"errors"
-	"github.com/steadyspacecorp/openroutines/internal/config"
-	"github.com/steadyspacecorp/openroutines/internal/routine"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
 func TestCleanupReportsWorkspaceRemovalFailure(t *testing.T) {
 	staging := &AttemptWorkspace{root: "\x00"}
 	if err := staging.Cleanup(); !errors.Is(err, ErrAttemptCleanup) {
 		t.Fatalf("cleanup error = %v, want ErrAttemptCleanup", err)
+	}
+}
+
+func TestCleanupRemovesWorkspaceWhoseModesTheRunChanged(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	inner := filepath.Join(workspace, "first", "second")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inner, "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(inner, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(inner), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	staging := &AttemptWorkspace{root: workspace}
+	if err := staging.Cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("workspace still exists after cleanup: %v", err)
 	}
 }
 

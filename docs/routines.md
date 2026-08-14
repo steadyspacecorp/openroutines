@@ -48,7 +48,7 @@ When a routine's file does not load -- a frontmatter typo, a missing closing `--
 
 Fire times are the agent's wall clock. A `schedule` is evaluated in the `timezone:` set in `openroutines.yml`, so `0 6 * * *` means 06:00 there on both sides of a daylight-saving transition, whatever zone the container's clock is set to -- and the supervisor, the `schedule.md` a run reads, and `openroutines status` all compute it the same way.
 
-Every run also receives the schedule as data: a read-only `./schedule.md` in the workspace listing each active routine's next fires, computed by the scheduler's own parser. When the running routine is itself scheduled, the file fixes its **window** -- now through its next fire-day's first fire -- and splits the other routines in-window (they fire before this routine runs again) and out. Routine prompts should read the file, never re-derive fire times from cron frontmatter: forecasting ("release notes run tonight") becomes transcription, which models get right.
+Every run also receives the schedule as generated data: `./schedule.md` in the disposable workspace lists each active routine's next fires, computed by the scheduler's own parser. When the running routine is itself scheduled, the file fixes its **window** -- now through its next fire-day's first fire -- and splits the other routines in-window (they fire before this routine runs again) and out. Routine prompts should read the file, never re-derive fire times from cron frontmatter: forecasting ("release notes run tonight") becomes transcription, which models get right.
 
 ## Triggers
 

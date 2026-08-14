@@ -21,7 +21,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/logging"
-	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
@@ -64,9 +63,6 @@ const attemptHomeName = ".home"
 // resolution can spend seconds on the network. On error, everything Stage
 // acquired is already released.
 func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt, knowledgeLock sync.Locker) (prepared *PreparedAttempt, err error) {
-	if mode.Current() == mode.DeployedContainer && attempt.AttemptUID == 0 {
-		return nil, fmt.Errorf("%w: production runs require a reserved attempt uid", ErrFatal)
-	}
 	model, err := EffectiveModel(agent, r)
 	if err != nil {
 		return nil, err
@@ -173,15 +169,8 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt,
 		return nil, err
 	}
 	attemptHome := filepath.Join(workspaceRoot, attemptHomeName)
-	if attempt.AttemptUID != 0 && mode.Current() == mode.DeployedContainer {
-		// An attempt identity's gid equals its uid (template Dockerfile).
-		if err := prepareWorkspaceAccess(attempt.AttemptUID, workspaceRoot); err != nil {
-			return nil, fmt.Errorf("preparing read-only attempt workspace: %w", err)
-		}
-		if err := prepareAttemptTrees(attempt.AttemptUID, workspace.KnowledgeDir, tempDir, attemptHome); err != nil {
-			return nil, fmt.Errorf("preparing attempt uid %d trees: %w", attempt.AttemptUID, err)
-		}
-		workspace.attemptUID = attempt.AttemptUID
+	if err := os.MkdirAll(attemptHome, 0o755); err != nil {
+		return nil, err
 	}
 
 	env := attemptEnv(agent, r, attempt, secrets)
@@ -275,7 +264,10 @@ func (p *PreparedAttempt) Run(ctx context.Context) (result *AttemptResult, retur
 	if err != nil {
 		return nil, nil, err
 	}
-	cmd := runtime.run(opencodeArgs)
+	cmd, err := runtime.run(opencodeArgs)
+	if err != nil {
+		return nil, nil, err
+	}
 	// stderr carries opencode's diagnostic log, passed through scrubbed with
 	// the attempt's identity appended -- a failed attempt is never
 	// invisible. It also carries rendered run progress unless JSON events

@@ -236,14 +236,13 @@ fi
 grep -q 'Dockerfile version pin does not match' "$work/out" || die "check did not explain the Dockerfile/pin mismatch"
 step "check rejects framework-version drift"
 
-# Per-attempt uid isolation must work inside the production container with
-# only the capabilities the template grants: every production gate in the
-# runner is keyed on OPENROUTINES_IN_CONTAINER=1, which the host test suite
-# never sets, so this is the one place the real staging path runs. The
-# supervisor exercises its actual reserved identity; a manual run then
-# executes beside the still-live supervisor on the manual identity,
-# coordinated through the cross-process knowledge lock. Requires Docker
-# (present in CI); skipped only when the binary is missing entirely.
+# Run isolation must work inside the production container: every production
+# gate in the runner is keyed on OPENROUTINES_IN_CONTAINER=1, which the host
+# test suite never sets, so this is the one place the real staging path runs.
+# The supervisor sandboxes its dispatched run; a manual run then executes
+# beside the still-live supervisor, coordinated through the cross-process
+# knowledge lock. Requires Docker (present in CI); skipped only when the
+# binary is missing entirely.
 if command -v docker >/dev/null 2>&1; then
   ctx="$work/isolation"
   mkdir -p "$ctx"
@@ -257,7 +256,7 @@ if command -v docker >/dev/null 2>&1; then
 schedule: "0 9 * * *"
 model: fake/model
 ---
-Record the attempt identity.
+Record what the sandbox lets this run reach.
 EOF
   # The manual probe is a distinct routine: the settlement commit becomes
   # visible while the supervised run still holds its routine flock through
@@ -271,7 +270,7 @@ schedule: "0 9 * * *"
 active: false
 model: fake/model
 ---
-Record the manual attempt identity.
+Record what the sandbox lets this manual run reach.
 EOF
   mkdir -p knowledge/state
   cat > knowledge/state/isolation.json <<'EOF'
@@ -280,22 +279,24 @@ EOF
   git -C knowledge add state/isolation.json
   git -C knowledge -c user.name=CI -c user.email=ci@example.invalid commit --quiet -m 'Seed isolation smoke run'
   git worktree remove knowledge
-  grep -q 'seq 0 32' Dockerfile || die "template Dockerfile does not create the attempt identity pool and manual identity"
-  grep -q -- '-G "${groups#,}" agent' Dockerfile || die "template Dockerfile does not put agent in the attempt groups"
-  caps="$(sed -n 's/.*setcap \(cap_[a-z_,]*\)=ep.*/\1/p' Dockerfile)"
-  [[ -n "$caps" ]] || die "no setcap line in the template Dockerfile"
+  # bubblewrap is the only sandbox that is a package; the fallback needs
+  # nothing installed, which is exactly why it is the fallback.
+  grep -q 'bubblewrap' Dockerfile || die "template Dockerfile does not install the preferred run sandbox"
   cp "$repo/testdata/isolation/Dockerfile" "$ctx/Dockerfile"
   cp "$repo/testdata/isolation/opencode" "$ctx/opencode"
   arch="$(docker version --format '{{.Server.Arch}}')"
   (cd "$repo" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$ctx/openroutines" ./cmd/openroutines)
-  docker build --quiet --build-arg "CAPS=$caps" -t openroutines-isolation-smoke "$ctx" >"$work/out" 2>&1 || die "isolation image build"
-  # Boot the way a minimal container init does: uid and gid set, supplementary
-  # groups cleared, /etc/group never consulted. The binary must assert its
-  # attempt-group membership itself (cap_setgid); membership granted by
-  # useradd -G alone only works under inits that call initgroups, which
-  # Docker does and production platforms may not.
-  docker run --rm --user root openroutines-isolation-smoke \
-    setpriv --reuid agent --regid agent --clear-groups sh -c '
+  docker build --quiet -t openroutines-isolation-smoke "$ctx" >"$work/out" 2>&1 || die "isolation image build"
+  # bubblewrap needs unprivileged user namespaces, which a stock container
+  # runtime denies three times over: its default seccomp profile refuses the
+  # namespace-creating syscalls, its default AppArmor profile's bare
+  # `deny mount,` stops the first mount, and its masked /proc paths make a
+  # fresh procfs mount impossible inside one. Only the first two are lifted
+  # below, so this runs on the shared-/proc tier most deployments get rather
+  # than only the best case. A host can deny user namespaces in a fourth way
+  # no --security-opt lifts; CI clears that with a sysctl beforehand. See
+  # docs/operating.md.
+  isolation_script=$(cat <<'SCRIPT'
     set -e
     openroutines supervise > /tmp/supervise.out 2>&1 &
     supervisor=$!
@@ -324,18 +325,77 @@ EOF
     kill -TERM "$supervisor"
     wait "$supervisor"
     cat /tmp/supervise.out
+    if [ -z "${OPENROUTINES_DISABLE_SANDBOX:-}" ] && [ -e /agent/capture-escaped ]; then
+      echo "capture escaped the run sandbox"; exit 1
+    fi
     git -C /agent show knowledge:ledgers/isolation.md
     git -C /agent show knowledge:ledgers/escapee.md >/dev/null
     if ls /tmp | grep -q openroutines-; then echo "run workspace not cleaned"; exit 1; fi
-    if grep -l "^Uid:.\(20000\|20032\)" /proc/[0-9]*/status 2>/dev/null | grep -q .; then
+    # Only a rung with a pid namespace makes this the kernel's job. Where the
+    # runner sweeps the process group instead, a descendant that called setsid
+    # is outside that group and lingers -- see docs/design.md.
+    if [ "$EXPECT_TREE_COLLAPSE" = 1 ] && pgrep -x sleep >/dev/null 2>&1; then
       echo "escaped descendant outlived the run"; exit 1
     fi
-  ' >"$work/out" 2>&1 || die "in-container isolation run"
-  grep -q 'uid=20000 gid=20000' "$work/out" || die "model process did not run as the supervised attempt identity"
-  grep -q 'uid=20032 gid=20032' "$work/out" || die "manual run did not use the manual attempt identity"
-  step "uid isolation works in-container with only the template capabilities"
+SCRIPT
+)
+  # Both rungs, because the whole point is that the fallback runs where
+  # bubblewrap cannot -- and the flags are what select which. The second run
+  # passes no lifting flags at all, which is both the shape a Dockerfile-only
+  # platform gives you and a positive test that the supervisor steps down
+  # rather than refusing to boot. It adds no-new-privileges, which only
+  # restricts: Render forces it on every process, and under it exec of a
+  # binary carrying file capabilities fails outright -- this guards against
+  # any privilege dependency creeping back into the image.
+  # Debug level only to read back which mechanism the ladder picked: the
+  # supervisor does not announce it, because no operator chooses it.
+  docker run --rm \
+    -e EXPECT_TREE_COLLAPSE=1 \
+    -e OPENROUTINES_LOG_LEVEL=debug \
+    --security-opt seccomp=unconfined \
+    --security-opt apparmor=unconfined \
+    openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
+    || die "in-container isolation run (bubblewrap rung)"
+  grep -q 'visible-commands=' "$work/out" || die "the run recorded no process list"
+  grep -q 'supervisor-environ=Permission denied' "$work/out" || die "a run could read the supervisor's environment -- the master key delivery is exposed"
+  # /proc stays masked here, so the supervisor must detect that by itself and
+  # say which rung it took rather than failing or overclaiming.
+  grep -q 'selected="bubblewrap namespaces, shared /proc"' "$work/out" || die "the supervisor did not announce the bubblewrap rung it landed on"
+  grep -q 'agent-repo=No such file or directory' "$work/out" || die "the run could reach the agent repository from inside its sandbox"
+  grep -q 'workspace-write=x' "$work/out" || die "the run could not write its disposable workspace"
+  step "run isolation works in-container on the bubblewrap rung: private pid, mount, and ipc namespaces"
 
-  # A routine lock file another identity created must not cost the owner that
+  docker run --rm \
+    -e EXPECT_TREE_COLLAPSE=0 \
+    -e OPENROUTINES_LOG_LEVEL=debug \
+    --security-opt no-new-privileges \
+    openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
+    || die "in-container isolation run (landlock rung, no lifting flags)"
+  grep -q 'selected="landlock domain' "$work/out" || die "the supervisor did not step down to the landlock rung where bubblewrap is unavailable"
+  grep -q 'supervisor-environ=Permission denied' "$work/out" || die "a run could read the supervisor's environment on the landlock rung"
+  # Denied rather than absent: Landlock refuses the open, it does not remove
+  # the name. That difference is the rung's headline cost, so assert it.
+  grep -q 'agent-repo=Permission denied' "$work/out" || die "the run could reach the agent repository on the landlock rung"
+  grep -q 'workspace-write=x' "$work/out" || die "the run could not write its disposable workspace on the landlock rung"
+  step "run isolation works in-container with no lifting flags, under no-new-privileges"
+
+  # The escape hatch, for a host where no rung works: the agent must still run,
+  # and must say so once. An empty probe value is a read that succeeded, which
+  # is what proves this run really was unconfined rather than quietly
+  # sandboxed anyway.
+  docker run --rm \
+    -e EXPECT_TREE_COLLAPSE=0 \
+    -e OPENROUTINES_DISABLE_SANDBOX=1 \
+    openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
+    || die "in-container run with the sandbox disabled"
+  grep -q 'run sandbox disabled' "$work/out" || die "the supervisor ran unconfined without noting it at boot"
+  grep -q 'agent-repo=$' "$work/out" || die "the sandbox was still in force with OPENROUTINES_DISABLE_SANDBOX=1"
+  # The supervisor's own protection is not the sandbox's doing, so it must
+  # survive the hatch: non-dumpable plus keys delivered outside the environment.
+  grep -q 'supervisor-environ=Permission denied' "$work/out" || die "an unconfined run could read the supervisor's environment"
+  step "the sandbox escape hatch runs unconfined, noted at boot, with the supervisor still protected"
+
+  # A routine lock file created by another OS user must not cost the owner that
   # routine. Reproduced the way it happened: a manual run made as root over
   # `fly ssh console` takes the routine lock before it touches git, then dies
   # on git refusing a repository it does not own -- leaving a root-owned lock
@@ -357,10 +417,10 @@ EOF
       cat /tmp/owner.out
       exit 1
     fi
-  ' >"$work/out" 2>&1 || die "routine lock left by another identity"
-  step "a routine lock file another identity created still locks"
+  ' >"$work/out" 2>&1 || die "routine lock left by another OS user"
+  step "a routine lock file created by another OS user still locks"
 else
-  step "uid isolation in-container test SKIPPED (docker not installed)"
+  step "run isolation in-container test SKIPPED (docker not installed)"
 fi
 
 echo "smoke: OK"

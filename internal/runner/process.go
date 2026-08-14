@@ -30,11 +30,12 @@ func killClient(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.L
 	}
 }
 
-// The run's process group when it leads one. The guard
-// matters: signaling -pid without Setpgid would reach the supervisor's own
-// group.
+// The run's process group when it leads one. Setsid counts: a session leader
+// leads a fresh process group too, and the sandboxed spawn path uses it. The
+// guard matters because signaling -pid without either would reach the
+// supervisor's own group.
 func signalTarget(cmd *exec.Cmd) int {
-	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
+	if attr := cmd.SysProcAttr; attr != nil && (attr.Setpgid || attr.Setsid) {
 		return -cmd.Process.Pid
 	}
 	return cmd.Process.Pid
