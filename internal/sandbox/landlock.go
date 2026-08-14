@@ -198,7 +198,13 @@ func grant(path string, write bool) (landlock.Rule, bool) {
 	}
 	if info.IsDir() {
 		if write {
-			return landlock.RWDirs(path), true
+			rule := landlock.RWDirs(path)
+			// The pty slave is created beneath this directory, so its ioctl
+			// permission must come from the directory rule rather than a file rule.
+			if path == "/dev/pts" {
+				rule = rule.WithIoctlDev()
+			}
+			return rule, true
 		}
 		return landlock.RODirs(path), true
 	}
