@@ -16,6 +16,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
+	"github.com/steadyspacecorp/openroutines/internal/supervisor"
 )
 
 const knowledgeUsage = `Inspect the latest knowledge on origin without changing local knowledge/
@@ -393,6 +394,9 @@ func knowledgeSummarizeWithReader(snap *knowledge.OriginSnapshot, window time.Du
 		if answer == "n" || answer == "no" {
 			return 0
 		}
+	}
+	if err := supervisor.VerifyKeyDelivery(); err != nil {
+		return fail(err)
 	}
 	through := snap.FetchedAt
 	since := through.Add(-window)
