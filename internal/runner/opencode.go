@@ -331,6 +331,7 @@ func runToFile(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	defer reapGroup(cmd)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	var runErr error

@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func fakeBin(t *testing.T, name, script string) {
@@ -209,6 +212,31 @@ exit 1
 	}
 	if len(err.Error()) > 16<<10 {
 		t.Fatalf("kept stderr must be bounded, got %d bytes", len(err.Error()))
+	}
+}
+
+func TestSuccessfulCaptureReapsItsDescendants(t *testing.T) {
+	pidfile := filepath.Join(t.TempDir(), "pid")
+	fakeBin(t, "opencode", "#!/bin/sh\nsh -c 'trap \"\" HUP; while :; do sleep 30; done' >/dev/null 2>&1 &\necho $! > "+pidfile+"\n")
+	if _, err := (nativeRuntime{workspace: t.TempDir()}).exec("session", "list"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(pidfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	for deadline := time.Now().Add(time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if err := syscall.Kill(pid, 0); err == syscall.ESRCH {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a descendant outlived a successful capture")
+		}
 	}
 }
 
