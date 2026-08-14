@@ -10,7 +10,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
 
-// One due routine and the scheduling state its attempt owns until it settles.
 type dueRun struct {
 	routine *routine.Routine
 	state   *schedule.State
