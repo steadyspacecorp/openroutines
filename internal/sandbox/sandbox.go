@@ -4,11 +4,11 @@
 //
 // Bubblewrap is preferred -- a private mount, pid, ipc, uts and user namespace
 // per attempt -- but needs a host permissive enough to create unprivileged user
-// namespaces (docs/operating.md, "Run confinement"). A Landlock domain is the
-// fallback: it denies paths rather than building namespaces, asks the host for
-// nothing, and keeps the property that makes falling back safe -- every route
-// to a peer's secrets runs through the kernel's ptrace check. It gives up the
-// rest, so code that depends on a property asks by name (Capabilities).
+// namespaces. Landlock is the fallback: it denies paths instead of building
+// namespaces and asks nothing of the host, while keeping the property that
+// makes falling back safe: every route to a peer's secrets runs through the
+// kernel's ptrace check. It gives up the rest, so code that depends on a
+// property asks by name (Capabilities).
 //
 // Neither gives an attempt a network namespace, and a run keeps the
 // supervisor's uid: absence from the sandbox, never a file's mode, is what

@@ -1117,7 +1117,7 @@ func TestUnsettledRunIsNotReportedAsCompleted(t *testing.T) {
 
 // A lease lost between staging and start hands the reserved attempt back:
 // no model process ran, so the budget must not move -- a reservation that
-// never becomes a run is given back (docs/design.md), exactly as the
+// never becomes a run is given back, exactly as the
 // settlement-side twin of this branch already does.
 func TestLeaseLostAfterStagingHandsTheAttemptBack(t *testing.T) {
 	dir := fixture(t, "ok")

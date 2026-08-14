@@ -82,7 +82,7 @@ The security properties above assume that operators:
 - run only one supervisor instance for an agent;
 - keep the host, container runtime, base image, and OpenRoutines release current;
 - review repository changes, skills, credentials, and permission grants as code;
-- grant what at least one confinement rung needs (see [docs/operating.md](docs/operating.md#run-confinement)) -- a supervisor that can build no sandbox at all refuses to start, so this fails closed;
+- grant what at least one confinement rung needs (see [the deployment guide](https://openroutines.dev/docs/deploying/#run-sandbox)) -- a supervisor that can build no sandbox at all refuses to start, so this fails closed;
 - treat `OPENROUTINES_DISABLE_SANDBOX=1` as an escape hatch of last resort. It exists so a host that can build no sandbox is a warning rather than a dead deployment, and it gives up every property in the rung table above: runs then share a user and a filesystem with each other and with the supervisor, so one routine can read another's credentials and the configured key files;
 - do not run a deployed agent with the image's `OPENROUTINES_IN_CONTAINER=1` unset -- that variable is what selects the sandbox, and without it the contributor opt-out `OPENROUTINES_NATIVE=1` spawns model processes with no isolation at all. Inside the image the production setting outranks that opt-out, so a deployed agent cannot be talked out of its sandbox.
 

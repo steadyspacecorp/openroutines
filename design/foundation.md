@@ -19,7 +19,7 @@ It also makes the security model tractable: exactly one runtime means exactly on
 `openroutines scaffold` stamps out a new agent repo from the template embedded in the CLI binary (`template/` in this repo is its source, compiled in via Go's `embed`).
 The reviewed repository is trusted source code: whoever can change its routines, skills, configuration, or image can change the agent's behavior and authority.
 The security boundary isolates model-directed execution and external content from supervisor authority; it does not isolate an agent from its own source code or administrators.
-[SECURITY.md](../../SECURITY.md) defines that threat model precisely.
+[SECURITY.md](../SECURITY.md) defines that threat model precisely.
 
 The framework's configuration file is `openroutines.yml`, named for the system that reads it -- the same rule that keeps `opencode.json` the harness's file -- and spelled `.yml` like `.openroutines/credentials.yml.enc` (#50).
 The earlier spellings `openroutines.yaml` and the original `agent.yaml` are still read, so a pinned agent migrates when its operator chooses; `check` nudges the rename, and `Save` writes back to whichever name the repository actually has.

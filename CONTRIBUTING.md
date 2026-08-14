@@ -1,6 +1,6 @@
 # Contributing
 
-Contributions are welcome, with one ask: read [docs/design.md](docs/design.md) first. This is an opinionated framework, and the opinions are documented -- each decision comes with its reasoning. Bug fixes and small improvements can go straight to a pull request. For anything that touches a documented decision, open an issue and argue with the reasoning, not just the behavior; if the rationale doesn't hold up, we'll change the design.
+Contributions are welcome, with one ask: read [design.md](design.md) first. This is an opinionated framework, and the opinions are documented -- each decision comes with its reasoning. Bug fixes and small improvements can go straight to a pull request. For anything that touches a documented decision, open an issue and argue with the reasoning, not just the behavior; if the rationale doesn't hold up, we'll change the design.
 
 Security reports: see [SECURITY.md](SECURITY.md).
 

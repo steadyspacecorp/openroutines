@@ -40,7 +40,7 @@ func VerifyKeyDelivery() error {
 	confined := !sandbox.Disabled()
 	for _, key := range supervisorKeys {
 		if path := os.Getenv(key.fileEnv); confined && path != "" && sandbox.Exposes(path) {
-			return fmt.Errorf("%s=%s puts the %s inside a path every run's sandbox grants, where a run could read it -- runs share this process's uid, so the file's mode does not stop them. Mount it outside the granted OS paths instead (for example /run/secrets); see docs/operating.md", key.fileEnv, path, key.what)
+			return fmt.Errorf("%s=%s puts the %s inside a path every run's sandbox grants, where a run could read it -- runs share this process's uid, so the file's mode does not stop them. Mount it outside the granted OS paths instead (for example /run/secrets); see https://openroutines.dev/docs/deploying/", key.fileEnv, path, key.what)
 		}
 		if os.Getenv(key.valueEnv) != "" {
 			slog.Warn("the "+key.what+" value is in this process's environment -- readable wherever that environment is; mount the key as a file, point the file variable at the path, and unset the value variable",
@@ -66,7 +66,7 @@ func verifyIsolation() error {
 			slog.Warn("run sandbox disabled -- model processes run unconfined", "disabled_by", sandbox.EnvDisable)
 		case err != nil:
 			slog.Error("no run sandbox could be built here", "detail", err)
-			return fmt.Errorf("runs cannot be isolated on this host -- see docs/operating.md, or set %s=1 to run without a sandbox", sandbox.EnvDisable)
+			return fmt.Errorf("runs cannot be isolated on this host -- see https://openroutines.dev/docs/deploying/, or set %s=1 to run without a sandbox", sandbox.EnvDisable)
 		}
 	case mode.LocalNative:
 		slog.Warn("OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
