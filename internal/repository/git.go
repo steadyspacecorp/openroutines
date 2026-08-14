@@ -75,7 +75,7 @@ func readCredentialConfig() []string {
 // does not survive execve.
 func newGitCmd(dir string, args []string) *gitCmd {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
-	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(originRewrite), append(credentialConfig(), args...)...)...)
+	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(credentialConfig()), args...)...)
 	cmd.Dir = dir
 	cmd.Env = []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
 	for _, name := range gitPassthrough {

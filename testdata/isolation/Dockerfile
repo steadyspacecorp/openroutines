@@ -13,8 +13,9 @@ RUN apt-get update \
     && useradd -m -u 10001 agent
 
 COPY opencode /usr/local/bin/opencode
+COPY ssh /usr/local/bin/ssh
 COPY openroutines /usr/local/bin/openroutines
-RUN chmod 0755 /usr/local/bin/opencode /usr/local/bin/openroutines
+RUN chmod 0755 /usr/local/bin/opencode /usr/local/bin/openroutines /usr/local/bin/ssh
 COPY --chown=agent agent /agent
 ENV OPENROUTINES_IN_CONTAINER=1
 USER agent

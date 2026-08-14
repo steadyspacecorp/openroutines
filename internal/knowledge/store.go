@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/steadyspacecorp/openroutines/internal/repository"
 )
@@ -94,7 +95,16 @@ func (store *Store) StateDir() string { return filepath.Join(store.Worktree(), s
 func (store *Store) Ensure() error {
 	wt := store.Worktree()
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
-		return nil // already materialized
+		if _, err := store.worktree.Run("rev-parse", "--is-inside-work-tree"); err == nil {
+			return nil
+		} else if !danglingWorktreeLink(filepath.Join(wt, ".git")) {
+			return fmt.Errorf("checking knowledge worktree: %w", err)
+		}
+		orphaned := fmt.Sprintf("%s.orphaned-%d", wt, time.Now().UnixNano())
+		if err := os.Rename(wt, orphaned); err != nil {
+			return fmt.Errorf("preserving unattached knowledge worktree: %w", err)
+		}
+		slog.Warn("knowledge: moved an unattached worktree aside", "path", orphaned)
 	}
 	// The image's .git may register a worktree whose directory was excluded
 	// from the image; prune or the add below fails on first boot.
@@ -169,6 +179,22 @@ func (store *Store) Ensure() error {
 		}
 	}
 	return nil
+}
+
+func danglingWorktreeLink(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	gitDir, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir: ")
+	if !ok || gitDir == "" {
+		return false
+	}
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(filepath.Dir(path), gitDir)
+	}
+	_, err = os.Stat(gitDir)
+	return os.IsNotExist(err)
 }
 
 // Records the current worktree state on the knowledge branch.

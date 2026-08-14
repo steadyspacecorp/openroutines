@@ -41,6 +41,12 @@ A `knowledge/` directory appears on first run -- a checkout of the agent's dedic
 
 `configure` is idempotent -- run it whenever. It fills in `openroutines.yml` (name, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
 
+Once the repository has been published, set `repo` in `openroutines.yml` before deploying:
+
+```yaml
+repo: https://github.com/acme/my-agent
+```
+
 ### Name and instructions
 
 The agent's `name` is standing context, not metadata for people reading the repository: every run begins by telling the model its name. The optional `instructions` key is more standing context -- injected into every run before the routine body supplies the instructions for that particular run. Leave it out and runs get only the routine bodies; set it and every routine inherits it without restating it.

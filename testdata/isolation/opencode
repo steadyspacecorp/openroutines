@@ -36,6 +36,7 @@ mkdir -p knowledge/ledgers
   # The agent repository, the knowledge git worktree, and the supervisor's ssh
   # key are outside what this sandbox grants.
   echo "agent-repo=$(cat /agent/openroutines.yml 2>&1 >/dev/null | sed 's/.*: //')"
+  echo "deploy-key=$(cat /home/agent/.ssh/openroutines_deploy 2>&1 >/dev/null | sed 's/.*: //')"
   if error=$(echo x > ./tampered 2>&1); then
     echo "workspace-write=$(cat ./tampered)"
   else

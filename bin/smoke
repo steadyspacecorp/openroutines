@@ -25,6 +25,7 @@ run new "$work/agent" || die "new"
 cd "$work/agent"
 printf 'smoke-agent\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
   | "$bin" configure >"$work/out" 2>&1 || die "configure"
+sed -i.bak 's|^repo:.*|repo: https://github.com/acme/smoke-agent|' openroutines.yml && rm -f openroutines.yml.bak
 step "new + configure"
 
 run check || die "check on a fresh agent (should pass with warnings)"
@@ -222,11 +223,14 @@ step "all configuration names load; check nudges the rename"
 cp opencode.json "$work/opencode.json.seeded"
 echo "v0.0.0-old" > .openroutines/version
 sed -i.bak 's/^ARG OPENROUTINES_VERSION=.*/ARG OPENROUTINES_VERSION=v0.0.0-old/' Dockerfile && rm -f Dockerfile.bak
+sed -i.bak 's|^repo:.*|repo: ""|' openroutines.yml && rm -f openroutines.yml.bak
+git remote add origin git@github.com:acme/smoke-agent.git
 "$bin" update </dev/null >"$work/out" 2>&1 || die "update"
 grep -q "$("$bin" version)" .openroutines/version || die "update did not bump the pin"
 grep -q "^ARG OPENROUTINES_VERSION=$("$bin" version)$" Dockerfile || die "update did not rewrite the Dockerfile pin"
 cmp -s opencode.json "$work/opencode.json.seeded" || die "update rewrote opencode.json"
-step "update bumps the pin, rewrites the Dockerfile pin, leaves opencode.json alone"
+grep -q '^repo: https://github.com/acme/smoke-agent$' openroutines.yml || die "update did not set repo from the checkout origin"
+step "update bumps the pin, sets repo, rewrites the Dockerfile pin, leaves opencode.json alone"
 
 # The pin and deploy image are one version invariant. Check rejects drift.
 sed -i.bak 's/^ARG OPENROUTINES_VERSION=.*/ARG OPENROUTINES_VERSION=v0.0.0-old/' Dockerfile && rm -f Dockerfile.bak
@@ -250,6 +254,7 @@ if command -v docker >/dev/null 2>&1; then
   cd "$ctx/agent"
   printf 'isolation-agent\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
     | "$bin" configure >"$work/out" 2>&1 || die "configure isolation agent"
+  sed -i.bak 's|^repo:.*|repo: git@local:/agent/origin.git|' openroutines.yml && rm -f openroutines.yml.bak
   "$bin" sync >"$work/out" 2>&1 || die "materialize isolation knowledge"
   cat > routines/isolation.md <<'EOF'
 ---
@@ -279,11 +284,13 @@ EOF
   git -C knowledge add state/isolation.json
   git -C knowledge -c user.name=CI -c user.email=ci@example.invalid commit --quiet -m 'Seed isolation smoke run'
   git worktree remove knowledge
+  git clone --quiet --bare . origin.git
   # bubblewrap is the only sandbox that is a package; the fallback needs
   # nothing installed, which is exactly why it is the fallback.
   grep -q 'bubblewrap' Dockerfile || die "template Dockerfile does not install the preferred run sandbox"
   cp "$repo/testdata/isolation/Dockerfile" "$ctx/Dockerfile"
   cp "$repo/testdata/isolation/opencode" "$ctx/opencode"
+  cp "$repo/testdata/isolation/ssh" "$ctx/ssh"
   arch="$(docker version --format '{{.Server.Arch}}')"
   (cd "$repo" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$ctx/openroutines" ./cmd/openroutines)
   docker build --quiet -t openroutines-isolation-smoke "$ctx" >"$work/out" 2>&1 || die "isolation image build"
@@ -330,6 +337,12 @@ EOF
     fi
     git -C /agent show knowledge:ledgers/isolation.md
     git -C /agent show knowledge:ledgers/escapee.md >/dev/null
+    local_tip=$(git -C /agent rev-parse knowledge)
+    origin_tip=$(git --git-dir=/agent/origin.git rev-parse knowledge)
+    if [ "$local_tip" != "$origin_tip" ]; then
+      echo "knowledge push did not reach origin: local=$local_tip origin=$origin_tip"
+      exit 1
+    fi
     if ls /tmp | grep -q openroutines-; then echo "run workspace not cleaned"; exit 1; fi
     # Only a rung with a pid namespace makes this the kernel's job. Where the
     # runner sweeps the process group instead, a descendant that called setsid
@@ -352,6 +365,7 @@ SCRIPT
   docker run --rm \
     -e EXPECT_TREE_COLLAPSE=1 \
     -e OPENROUTINES_LOG_LEVEL=debug \
+    -e OPENROUTINES_DEPLOY_KEY=synthetic-deploy-key \
     --security-opt seccomp=unconfined \
     --security-opt apparmor=unconfined \
     openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
@@ -362,12 +376,14 @@ SCRIPT
   # say which rung it took rather than failing or overclaiming.
   grep -q 'selected="bubblewrap namespaces, shared /proc"' "$work/out" || die "the supervisor did not announce the bubblewrap rung it landed on"
   grep -q 'agent-repo=No such file or directory' "$work/out" || die "the run could reach the agent repository from inside its sandbox"
+  grep -q 'deploy-key=No such file or directory' "$work/out" || die "the run could reach the deploy key from inside its sandbox"
   grep -q 'workspace-write=x' "$work/out" || die "the run could not write its disposable workspace"
   step "run isolation works in-container on the bubblewrap rung: private pid, mount, and ipc namespaces"
 
   docker run --rm \
     -e EXPECT_TREE_COLLAPSE=0 \
     -e OPENROUTINES_LOG_LEVEL=debug \
+    -e OPENROUTINES_DEPLOY_KEY=synthetic-deploy-key \
     --security-opt no-new-privileges \
     openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
     || die "in-container isolation run (landlock rung, no lifting flags)"
@@ -376,6 +392,7 @@ SCRIPT
   # Denied rather than absent: Landlock refuses the open, it does not remove
   # the name. That difference is the rung's headline cost, so assert it.
   grep -q 'agent-repo=Permission denied' "$work/out" || die "the run could reach the agent repository on the landlock rung"
+  grep -q 'deploy-key=Permission denied' "$work/out" || die "the run could reach the deploy key on the landlock rung"
   grep -q 'workspace-write=x' "$work/out" || die "the run could not write its disposable workspace on the landlock rung"
   step "run isolation works in-container with no lifting flags, under no-new-privileges"
 
@@ -386,6 +403,7 @@ SCRIPT
   docker run --rm \
     -e EXPECT_TREE_COLLAPSE=0 \
     -e OPENROUTINES_DISABLE_SANDBOX=1 \
+    -e OPENROUTINES_DEPLOY_KEY=synthetic-deploy-key \
     openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
     || die "in-container run with the sandbox disabled"
   grep -q 'run sandbox disabled' "$work/out" || die "the supervisor ran unconfined without noting it at boot"

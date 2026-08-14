@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -17,6 +16,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/plugin"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/skill"
@@ -56,7 +56,7 @@ func cmdCheck(args []string) int {
 	checkCredentials(dir, agent, routines, report)
 	checkOpenCodeDrift(agent, routines, opencode, report)
 	checkKnowledgeTasks(dir, report)
-	checkDeploy(dir, report)
+	checkDeploy(dir, agent, report)
 	return report.print()
 }
 
@@ -236,12 +236,23 @@ func checkKnowledgeTasks(dir string, report *checkReport) {
 	}
 }
 
-func checkDeploy(dir string, report *checkReport) {
+func checkDeploy(dir string, agent *config.Agent, report *checkReport) {
 	report.section("deploy")
-	if out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output(); err != nil {
-		report.warnf("no git origin -- required before deploy (knowledge needs a durable home)")
+	configured := ""
+	if agent != nil {
+		configured = strings.TrimSpace(agent.Repo)
+	}
+	if configured == "" {
+		origin, _ := repository.Open(dir).Origin()
+		if origin != "" {
+			report.failf("repo is required for deployment -- record this checkout's origin (%s) in openroutines.yml", origin)
+		} else {
+			report.failf("repo is required for deployment -- set it in openroutines.yml")
+		}
+	} else if _, err := repository.GitOrigin(configured); err != nil {
+		report.failf("%v", err)
 	} else {
-		report.okf("origin %s", strings.TrimSpace(string(out)))
+		report.okf("repo configured")
 	}
 	if pin, err := readVersionPin(dir); err == nil {
 		if strings.Contains(pin, "-dev") {
