@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/landlock-lsm/go-landlock/landlock"
 )
 
 const envRequireSandbox = "OPENROUTINES_REQUIRE_SANDBOX"
@@ -423,6 +425,17 @@ func TestARelativeWorkspaceIsRefusedWithoutWritablePaths(t *testing.T) {
 		if _, err := b.Command(Attempt{Workspace: "workspace"}, "true"); err == nil {
 			t.Errorf("%s: a relative workspace was accepted", b.Name())
 		}
+	}
+}
+
+func TestPTYDirectoryGrantAllowsDeviceIoctls(t *testing.T) {
+	got, ok := grant("/dev/pts", true)
+	if !ok {
+		t.Skip("/dev/pts is unavailable")
+	}
+	want := landlock.RWDirs("/dev/pts").WithIoctlDev()
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("grant = %v, want %v", got, want)
 	}
 }
 
