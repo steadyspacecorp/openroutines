@@ -18,6 +18,7 @@ package sandbox
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,16 +105,35 @@ func settle() (Backend, error) {
 // process. Every failure is kept in the error: "no sandbox" alone gives whoever
 // is debugging the host nothing to act on.
 var probeLadder = sync.OnceValues(func() (Backend, error) {
+	return probeCandidates(candidates(), probe)
+})
+
+func probeCandidates(backends []Backend, runProbe func(Backend) error) (Backend, error) {
 	rejected := []error{ErrUnavailable}
-	for _, b := range candidates() {
-		err := probe(b)
+	results := make([]slog.Attr, 0, len(backends))
+	for _, b := range backends {
+		err := runProbe(b)
 		if err == nil {
+			results = append(results, slog.Bool(b.Name(), true))
+			logProbeResults(results, b)
 			return b, nil
 		}
+		results = append(results, slog.Bool(b.Name(), false))
 		rejected = append(rejected, fmt.Errorf("%s: %w", b.Name(), err))
 	}
+	logProbeResults(results, nil)
 	return nil, errors.Join(rejected...)
-})
+}
+
+func logProbeResults(results []slog.Attr, selected Backend) {
+	args := []any{slog.GroupAttrs("probes", results...)}
+	if selected == nil {
+		args = append(args, "selected", "none")
+	} else {
+		args = append(args, "selected", selected.Name())
+	}
+	slog.Info("run sandbox probes complete", args...)
+}
 
 // Verify reports which rung confines runs here, building a throwaway sandbox
 // exactly as attempts will so the fail-closed policy fires at boot rather than
