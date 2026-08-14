@@ -75,7 +75,7 @@ Network egress and resource use remain uncovered, and are documented as hardenin
 There are two mechanisms, tried strongest-first, and the supervisor takes the first that can really build a throwaway sandbox here.
 Bubblewrap is preferred: private mount, pid, ipc, uts and user namespaces per attempt, plus a cgroup namespace where the host allows one.
 It has two variants differing only in how `/proc` reaches the sandbox -- a private `/proc` hides peer attempts, and where the runtime masks `/proc` paths the kernel refuses that mount, so the container's own `/proc` is bound read-only instead, costing process-list privacy and nothing else.
-Each variant first lets Bubblewrap create its user and mount namespaces together, then tries the equivalent boundary with a mapped user namespace created outside Bubblewrap because the tested gVisor runtime permits both namespaces but rejects their combined creation.
+The private-`/proc` variant first lets Bubblewrap create its user and mount namespaces together, then tries the equivalent boundary with a mapped user namespace created outside Bubblewrap because the tested gVisor runtime permits both namespaces but rejects their combined creation.
 A plain Landlock domain is the fallback: no namespaces, and nothing asked of the host at all -- no runtime flag, no capability, no sysctl, just syscalls the default container seccomp profile already allows.
 Where neither works the supervisor refuses to start, unless the operator disabled the sandbox deliberately.
 

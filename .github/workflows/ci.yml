@@ -64,8 +64,8 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       # REQUIRE_SANDBOX turns "no sandbox here" from a skip into a failure, so
-      # a rung that stops being reachable is a red build rather than a quiet
-      # lapse in coverage of the boundary production depends on.
+      # losing host-side coverage of every rung is a red build rather than a
+      # quiet lapse in coverage of the boundary production depends on.
       - name: test
         run: make test-race
         env:
