@@ -72,3 +72,17 @@ func TestNewKeepsFrameworkFilesUnderOpenRoutines(t *testing.T) {
 		t.Fatalf("legacy version pin exists: %v", err)
 	}
 }
+
+func TestNewLeavesRepoForAfterPublishing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "openroutines.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "\nrepo:\n") {
+		t.Fatalf("new config does not contain an empty repo field:\n%s", raw)
+	}
+}

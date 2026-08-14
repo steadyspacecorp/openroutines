@@ -2,7 +2,8 @@
 
 An ORA deploys as a plain Docker container -- a VPS, Fly, Render, Kamal, your homelab -- with nothing else to provision: no database, no queue, no secrets platform. Every run is confined in a sandbox, and the supervisor builds the strongest one your host permits, working that out by probing at boot rather than making you configure it. A platform that only takes a Dockerfile needs nothing from you; a platform that lets you pass runtime flags can give runs a stronger boundary in exchange for weakening the container's own. See [run confinement](#run-confinement) below.
 
-The one prerequisite is a git origin the agent can push to -- GitHub, GitLab, Gitea, even a bare repo on a VPS -- since that's where knowledge durably lives. (Local development needs no origin, and `openroutines check` verifies one before you deploy.)
+The deployment prerequisites are a `repo` value in `openroutines.yml` and a deploy key that can push to it, since that's where knowledge durably lives.
+Local development needs neither; `openroutines check` reports a missing `repo` before you deploy.
 
 ```mermaid
 flowchart LR
@@ -14,7 +15,8 @@ flowchart LR
 
 ## Deploying
 
-First, give the agent its own identity for pushing knowledge -- a deploy key scoped to this one repository. Generate it *outside* the agent repo (a private key must never sit in the repo or its image):
+First, set `repo` in `openroutines.yml` to the published repository, then give the agent its own identity for pushing knowledge -- a deploy key scoped to that repository.
+Generate it *outside* the agent repo (a private key must never sit in the repo or its image):
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.keys/my-agent_deploy_key -N "" -C "my-agent deploy key"

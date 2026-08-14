@@ -11,14 +11,15 @@ import (
 
 	openroutines "github.com/steadyspacecorp/openroutines"
 	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
-// The template files update may rewrite. Everything else in an agent repo --
-// routines, skills, knowledge, openroutines.yml, credentials -- belongs to
-// the agent and is never touched. opencode.json stays off this list
-// deliberately: it's the user's harness config (design decision "One binary"),
-// and bin/smoke asserts it survives an update byte for byte.
+// The template files update may rewrite. Routines, skills, knowledge, and
+// credentials belong to the agent and are never touched. openroutines.yml has
+// one targeted update for an empty repo; opencode.json stays off this list
+// deliberately because it is the user's harness config (design decision "One
+// binary"), and bin/smoke asserts it survives an update byte for byte.
 var frameworkOwned = []string{
 	"Dockerfile",
 	".dockerignore",
@@ -49,7 +50,6 @@ func cmdUpdate(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-
 	target := version.Version
 	pinPath := versionPinPath(dir)
 	current := "(none)"
@@ -115,6 +115,9 @@ func cmdUpdate(args []string) int {
 	if !dockerfileUsesVersion(dockerfile, target) {
 		return fail(fmt.Errorf("the Dockerfile still pins a different openroutines version -- .openroutines/version was left at %s; set ARG OPENROUTINES_VERSION=%s and rerun", current, target))
 	}
+	if err := setRepoFromOrigin(dir, agent); err != nil {
+		return fail(err)
+	}
 	if err := os.WriteFile(pinPath, []byte(target+"\n"), 0o644); err != nil {
 		return fail(err)
 	}
@@ -122,6 +125,48 @@ func cmdUpdate(args []string) int {
 	fmt.Println("Review the diff, commit, and push -- your next deploy runs the new version.")
 	fmt.Println("Rolling back is git revert. Routines, skills, knowledge, and credentials were not touched.")
 	return 0
+}
+
+func setRepoFromOrigin(dir string, agent *config.Agent) error {
+	if strings.TrimSpace(agent.Repo) != "" {
+		return nil
+	}
+	origin, ok := repository.Open(dir).Origin()
+	if !ok {
+		return nil
+	}
+	repo := repoValueFromOrigin(origin)
+	if repo == "" {
+		return nil
+	}
+	agent.Repo = repo
+	return agent.Save(dir)
+}
+
+func repoValueFromOrigin(origin string) string {
+	origin = strings.TrimSpace(origin)
+	for _, prefix := range []string{
+		"https://github.com/",
+		"git@github.com:",
+		"ssh://git@github.com/",
+		"ssh://git@ssh.github.com:443/",
+	} {
+		if path, ok := strings.CutPrefix(origin, prefix); ok {
+			if repo, ok := githubRepoValue(path); ok {
+				return repo
+			}
+			break
+		}
+	}
+	return origin
+}
+
+func githubRepoValue(path string) (string, bool) {
+	owner, name, ok := strings.Cut(strings.TrimSuffix(path, ".git"), "/")
+	if ok && owner != "" && name != "" && !strings.Contains(name, "/") {
+		return "https://github.com/" + owner + "/" + name, true
+	}
+	return "", false
 }
 
 func dockerfileUsesVersion(raw []byte, version string) bool {

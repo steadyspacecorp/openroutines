@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 )
 
 // Removing a routine must remove every per-routine state file, subdirectories
@@ -111,6 +112,117 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	events, _ := os.ReadFile(filepath.Join(b, "knowledge", "events.md"))
 	if !strings.Contains(string(events), "generation one fact") {
 		t.Fatalf("adopted events missing: %q", events)
+	}
+}
+
+func TestEnsureReplacesAWorktreeInvalidatedByFreshRepositoryMetadata(t *testing.T) {
+	_, dir := twoClones(t)
+	origin := gitT(t, dir, "remote", "get-url", "origin")
+	orphaned := filepath.Join(dir, "knowledge", "local-note")
+	if err := os.WriteFile(orphaned, []byte("preserve me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	ssh := "#!/bin/sh\nwhile [ $# -gt 0 ]; do case \"$1\" in -o|-p|-i|-F|-l) shift 2;; -*) shift;; *) shift; break;; esac; done\nexec sh -c \"$1\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(ssh), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(repository.EnvDeployKey, "synthetic-deploy-key") // gitleaks:allow -- test fixture
+	t.Setenv(repository.EnvDeployKeyFile, "")
+
+	if err := repository.Open(dir).Prepare("git@local:"+origin, true); err != nil {
+		t.Fatal(err)
+	}
+	logs := logtest.Capture(t)
+	if err := NewStore(dir).Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	logs.Expect("moved an unattached worktree aside")
+	raw, err := os.ReadFile(filepath.Join(dir, "knowledge", "events.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "# Events") {
+		t.Fatalf("knowledge was not reconstructed from origin: %q", raw)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "knowledge.orphaned-*", "local-note"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("local file was not preserved in one orphaned worktree: %v, %v", matches, err)
+	}
+	if raw, err := os.ReadFile(matches[0]); err != nil || string(raw) != "preserve me" {
+		t.Fatalf("preserved local file = %q, %v", raw, err)
+	}
+}
+
+func TestEnsureDoesNotRemoveWorktreeOnGitProbeFailure(t *testing.T) {
+	dir := t.TempDir()
+	gitT(t, dir, "init", "-q", "-b", "main", dir)
+	store := NewStore(dir)
+	if err := store.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(store.Worktree(), "local-note")
+	if err := os.WriteFile(sentinel, []byte("preserve me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := store.Ensure(); err == nil {
+		t.Fatal("Ensure succeeded despite the failed Git probe")
+	}
+	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "preserve me" {
+		t.Fatalf("worktree was modified after failed Git probe: %q, %v", raw, err)
+	}
+}
+
+func TestDeployedRestartPreservesUnpushedKnowledge(t *testing.T) {
+	_, dir := twoClones(t)
+	origin := gitT(t, dir, "remote", "get-url", "origin")
+	bin := t.TempDir()
+	ssh := "#!/bin/sh\nwhile [ $# -gt 0 ]; do case \"$1\" in -o|-p|-i|-F|-l) shift 2;; -*) shift;; *) shift; break;; esac; done\nexec sh -c \"$1\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(ssh), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(repository.EnvDeployKey, "synthetic-deploy-key") // gitleaks:allow -- test fixture
+	t.Setenv(repository.EnvDeployKeyFile, "")
+
+	configured := "git@local:" + origin
+	if err := repository.Open(dir).Prepare(configured, true); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(dir)
+	if err := store.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	want := "knowledge that has not reached origin\n"
+	if err := os.WriteFile(filepath.Join(store.Worktree(), "events.md"), []byte(want), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Commit("Unpushed knowledge"); err != nil {
+		t.Fatal(err)
+	}
+	tip := gitT(t, store.Worktree(), "rev-parse", "HEAD")
+
+	if err := repository.Open(dir).Prepare(configured, true); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewStore(dir)
+	if err := restarted.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, restarted.Worktree(), "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("knowledge tip changed from %s to %s", tip, got)
+	}
+	if got, err := os.ReadFile(filepath.Join(restarted.Worktree(), "events.md")); err != nil || string(got) != want {
+		t.Fatalf("unpushed knowledge was not preserved: %q, %v", got, err)
 	}
 }
 

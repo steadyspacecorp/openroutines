@@ -17,6 +17,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/lock"
+	"github.com/steadyspacecorp/openroutines/internal/mode"
 	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
@@ -94,12 +95,25 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	repo := repository.Open(dir)
-	store := knowledge.NewStoreForRepository(repo)
 	knowledgeMu, err := lock.Locker(dir, "knowledge")
 	if err != nil {
 		return nil, err
 	}
+	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
+	// same-UID model processes -- set before any child exists.
+	if err := protectSelf(); err != nil {
+		slog.Warn("could not mark the supervisor non-dumpable", "error", err)
+	}
+	// Before the deploy key is materialized or anything touches git: a key the
+	// runs could read is worth failing on while the deployment is unchanged.
+	if err := VerifyKeyDelivery(); err != nil {
+		return nil, err
+	}
+	repo := repository.Open(dir)
+	if err := repo.Prepare(agent.Repo, mode.Current() == mode.DeployedContainer); err != nil {
+		return nil, fmt.Errorf("repository: %w", err)
+	}
+	store := knowledge.NewStoreForRepository(repo)
 	slots := make(chan struct{}, agent.RunSlots())
 	for range agent.RunSlots() {
 		slots <- struct{}{}
@@ -137,20 +151,6 @@ func (s *Supervisor) InstanceID() string { return s.lease.instanceID }
 // The supervise loop: startup, then one Tick per minute until ctx is
 // canceled, then shutdown (final commit and push, lease release).
 func (s *Supervisor) Run(ctx context.Context) error {
-	// Non-dumpable closes the /proc/<pid>/environ and ptrace paths from
-	// same-UID model processes -- set before any child exists.
-	if err := protectSelf(); err != nil {
-		slog.Warn("could not mark the supervisor non-dumpable", "error", err)
-	}
-	// Before the deploy key is materialized, the lease is taken, or anything
-	// touches git: a key the runs could read is worth failing on while the
-	// deployment has changed nothing yet.
-	if err := VerifyKeyDelivery(); err != nil {
-		return err
-	}
-	if err := s.repo.ConfigureAuthentication(); err != nil {
-		return err
-	}
 	// Under knowledgeMu: first-boot materialization must not race a manual run's
 	// own locked Ensure.
 	if err := func() error {

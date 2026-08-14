@@ -1,4 +1,5 @@
 name: "{{AGENT_NAME}}"
+repo:
 owner:
   name: "{{OWNER_NAME}}"
   email: "{{OWNER_EMAIL}}"

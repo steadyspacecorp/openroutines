@@ -5,10 +5,9 @@
 **Decision.** Agent knowledge lives in a dedicated directory, synced to an orphan `knowledge` branch that the running agent -- the branch's sole writer -- pushes with a read/write deploy key.
 Scheduling state and run records live there too.
 If the branch doesn't exist at boot, the supervisor creates and pushes it -- first boot self-heals; there is no setup step.
-All of this presumes a git origin: deploying an ORA requires one (any git host -- GitHub, GitLab, Gitea, a bare repo on a VPS), since that's the only durable home for knowledge.
-Local development needs no origin; `openroutines check` verifies one exists before you deploy.
-Which protocol that origin speaks is not the operator's problem: the deploy key is an SSH credential, so a supervisor holding one rewrites an HTTPS origin to SSH on its own git invocations, leaving `.git/config` and the built image as written.
-Without that, the common case -- `new` adds no origin and `gh` defaults to https -- deploys an agent with no usable credential for its own repository, and the container restart-loops before it supervises anything.
+Deploying an ORA requires `repo` in `openroutines.yml` and a write-capable deploy key, since the repository is the only durable home for knowledge.
+On first boot the supervisor replaces provider Git metadata with a runtime repository built from that configuration; later boots reuse the runtime metadata so local knowledge survives a restart.
+Local development needs no configured repository; `openroutines check` verifies the deployment requirement before you deploy.
 
 **Why.** The analogy is Docker's own: `main` is the image (immutable, what you deploy), the `knowledge` branch is the volume (mutable, survives redeploys).
 Keeping knowledge off `main` means agent commits never trigger CI/CD, never race human pushes, and never pollute the history of human intent.

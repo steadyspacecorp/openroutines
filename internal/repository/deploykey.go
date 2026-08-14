@@ -2,7 +2,6 @@ package repository
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,17 +22,12 @@ const (
 // invocation so pushes and fetches authenticate with the deploy key.
 var sshCommand string
 
-// When set, is passed as -c url.<ssh>.insteadOf=<https> on
-// every git invocation so an HTTPS origin authenticates with the deploy key.
-var originRewrite []string
-
 // Materializes OPENROUTINES_DEPLOY_KEY (if present) as a
 // supervisor-only key file and routes all git SSH through it. Returns whether
 // a key was configured. Host keys are trusted on first use (accept-new);
 // pinning is tracked in the hardening backlog.
-func ConfigureDeployKey() (bool, error) {
+func configureDeployKey() (bool, error) {
 	sshCommand = ""
-	originRewrite = nil
 	key := ""
 	if path := os.Getenv(EnvDeployKeyFile); path != "" {
 		raw, err := os.ReadFile(path)
@@ -86,28 +80,4 @@ func registerDeployKey(key string) {
 		}
 	}
 	scrub.Register(values)
-}
-
-// Routes an HTTPS origin through SSH so the deploy
-// key can authenticate it -- the container has no HTTPS credential. Left
-// alone: SSH origins, origins with credentials, non-default ports.
-func (repo *Repository) configureOriginRewrite() bool {
-	if sshCommand == "" {
-		return false
-	}
-	raw, err := repo.Run("remote", "get-url", "origin")
-	if err != nil {
-		return false
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" || u.Port() != "" || u.User != nil {
-		return false
-	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return false
-	}
-	originRewrite = []string{
-		"-c", fmt.Sprintf("url.git@%s:.insteadOf=%s://%s/", u.Host, u.Scheme, u.Host),
-	}
-	return true
 }

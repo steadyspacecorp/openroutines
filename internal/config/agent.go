@@ -86,6 +86,7 @@ type Knowledge struct {
 type Agent struct {
 	Name         string                `yaml:"name"`
 	Instructions string                `yaml:"instructions,omitempty"`
+	Repo         string                `yaml:"repo"`
 	Owner        Owner                 `yaml:"owner"`
 	Timezone     string                `yaml:"timezone"`
 	Defaults     Defaults              `yaml:"defaults"`
