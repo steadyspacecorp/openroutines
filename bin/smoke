@@ -20,12 +20,12 @@ bin="$work/openroutines"
 (cd "$repo" && go build -o "$bin" ./cmd/openroutines)
 printf 'smoke: testing %s\n' "$("$bin" version)"
 
-run scaffold "$work/agent" || die "scaffold"
+run new "$work/agent" || die "new"
 [ "$(readlink "$work/agent/CLAUDE.md")" = "AGENTS.md" ] || die "CLAUDE.md is not a symlink to AGENTS.md"
 cd "$work/agent"
 printf 'smoke-agent\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
   | "$bin" configure >"$work/out" 2>&1 || die "configure"
-step "scaffold + configure"
+step "new + configure"
 
 run check || die "check on a fresh agent (should pass with warnings)"
 step "check passes on a fresh agent"
@@ -246,7 +246,7 @@ step "check rejects framework-version drift"
 if command -v docker >/dev/null 2>&1; then
   ctx="$work/isolation"
   mkdir -p "$ctx"
-  run scaffold "$ctx/agent" || die "scaffold isolation agent"
+  run new "$ctx/agent" || die "new isolation agent"
   cd "$ctx/agent"
   printf 'isolation-agent\nCI\nci@example.invalid\nUTC\n\nnot-a-real-key\n' \
     | "$bin" configure >"$work/out" 2>&1 || die "configure isolation agent"
