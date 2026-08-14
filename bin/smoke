@@ -360,7 +360,7 @@ SCRIPT
   grep -q 'supervisor-environ=Permission denied' "$work/out" || die "a run could read the supervisor's environment -- the master key delivery is exposed"
   # /proc stays masked here, so the supervisor must detect that by itself and
   # say which rung it took rather than failing or overclaiming.
-  grep -q 'rung="bubblewrap namespaces, shared /proc"' "$work/out" || die "the supervisor did not announce the bubblewrap rung it landed on"
+  grep -q 'selected="bubblewrap namespaces, shared /proc"' "$work/out" || die "the supervisor did not announce the bubblewrap rung it landed on"
   grep -q 'agent-repo=No such file or directory' "$work/out" || die "the run could reach the agent repository from inside its sandbox"
   grep -q 'workspace-write=Read-only file system' "$work/out" || die "the run could write to the workspace it was staged from"
   step "run isolation works in-container on the bubblewrap rung: private pid, mount, and ipc namespaces"
@@ -371,7 +371,7 @@ SCRIPT
     --security-opt no-new-privileges \
     openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
     || die "in-container isolation run (landlock rung, no lifting flags)"
-  grep -q 'rung="landlock domain' "$work/out" || die "the supervisor did not step down to the landlock rung where bubblewrap is unavailable"
+  grep -q 'selected="landlock domain' "$work/out" || die "the supervisor did not step down to the landlock rung where bubblewrap is unavailable"
   grep -q 'supervisor-environ=Permission denied' "$work/out" || die "a run could read the supervisor's environment on the landlock rung"
   # Denied rather than absent: Landlock refuses the open, it does not remove
   # the name. That difference is the rung's headline cost, so assert it.
