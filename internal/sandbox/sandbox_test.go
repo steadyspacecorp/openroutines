@@ -414,6 +414,14 @@ func TestAWritablePathOutsideTheWorkspaceIsRefused(t *testing.T) {
 	}
 }
 
+func TestARelativeWorkspaceIsRefusedWithoutWritablePaths(t *testing.T) {
+	for _, b := range candidates() {
+		if _, err := b.Command(Attempt{Workspace: "workspace"}, "true"); err == nil {
+			t.Errorf("%s: a relative workspace was accepted", b.Name())
+		}
+	}
+}
+
 // The hatch is answered inside this package rather than at each caller, so
 // nothing it reports can disagree with it: a rung that was never applied must
 // not be credited, and Command must not hand back an unconfined command.
