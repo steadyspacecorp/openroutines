@@ -33,7 +33,7 @@ var landlockABI = sync.OnceValue(func() int {
 // The fallback rung, and the only one that asks the host for nothing at all: no
 // runtime flag, no capability, no sysctl, no privilege. Weaker in ways worth
 // stating -- an ungranted path is denied rather than absent, peers are listed
-// in /proc, /tmp and /dev/shm are the container's, nothing collapses the
+// in /proc, /tmp and /dev/shm are withheld, nothing collapses the
 // process tree, and an ungranted file's metadata stays changeable at any ABI
 // because Landlock has no right that covers it.
 //
