@@ -91,11 +91,11 @@ func registerDeployKey(key string) {
 // Routes an HTTPS origin through SSH so the deploy
 // key can authenticate it -- the container has no HTTPS credential. Left
 // alone: SSH origins, origins with credentials, non-default ports.
-func ConfigureOriginRewrite(repoDir string) bool {
+func (repo *Repository) configureOriginRewrite() bool {
 	if sshCommand == "" {
 		return false
 	}
-	raw, err := Run(repoDir, "remote", "get-url", "origin")
+	raw, err := repo.Run("remote", "get-url", "origin")
 	if err != nil {
 		return false
 	}

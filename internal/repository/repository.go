@@ -8,7 +8,9 @@ import (
 )
 
 type Repository struct {
-	dir string
+	dir       string
+	remote    bool
+	inspected bool
 }
 
 func Open(dir string) *Repository { return &Repository{dir: dir} }
@@ -28,10 +30,10 @@ func initialize(dir string) error {
 }
 
 func (repo *Repository) CommitAll(message string) error {
-	if _, err := Run(repo.dir, "add", "-A"); err != nil {
+	if _, err := repo.Run("add", "-A"); err != nil {
 		return err
 	}
-	_, err := Run(repo.dir, "commit", "--quiet", "-m", message)
+	_, err := repo.Run("commit", "--quiet", "-m", message)
 	return err
 }
 
@@ -42,8 +44,24 @@ func (repo *Repository) ConfigureAuthentication() error {
 	if err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	}
-	if configuredKey && ConfigureOriginRewrite(repo.dir) {
+	if configuredKey && repo.configureOriginRewrite() {
 		slog.Info("repository: routing the HTTPS origin through the deploy key")
 	}
+	if !repo.Remote() {
+		slog.Warn("repository has no origin -- remote persistence and the supervisor lease are disabled (local mode)")
+	}
 	return nil
+}
+
+func (repo *Repository) Remote() bool {
+	if !repo.inspected {
+		_, repo.remote = repo.Origin()
+	}
+	return repo.remote
+}
+
+func (repo *Repository) Origin() (string, bool) {
+	origin, err := repo.Run("remote", "get-url", "origin")
+	repo.remote, repo.inspected = err == nil, true
+	return Display(origin), repo.remote
 }

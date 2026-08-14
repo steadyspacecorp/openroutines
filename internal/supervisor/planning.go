@@ -24,19 +24,17 @@ func (s *Supervisor) plan(now time.Time) ([]dueRun, bool) {
 	s.knowledgeMu.Lock()
 	defer s.knowledgeMu.Unlock()
 
-	if !s.noOrigin {
-		s.syncOnce()
-		// Heartbeat before the sync verdict: a blocked instance is still
-		// alive, and a lapsed lease invites a replacement writer.
-		if !s.renewLease() {
-			return nil, false
-		}
-		if s.blockers.syncBlocked {
-			// Rewritten history or a conflict needs a human; dispatching
-			// anyway would re-run external actions as duplicates after
-			// container replacement.
-			return nil, false
-		}
+	s.syncOnce()
+	// Heartbeat before the sync verdict: a blocked instance is still
+	// alive, and a lapsed lease invites a replacement writer.
+	if !s.renewLease() {
+		return nil, false
+	}
+	if s.blockers.syncBlocked {
+		// Rewritten history or a conflict needs a human; dispatching
+		// anyway would re-run external actions as duplicates after
+		// container replacement.
+		return nil, false
 	}
 
 	// Daily retention trim: git history keeps everything, the working files
@@ -214,7 +212,7 @@ func (s *Supervisor) commitIntent(message string) bool {
 		return false
 	}
 	s.recover("commit", "intent commit recovered -- runs resumed", &s.blockers.commitWarned)
-	if s.noOrigin || s.blockers.syncBlocked || sha == "" {
+	if s.blockers.syncBlocked || sha == "" {
 		return true
 	}
 	if err := s.store.Push(); err != nil {

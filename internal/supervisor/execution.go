@@ -57,17 +57,15 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
-	if !s.noOrigin {
-		// Ownership proof stays live through staging, execution, settlement,
-		// and push.
-		stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun, log)
-		defer stopHeartbeat()
-	}
+	// Ownership proof stays live through staging, execution, settlement,
+	// and push. Local mode supplies a no-op heartbeat.
+	stopHeartbeat := s.keepLeaseAlive(runCtx, cancelRun, log)
+	defer stopHeartbeat()
 	prepared, err := runner.Stage(s.Dir, agent, r, attempt, s.knowledgeMu)
 	if errors.Is(err, runner.ErrAttemptCleanup) {
 		cleanupErr = err
 	}
-	if err == nil && !s.noOrigin && !s.renewLease() {
+	if err == nil && !s.renewLease() {
 		cleanupErr = prepared.Discard()
 		s.knowledgeMu.Lock()
 		giveBack()
@@ -106,7 +104,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	// record, scheduling consequences, push.
 	s.knowledgeMu.Lock()
 	defer s.knowledgeMu.Unlock()
-	if !s.noOrigin && !s.renewLease() {
+	if !s.renewLease() {
 		giveBack()
 		if err := st.Save(s.stateDir()); err != nil {
 			log.Error("saving scheduling state failed", "error", err)

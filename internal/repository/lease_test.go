@@ -75,3 +75,17 @@ func TestLeasePreservesSubsecondHeartbeats(t *testing.T) {
 		t.Fatalf("legacy heartbeat parsed as %s: %v", legacy, err)
 	}
 }
+
+func TestLeaseIsDisabledInsideARepositoryWithoutARemote(t *testing.T) {
+	dir := t.TempDir()
+	gitT(t, dir, "init", "--quiet", "--initial-branch=main")
+	repo := Open(dir)
+
+	if lease, err := repo.ReadLease(); err != nil || lease != nil {
+		t.Fatalf("read: lease=%+v err=%v", lease, err)
+	}
+	if sha, err := repo.WriteLease("local", time.Now(), ""); err != nil || sha != "" {
+		t.Fatalf("write: sha=%q err=%v", sha, err)
+	}
+	repo.ReleaseLease("unused")
+}

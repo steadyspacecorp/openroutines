@@ -14,7 +14,6 @@ import (
 	"syscall"
 
 	"github.com/steadyspacecorp/openroutines/internal/filetree"
-	"github.com/steadyspacecorp/openroutines/internal/repository"
 )
 
 // Copies the knowledge worktree's files into a plain staging directory:
@@ -127,9 +126,9 @@ func (store *Store) Import(stagingDir, baseDir string) (conflicted []Conflict, e
 	// Refuse to import over uncommitted human curation -- it has no reflog to
 	// recover from. Supervisor-owned paths legitimately carry this attempt's
 	// own in-flight bookkeeping.
-	if out, err := repository.Run(wt, "status", "--porcelain"); err == nil && out != "" {
+	if out, err := store.worktree.Run("status", "--porcelain"); err == nil && out != "" {
 		for _, line := range strings.Split(out, "\n") {
-			// repository.Run() trims the output, eating the first line's status column;
+			// Run trims the output, eating the first line's status column;
 			// a path containing spaces degrades toward refusal, never toward
 			// a silent import.
 			fields := strings.Fields(line)

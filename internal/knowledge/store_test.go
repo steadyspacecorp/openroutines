@@ -1,12 +1,13 @@
 package knowledge
 
 import (
-	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
 )
 
 // Removing a routine must remove every per-routine state file, subdirectories
