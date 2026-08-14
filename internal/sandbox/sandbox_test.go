@@ -25,6 +25,13 @@ func (b probeBackend) Name() string                               { return b.nam
 func (probeBackend) Capabilities() Capabilities                   { return Capabilities{} }
 func (probeBackend) Command(string, ...string) (*exec.Cmd, error) { return nil, nil }
 
+type commandBackend struct {
+	probeBackend
+	command func() *exec.Cmd
+}
+
+func (b commandBackend) Command(string, ...string) (*exec.Cmd, error) { return b.command(), nil }
+
 func TestSandboxProbeResultsAreLoggedTogether(t *testing.T) {
 	var logs bytes.Buffer
 	original := slog.Default()
@@ -57,6 +64,51 @@ func TestSandboxProbeResultsAreLoggedTogether(t *testing.T) {
 	}
 	if strings.Count(got, "\n") != 1 {
 		t.Errorf("expected one probe summary, got:\n%s", got)
+	}
+}
+
+func TestSandboxProbeReportsWhenEveryCandidateFails(t *testing.T) {
+	var logs bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(original) })
+
+	backends := []Backend{probeBackend{"first"}, probeBackend{"second"}}
+	selected, err := probeCandidates(backends, func(b Backend) error {
+		return fmt.Errorf("%s failed", b.Name())
+	})
+	if selected != nil {
+		t.Fatalf("selected %q when every candidate failed", selected.Name())
+	}
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("probe error = %v, want ErrUnavailable", err)
+	}
+	got := logs.String()
+	for _, want := range []string{
+		`probes.first=false`,
+		`probes.second=false`,
+		`selected=none`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in logs:\n%s", want, got)
+		}
+	}
+}
+
+func TestSandboxProbeTimesOut(t *testing.T) {
+	b := commandBackend{
+		probeBackend: probeBackend{"hung"},
+		command: func() *exec.Cmd {
+			return exec.Command("sleep", "10")
+		},
+	}
+	started := time.Now()
+	err := probeWithin(b, 50*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("probe error = %v, want timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("timed-out probe returned after %s", elapsed)
 	}
 }
 

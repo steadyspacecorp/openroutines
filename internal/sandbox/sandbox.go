@@ -16,6 +16,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,6 +26,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 // ErrUnavailable reports that no rung could confine a run here. Production
@@ -238,9 +241,15 @@ func validateWorkspace(workspace string) error {
 	return nil
 }
 
+// Building a local namespace normally takes milliseconds. Ten seconds leaves
+// room for an oversubscribed host without letting a stuck helper hold boot.
+const probeTimeout = 10 * time.Second
+
 // Builds one throwaway sandbox on the given rung. The helpers explain their own
 // failures well, so their output is the error.
-func probe(b Backend) error {
+func probe(b Backend) error { return probeWithin(b, probeTimeout) }
+
+func probeWithin(b Backend, timeout time.Duration) error {
 	dir, err := os.MkdirTemp("", "openroutines-sandbox-probe-*")
 	if err != nil {
 		return err
@@ -252,12 +261,33 @@ func probe(b Backend) error {
 		return err
 	}
 	cmd.Env = []string{}
-	out, err := cmd.CombinedOutput()
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	cmd.WaitDelay = time.Second
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err = <-done:
+	case <-timer.C:
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		return fmt.Errorf("timed out after %s", timeout)
+	}
 	if err == nil {
 		return nil
 	}
-	if len(out) == 0 {
+	if out.Len() == 0 {
 		return err
 	}
-	return errors.New(strings.TrimSpace(string(out)))
+	return errors.New(strings.TrimSpace(out.String()))
 }
