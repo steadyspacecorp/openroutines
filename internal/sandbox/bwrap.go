@@ -27,8 +27,10 @@ var (
 
 // The preferred rung: a private mount, pid, ipc, uts and user namespace per
 // attempt. The observable variants differ only in how /proc reaches the
-// sandbox. Each can also create its user namespace outside bwrap for runtimes
-// that reject creating it together with the mount namespace.
+// sandbox. The private-proc variant can also create its user namespace outside
+// bwrap for runtimes that reject creating it together with the mount namespace.
+// A shared proc exposes that outer launcher, so it must remain separated from
+// the run by the user namespace bwrap creates itself.
 type bubblewrap struct {
 	proc               procMount
 	outerUserNamespace bool

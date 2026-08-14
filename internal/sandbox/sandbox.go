@@ -85,7 +85,6 @@ func candidates() []Backend {
 		bubblewrap{proc: privateProc},
 		bubblewrap{proc: privateProc, outerUserNamespace: true},
 		bubblewrap{proc: sharedProc},
-		bubblewrap{proc: sharedProc, outerUserNamespace: true},
 		landlockDomain{},
 	}
 }
