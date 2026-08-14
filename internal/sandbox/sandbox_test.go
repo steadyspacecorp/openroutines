@@ -155,6 +155,27 @@ func TestTheWorkspaceIsWritableAndEverythingOutsideItIsNot(t *testing.T) {
 	})
 }
 
+func TestNoVisibleProcessRootEscapesTheSandbox(t *testing.T) {
+	eachRung(t, func(t *testing.T, b Backend) {
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, []byte("outside the sandbox"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		out, err := run(t, b, t.TempDir(), "sh", "-c", `
+for root in /proc/[0-9]*/root; do
+  if cat "$root$1" 2>/dev/null; then
+    exit 0
+  fi
+done
+exit 1
+`, "sh", outside)
+		if err == nil {
+			t.Fatalf("a visible process root exposed a path outside the sandbox: %s", out)
+		}
+	})
+}
+
 // Peer visibility varies most across the ladder, so both answers are pinned. A
 // rung that does not hide a peer must still keep everything of value out of
 // reach -- if that flips, falling back stops being safe and this test says so.
