@@ -11,12 +11,23 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 )
+
+func gitExitCode(err error) int {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	return -1
+}
 
 // Records how far one consumer has processed knowledge history. Cursors
 // are supervisor-owned bookkeeping (under state/, never staged into a run)
@@ -101,7 +112,7 @@ func (store *Store) Cursors() (map[string]Cursor, error) {
 // Returns the knowledge branch's current commit: the fixed `through`
 // boundary a change set is prepared against.
 func (store *Store) Head() (string, error) {
-	return git(store.Worktree(), "rev-parse", "HEAD")
+	return repository.Run(store.Worktree(), "rev-parse", "HEAD")
 }
 
 // One knowledge commit's model-facing changes.
@@ -136,7 +147,7 @@ var ErrCursorUnreachable = errors.New("consumer cursor is not on the knowledge b
 // answer, which must not abandon a run.
 func (store *Store) reachable(from, through string) error {
 	wt := store.Worktree()
-	full, err := git(wt, "rev-parse", "--verify", "--quiet", from+"^{commit}")
+	full, err := repository.Run(wt, "rev-parse", "--verify", "--quiet", from+"^{commit}")
 	if err != nil {
 		if gitExitCode(err) != 1 {
 			return fmt.Errorf("delivery changes: reading cursor commit: %w", err)
@@ -145,7 +156,7 @@ func (store *Store) reachable(from, through string) error {
 	}
 	// Exit 1 here means no common ancestor at all -- as off-branch as a
 	// cursor gets, and reported as such by the empty base.
-	base, err := git(wt, "merge-base", full, through)
+	base, err := repository.Run(wt, "merge-base", full, through)
 	if err != nil && gitExitCode(err) != 1 {
 		return fmt.Errorf("delivery changes: relating cursor to boundary: %w", err)
 	}
@@ -175,7 +186,7 @@ func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 		"--invert-grep", "--grep=^" + trimTrailer + "$",
 		from + ".." + through, "--", ".",
 	}, deliveryExcludes...)
-	out, err := git(store.Worktree(), args...)
+	out, err := repository.Run(store.Worktree(), args...)
 	if err != nil {
 		return nil, err
 	}

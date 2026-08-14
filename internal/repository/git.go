@@ -1,4 +1,4 @@
-package knowledge
+package repository
 
 import (
 	"context"
@@ -169,6 +169,9 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Run executes Git with the repository's fixed child environment and config.
+func Run(dir string, args ...string) (string, error) { return git(dir, args...) }
+
 // Runs a git command like git, with extra environment entries appended
 // after the constructed hermetic environment.
 func gitEnv(dir string, env []string, args ...string) (string, error) {
@@ -182,12 +185,21 @@ func gitEnv(dir string, env []string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Reports the status git exited with, or -1 when it never got to
-// exit -- "git answered no" versus "git could not answer".
-func gitExitCode(err error) int {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return exit.ExitCode()
+func RunEnv(dir string, env []string, args ...string) (string, error) {
+	return gitEnv(dir, env, args...)
+}
+
+func gitStdin(dir, stdin string, args ...string) (string, error) {
+	cmd := newGitCmd(dir, append(hermeticConfig, args...))
+	defer cmd.cancel()
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", cmd.fail(args, err, out)
 	}
-	return -1
+	return strings.TrimSpace(string(out)), nil
+}
+
+func RunStdin(dir, stdin string, args ...string) (string, error) {
+	return gitStdin(dir, stdin, args...)
 }

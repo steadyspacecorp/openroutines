@@ -17,6 +17,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/lock"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
@@ -36,6 +37,7 @@ func Schedulable(r *routine.Routine) bool {
 type Supervisor struct {
 	Dir string
 
+	repo      *repository.Repository
 	store     *knowledge.Store
 	noOrigin  bool
 	loc       *time.Location
@@ -93,6 +95,7 @@ func New(dir string) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
+	repo := repository.Open(dir)
 	store := knowledge.NewStore(dir)
 	knowledgeMu, err := lock.Locker(dir, "knowledge")
 	if err != nil {
@@ -104,14 +107,15 @@ func New(dir string) (*Supervisor, error) {
 	}
 	return &Supervisor{
 		Dir:         dir,
+		repo:        repo,
 		store:       store,
 		knowledgeMu: knowledgeMu,
 		loc:         loc,
 		retention:   retention,
 		noOrigin:    !store.HasOrigin(),
 		lease: leaseKeeper{
-			instanceID: knowledge.InstanceID(),
-			ttl:        knowledge.LeaseTTL,
+			instanceID: instanceID(),
+			ttl:        leaseTTL,
 		},
 		pool: runPool{
 			slots:          slots,
@@ -146,13 +150,8 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	if err := VerifyKeyDelivery(); err != nil {
 		return err
 	}
-	if configured, err := knowledge.ConfigureDeployKey(); err != nil {
-		return fmt.Errorf("deploy key: %w", err)
-	} else if configured {
-		if knowledge.ConfigureOriginRewrite(s.Dir) {
-			slog.Info("routing the https origin through the deploy key")
-		}
-		slog.Info("deploy key configured for knowledge sync")
+	if err := s.repo.ConfigureAuthentication(); err != nil {
+		return err
 	}
 	// Under knowledgeMu: first-boot materialization must not race a manual run's
 	// own locked Ensure.
@@ -169,7 +168,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		if err := s.acquireLease(ctx); err != nil {
 			return err
 		}
-		defer func() { s.store.ReleaseLease(s.lease.sha) }()
+		defer func() { s.repo.ReleaseLease(s.lease.sha) }()
 	}
 	slog.Info("supervising", "dir", s.Dir, "instance", s.lease.instanceID, "tick", TickInterval)
 	if err := verifyIsolation(); err != nil {

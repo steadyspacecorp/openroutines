@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 )
 
 // The record streams the retention window applies to.
@@ -99,7 +101,7 @@ func (store *Store) Trim(keep time.Duration, now time.Time) (bool, error) {
 // Maps 1-based line numbers to their commit times.
 // Uncommitted lines are absent from the map (and therefore kept).
 func blameLineTimes(worktree, file string) (map[int]time.Time, error) {
-	out, err := git(worktree, "blame", "--line-porcelain", "--", file)
+	out, err := repository.Run(worktree, "blame", "--line-porcelain", "--", file)
 	if err != nil {
 		return nil, err
 	}
