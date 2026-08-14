@@ -1,8 +1,10 @@
 package sandbox
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,47 @@ import (
 )
 
 const envRequireSandbox = "OPENROUTINES_REQUIRE_SANDBOX"
+
+type probeBackend struct{ name string }
+
+func (b probeBackend) Name() string                                { return b.name }
+func (probeBackend) Capabilities() Capabilities                    { return Capabilities{} }
+func (probeBackend) Command(Attempt, ...string) (*exec.Cmd, error) { return nil, nil }
+
+func TestSandboxProbeResultsAreLoggedTogether(t *testing.T) {
+	var logs bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(original) })
+
+	backends := []Backend{probeBackend{"first"}, probeBackend{"second"}}
+	selected, err := probeCandidates(backends, func(b Backend) error {
+		if b.Name() == "first" {
+			return errors.New("not supported here")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Name() != "second" {
+		t.Fatalf("selected %q, want second", selected.Name())
+	}
+	got := logs.String()
+	for _, want := range []string{
+		`msg="run sandbox probes complete"`,
+		`probes.first=false`,
+		`probes.second=true`,
+		`selected=second`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in logs:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "\n") != 1 {
+		t.Errorf("expected one probe summary, got:\n%s", got)
+	}
+}
 
 // TestMain answers the landlock rung's re-exec the way the production binary
 // does: that rung confines an attempt by re-entering whatever binary spawned

@@ -60,18 +60,13 @@ func verifyIsolation() error {
 		// A lower rung is a difference in degree; no rung at all is a difference
 		// in kind, because an unconfined model process shares a uid and a
 		// filesystem with every peer run and with the supervisor holding the keys.
-		rung, err := sandbox.Verify()
+		_, err := sandbox.Verify()
 		switch {
 		case errors.Is(err, sandbox.ErrDisabled):
 			slog.Warn("run sandbox disabled -- model processes run unconfined", "disabled_by", sandbox.EnvDisable)
 		case err != nil:
-			// Which mechanism failed is for whoever is debugging the host, not
-			// for the operator being told their agent will not start.
-			slog.Debug("no run sandbox could be built here", "detail", err)
+			slog.Error("no run sandbox could be built here", "detail", err)
 			return fmt.Errorf("runs cannot be isolated on this host -- see docs/operating.md, or set %s=1 to run without a sandbox", sandbox.EnvDisable)
-		default:
-			// Which rung won is an implementation detail, not an operator's choice.
-			slog.Debug("run sandbox active for model processes", "rung", rung.Name())
 		}
 	case mode.LocalNative:
 		slog.Warn("OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
