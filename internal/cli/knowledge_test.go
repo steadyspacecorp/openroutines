@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
 func knowledgeAgent(t *testing.T) string {
@@ -69,6 +72,32 @@ func TestKnowledgeStatsAndListReadOriginWithoutMaterializing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "knowledge")); !os.IsNotExist(err) {
 		t.Fatalf("inspection materialized local knowledge: %v", err)
+	}
+}
+
+func TestKnowledgeSummaryRefusesAKeyFileTheSandboxWouldGrant(t *testing.T) {
+	dir := knowledgeAgent(t)
+	t.Chdir(dir)
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(creds.EnvMasterKeyFile, "/usr/local/etc/master.key")
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = w
+	code := cmdKnowledge([]string{"summarize", "--yes"})
+	os.Stderr = stderr
+	w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code == 0 {
+		t.Fatal("a master key inside the granted read-only OS was accepted")
+	}
+	if !strings.Contains(string(out), creds.EnvMasterKeyFile) {
+		t.Fatalf("the refusal should be the key preflight, not a later failure: %s", out)
 	}
 }
 
