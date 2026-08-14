@@ -2,9 +2,9 @@ package knowledge
 
 import (
 	"fmt"
-	"os"
 	"strings"
-	"time"
+
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 )
 
 type SyncReport struct {
@@ -18,7 +18,7 @@ type SyncReport struct {
 }
 
 func (store *Store) HasOrigin() bool {
-	_, err := git(store.repoDir, "remote", "get-url", "origin")
+	_, err := repository.Run(store.repoDir, "remote", "get-url", "origin")
 	return err == nil
 }
 
@@ -30,22 +30,22 @@ const acceptedRef = "refs/openroutines/accepted"
 // Returns the last accepted knowledge tip recorded on origin, ""
 // when none has been recorded yet (pre-upgrade repos, first boot).
 func (store *Store) AcceptedTip() string {
-	if _, err := git(store.repoDir, "fetch", "--quiet", "origin", "+"+acceptedRef+":"+acceptedRef); err != nil {
+	if _, err := repository.Run(store.repoDir, "fetch", "--quiet", "origin", "+"+acceptedRef+":"+acceptedRef); err != nil {
 		return ""
 	}
-	tip, _ := git(store.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
+	tip, _ := repository.Run(store.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
 	return tip
 }
 
 // Publishes tip as the new accepted baseline (best effort --
 // the next sync simply re-verifies from the previous baseline).
 func (store *Store) recordAccepted(tip string) {
-	current, _ := git(store.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
+	current, _ := repository.Run(store.repoDir, "rev-parse", "--verify", "--quiet", acceptedRef)
 	if current == tip {
 		return
 	}
-	if _, err := git(store.repoDir, "push", "--quiet", "origin", "+"+tip+":"+acceptedRef); err == nil {
-		_, _ = git(store.repoDir, "update-ref", acceptedRef, tip)
+	if _, err := repository.Run(store.repoDir, "push", "--quiet", "origin", "+"+tip+":"+acceptedRef); err == nil {
+		_, _ = repository.Run(store.repoDir, "update-ref", acceptedRef, tip)
 	}
 }
 
@@ -57,7 +57,7 @@ func (store *Store) Sync() SyncReport {
 	if !store.HasOrigin() {
 		return SyncReport{NoOrigin: true}
 	}
-	if _, err := git(store.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); err != nil {
+	if _, err := repository.Run(store.repoDir, "ls-remote", "--exit-code", "origin", "refs/heads/"+Branch); err != nil {
 		if strings.Contains(err.Error(), "exit status 2") {
 			return SyncReport{RemoteMissing: true} // first push will create it
 		}
@@ -68,12 +68,12 @@ func (store *Store) Sync() SyncReport {
 	// that predate it.
 	oldTip := store.AcceptedTip()
 	if oldTip == "" {
-		oldTip, _ = git(store.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch)
+		oldTip, _ = repository.Run(store.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch)
 	}
-	if _, err := git(store.repoDir, "fetch", "--quiet", "origin", Branch); err != nil {
+	if _, err := repository.Run(store.repoDir, "fetch", "--quiet", "origin", Branch); err != nil {
 		return SyncReport{Unreachable: true, Detail: err.Error()}
 	}
-	newTip, err := git(store.repoDir, "rev-parse", "refs/remotes/origin/"+Branch)
+	newTip, err := repository.Run(store.repoDir, "rev-parse", "refs/remotes/origin/"+Branch)
 	if err != nil {
 		return SyncReport{Unreachable: true, Detail: err.Error()}
 	}
@@ -81,7 +81,7 @@ func (store *Store) Sync() SyncReport {
 		return SyncReport{Rewritten: true, Detail: fmt.Sprintf("origin/%s rewritten: %s no longer reachable from %s", Branch, short(oldTip), short(newTip))}
 	}
 
-	local, err := git(wt, "rev-parse", "HEAD")
+	local, err := repository.Run(wt, "rev-parse", "HEAD")
 	if err != nil {
 		return SyncReport{Detail: err.Error()}
 	}
@@ -91,7 +91,7 @@ func (store *Store) Sync() SyncReport {
 		return SyncReport{}
 	case isAncestor(store.repoDir, local, newTip):
 		// Behind: fast-forward only.
-		if _, err := git(wt, "merge", "--ff-only", "--quiet", newTip); err != nil {
+		if _, err := repository.Run(wt, "merge", "--ff-only", "--quiet", newTip); err != nil {
 			return SyncReport{Conflict: true, Detail: err.Error()}
 		}
 		store.recordAccepted(newTip)
@@ -100,8 +100,8 @@ func (store *Store) Sync() SyncReport {
 		return SyncReport{} // ahead: the next push carries it
 	default:
 		// Diverged (human curation raced local commits): rebase ours on top.
-		if _, err := git(wt, "rebase", "--quiet", newTip); err != nil {
-			_, _ = git(wt, "rebase", "--abort")
+		if _, err := repository.Run(wt, "rebase", "--quiet", newTip); err != nil {
+			_, _ = repository.Run(wt, "rebase", "--abort")
 			return SyncReport{Conflict: true, Detail: err.Error()}
 		}
 		store.recordAccepted(newTip)
@@ -117,10 +117,10 @@ func (store *Store) Push() error {
 		return nil
 	}
 	wt := store.Worktree()
-	if _, err := git(wt, "push", "--quiet", "origin", Branch); err != nil {
+	if _, err := repository.Run(wt, "push", "--quiet", "origin", Branch); err != nil {
 		return err
 	}
-	if tip, err := git(wt, "rev-parse", "HEAD"); err == nil {
+	if tip, err := repository.Run(wt, "rev-parse", "HEAD"); err == nil {
 		store.recordAccepted(tip)
 	}
 	return nil
@@ -148,16 +148,16 @@ func (store *Store) PublishBlocked() error {
 	if !store.HasOrigin() {
 		return nil
 	}
-	tree, err := git(store.repoDir, "rev-parse", "refs/heads/"+Branch+"^{tree}")
+	tree, err := repository.Run(store.repoDir, "rev-parse", "refs/heads/"+Branch+"^{tree}")
 	if err != nil {
 		return err
 	}
-	snap, err := git(store.repoDir, "commit-tree", tree, "-m",
+	snap, err := repository.Run(store.repoDir, "commit-tree", tree, "-m",
 		"Knowledge the agent could not publish: sync to origin/"+Branch+" is blocked")
 	if err != nil {
 		return err
 	}
-	_, err = git(store.repoDir, "push", "--quiet", "origin", "+"+snap+":"+BlockedRef)
+	_, err = repository.Run(store.repoDir, "push", "--quiet", "origin", "+"+snap+":"+BlockedRef)
 	return err
 }
 
@@ -165,26 +165,26 @@ func (store *Store) PublishBlocked() error {
 // the same state on the branch itself. Best effort: a ref left behind costs
 // nothing but a second copy of what the branch already carries.
 func (store *Store) ClearBlocked() {
-	_, _ = git(store.repoDir, "push", "--quiet", "origin", ":"+BlockedRef)
+	_, _ = repository.Run(store.repoDir, "push", "--quiet", "origin", ":"+BlockedRef)
 }
 
 // Reports what a blocked supervisor stranded on origin. Fetching is
 // part of the answer: the ref is outside the namespaces git replicates, so
 // nothing else in a checkout would ever show it.
 func (store *Store) Blocked() BlockedSnapshot {
-	if _, err := git(store.repoDir, "fetch", "--quiet", "origin", "+"+BlockedRef+":"+BlockedRef); err != nil {
+	if _, err := repository.Run(store.repoDir, "fetch", "--quiet", "origin", "+"+BlockedRef+":"+BlockedRef); err != nil {
 		return BlockedSnapshot{}
 	}
-	tip, err := git(store.repoDir, "rev-parse", "--verify", "--quiet", BlockedRef)
+	tip, err := repository.Run(store.repoDir, "rev-parse", "--verify", "--quiet", BlockedRef)
 	if err != nil || tip == "" {
 		return BlockedSnapshot{}
 	}
-	when, _ := git(store.repoDir, "log", "-1", "--format=%cI", tip)
+	when, _ := repository.Run(store.repoDir, "log", "-1", "--format=%cI", tip)
 	return BlockedSnapshot{Tip: tip, When: when}
 }
 
 func isAncestor(repoDir, a, b string) bool {
-	cmdOut, err := git(repoDir, "merge-base", "--is-ancestor", a, b)
+	cmdOut, err := repository.Run(repoDir, "merge-base", "--is-ancestor", a, b)
 	_ = cmdOut
 	return err == nil
 }
@@ -194,108 +194,4 @@ func short(sha string) string {
 		return sha[:8]
 	}
 	return sha
-}
-
-// --- Lease: "one writer" enforced, not assumed -------------------------------
-
-// The lease: a single-writer heartbeat ref with a bounded TTL. Heartbeats
-// happen per dispatch and on a quarter-TTL cadence during runs, so the TTL
-// bounds takeover latency, not run length.
-const (
-	leaseRef = "refs/openroutines/lease"
-	LeaseTTL = 30 * time.Minute
-)
-
-func leaseContent(instanceID string, now time.Time) string {
-	return fmt.Sprintf("%s %s\n", instanceID, now.Format(time.RFC3339Nano))
-}
-
-// The current holder's heartbeat, plus the blob SHA used as the
-// compare-and-swap token for atomic takeover.
-type Lease struct {
-	Holder string
-	At     time.Time
-	SHA    string
-}
-
-// Fetches the current lease from origin; nil when none exists.
-func (store *Store) ReadLease() (*Lease, error) {
-	if _, lerr := git(store.repoDir, "fetch", "--quiet", "origin", "+"+leaseRef+":"+leaseRef); lerr != nil {
-		if strings.Contains(lerr.Error(), "couldn't find remote ref") {
-			return nil, nil
-		}
-		return nil, lerr
-	}
-	sha, err := git(store.repoDir, "rev-parse", leaseRef)
-	if err != nil {
-		return nil, err
-	}
-	content, cerr := git(store.repoDir, "cat-file", "blob", leaseRef)
-	if cerr != nil {
-		return nil, cerr
-	}
-	fields := strings.Fields(content)
-	if len(fields) != 2 {
-		return nil, fmt.Errorf("malformed lease %q", content)
-	}
-	at, err := parseLeaseTime(fields[1])
-	if err != nil {
-		return nil, err
-	}
-	return &Lease{Holder: fields[0], At: at, SHA: sha}, nil
-}
-
-func parseLeaseTime(value string) (time.Time, error) {
-	if at, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return at, nil
-	}
-	var unix int64
-	if _, err := fmt.Sscanf(value, "%d", &unix); err != nil {
-		return time.Time{}, err
-	}
-	return time.Unix(unix, 0), nil
-}
-
-// Publishes this instance's heartbeat atomically: the push
-// succeeds only if origin's lease is still exactly expectedSHA (empty means
-// "must not exist"). Two instances racing for the same lease cannot both
-// win. Returns the new lease SHA for the next renewal's expectation.
-func (store *Store) WriteLease(instanceID string, now time.Time, expectedSHA string) (string, error) {
-	blob, err := gitStdin(store.repoDir, leaseContent(instanceID, now), "hash-object", "-w", "--stdin")
-	if err != nil {
-		return "", err
-	}
-	cas := "--force-with-lease=" + leaseRef + ":" + expectedSHA
-	if _, err := git(store.repoDir, "push", "--quiet", cas, "origin", blob+":"+leaseRef); err != nil {
-		return "", err
-	}
-	return blob, nil
-}
-
-// Removes this instance's lease (best effort), but only if it
-// is still the one this instance last wrote -- unconditional deletion let a
-// stale instance delete the new holder's live lease. ownedSHA "" means this
-// instance never held it.
-func (store *Store) ReleaseLease(ownedSHA string) {
-	if ownedSHA == "" {
-		return
-	}
-	_, _ = git(store.repoDir, "push", "--quiet", "--force-with-lease="+leaseRef+":"+ownedSHA, "origin", ":"+leaseRef)
-}
-
-func gitStdin(dir, stdin string, args ...string) (string, error) {
-	cmd := newGitCmd(dir, append(hermeticConfig, args...))
-	defer cmd.cancel()
-	cmd.Stdin = strings.NewReader(stdin)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", cmd.fail(args, err, out)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// Identifies this supervisor process for the lease.
-func InstanceID() string {
-	host, _ := os.Hostname()
-	return fmt.Sprintf("%s-%d", host, os.Getpid())
 }

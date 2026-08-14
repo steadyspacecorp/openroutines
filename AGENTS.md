@@ -16,7 +16,7 @@ Add a Decision/Why entry to docs/design.md only for a durable behavior choice wh
 ## Ownership
 
 - `template/` is embedded into the CLI and is the source of every scaffolded agent.
-- `supervisor` plans and coordinates runs; `runner` prepares, executes, and settles attempts; `knowledge` owns persistence and import; `run` owns run identities and the persisted attempt record schema.
+- `supervisor` plans and coordinates runs; `runner` prepares, executes, and settles attempts; `repository` owns runtime Git initialization, authentication, execution, and lease persistence; `knowledge` owns the knowledge branch, worktree, persistence, and import; `run` owns run identities and the persisted attempt record schema.
 
 ## System invariants
 

@@ -14,6 +14,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
@@ -152,14 +153,14 @@ func newSupervisor(t *testing.T, dir string) *Supervisor {
 func usurpLease(t *testing.T, s *Supervisor) (stop func()) {
 	t.Helper()
 	take := func() error {
-		lease, err := s.store.ReadLease()
+		lease, err := s.repo.ReadLease()
 		if err != nil {
 			return err
 		}
 		if lease == nil {
 			return fmt.Errorf("no lease to usurp")
 		}
-		_, err = s.store.WriteLease("usurper", time.Now(), lease.SHA)
+		_, err = s.repo.WriteLease("usurper", time.Now(), lease.SHA)
 		return err
 	}
 	var err error
@@ -1482,7 +1483,7 @@ func TestBootWarnsOnEnvDeliveredKeys(t *testing.T) {
 	logs := logtest.Capture(t)
 
 	t.Setenv(creds.EnvMasterKey, creds.GenerateKey())
-	t.Setenv(knowledge.EnvDeployKey, "PRIVATE KEY") // gitleaks:allow -- a placeholder, not a key
+	t.Setenv(repository.EnvDeployKey, "PRIVATE KEY") // gitleaks:allow -- a placeholder, not a key
 	if err := VerifyKeyDelivery(); err != nil {
 		t.Fatal(err)
 	}
@@ -1494,7 +1495,7 @@ func TestBootWarnsOnEnvDeliveredKeys(t *testing.T) {
 	if err := VerifyKeyDelivery(); err != nil {
 		t.Fatal(err)
 	}
-	logs.Expect(creds.EnvMasterKeyFile, knowledge.EnvDeployKeyFile)
+	logs.Expect(creds.EnvMasterKeyFile, repository.EnvDeployKeyFile)
 
 	keyFile := filepath.Join(t.TempDir(), "master.key")
 	if err := os.WriteFile(keyFile, []byte(creds.GenerateKey()), 0o600); err != nil {
@@ -1508,7 +1509,7 @@ func TestBootWarnsOnEnvDeliveredKeys(t *testing.T) {
 	logs.Expect(creds.EnvMasterKey)
 
 	t.Setenv(creds.EnvMasterKey, "")
-	t.Setenv(knowledge.EnvDeployKey, "")
+	t.Setenv(repository.EnvDeployKey, "")
 	logs.Reset()
 	if err := VerifyKeyDelivery(); err != nil {
 		t.Fatal(err)
@@ -1547,7 +1548,7 @@ func TestBootRunsUnconfinedWhenTheOperatorDisablesTheSandbox(t *testing.T) {
 func TestBootRefusesAKeyFileTheSandboxWouldGrant(t *testing.T) {
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
 	t.Setenv(creds.EnvMasterKeyFile, "/run/secrets/master.key")
-	t.Setenv(knowledge.EnvDeployKeyFile, "")
+	t.Setenv(repository.EnvDeployKeyFile, "")
 	if err := VerifyKeyDelivery(); err != nil {
 		t.Errorf("a key outside every granted path is the supported deployment: %v", err)
 	}
@@ -1562,14 +1563,14 @@ func TestBootRefusesAKeyFileTheSandboxWouldGrant(t *testing.T) {
 	}
 
 	t.Setenv(creds.EnvMasterKeyFile, "")
-	t.Setenv(knowledge.EnvDeployKeyFile, "/etc/ld.so.conf.d/deploy")
+	t.Setenv(repository.EnvDeployKeyFile, "/etc/ld.so.conf.d/deploy")
 	if err := VerifyKeyDelivery(); err == nil {
 		t.Fatal("a deploy key inside a granted /etc entry was accepted")
 	}
 
 	// /etc is granted by named entry, so a secrets directory a host mounts
 	// under it is not one of them.
-	t.Setenv(knowledge.EnvDeployKeyFile, "/etc/secrets/deploy")
+	t.Setenv(repository.EnvDeployKeyFile, "/etc/secrets/deploy")
 	if err := VerifyKeyDelivery(); err != nil {
 		t.Errorf("a platform secrets directory under /etc is a supported location: %v", err)
 	}

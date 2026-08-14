@@ -7,8 +7,8 @@ import (
 	"os"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/mode"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
@@ -17,7 +17,7 @@ import (
 // answers the same two questions.
 var supervisorKeys = []struct{ what, valueEnv, fileEnv string }{
 	{"master key", creds.EnvMasterKey, creds.EnvMasterKeyFile},
-	{"deploy key", knowledge.EnvDeployKey, knowledge.EnvDeployKeyFile},
+	{"deploy key", repository.EnvDeployKey, repository.EnvDeployKeyFile},
 }
 
 // VerifyKeyDelivery inspects how the supervisor's own secrets arrived, in

@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	openroutines "github.com/steadyspacecorp/openroutines"
 	"github.com/steadyspacecorp/openroutines/internal/avatar"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
@@ -96,21 +96,11 @@ func cmdNew(args []string) int {
 
 	// A fresh agent is a fresh git repo with the scaffold as its initial
 	// commit, so later changes land as a reviewable diff.
-	if out, err := exec.Command("git", "init", "--quiet", "--initial-branch=main", target).CombinedOutput(); err != nil {
-		return fail(fmt.Errorf("git init: %w: %s", err, out))
-	}
-	git := func(args ...string) error {
-		cmd := exec.Command("git", append([]string{"-C", target}, args...)...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
-		}
-		return nil
-	}
-	if err := git("add", "-A"); err != nil {
+	repo, err := repository.Initialize(target)
+	if err != nil {
 		return fail(err)
 	}
-	if err := git("-c", "user.name=openroutines", "-c", "user.email=agent@openroutines.dev", "commit", "--quiet", "-m", "Scaffold agent "+name); err != nil {
+	if err := repo.CommitAll("Scaffold agent " + name); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not create the initial commit: %v\n", err)
 	}
 

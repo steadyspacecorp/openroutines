@@ -1,4 +1,4 @@
-package knowledge
+package repository
 
 import (
 	"fmt"
@@ -32,6 +32,8 @@ var originRewrite []string
 // a key was configured. Host keys are trusted on first use (accept-new);
 // pinning is tracked in the hardening backlog.
 func ConfigureDeployKey() (bool, error) {
+	sshCommand = ""
+	originRewrite = nil
 	key := ""
 	if path := os.Getenv(EnvDeployKeyFile); path != "" {
 		raw, err := os.ReadFile(path)
@@ -93,7 +95,7 @@ func ConfigureOriginRewrite(repoDir string) bool {
 	if sshCommand == "" {
 		return false
 	}
-	raw, err := git(repoDir, "remote", "get-url", "origin")
+	raw, err := Run(repoDir, "remote", "get-url", "origin")
 	if err != nil {
 		return false
 	}

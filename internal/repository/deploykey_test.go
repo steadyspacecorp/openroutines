@@ -1,8 +1,6 @@
-package knowledge
+package repository
 
-import (
-	"testing"
-)
+import "testing"
 
 // A repository whose only interesting property is its origin
 // URL. `ls-remote --get-url` is git's own answer to "what would you connect
@@ -10,8 +8,12 @@ import (
 func originRepo(t *testing.T, origin string) string {
 	t.Helper()
 	dir := t.TempDir()
-	gitT(t, dir, "init", "-q", "-b", "main", dir)
-	gitT(t, dir, "remote", "add", "origin", origin)
+	if _, err := git(dir, "init", "-q", "-b", "main", dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git(dir, "remote", "add", "origin", origin); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
@@ -39,6 +41,17 @@ func TestOriginRewriteRoutesHTTPSOriginThroughDeployKey(t *testing.T) {
 	ConfigureOriginRewrite(dir)
 
 	if got, want := resolvedOrigin(t, dir), "git@github.com:acme/agent.git"; got != want {
+		t.Errorf("origin resolves to %q, want %q", got, want)
+	}
+}
+
+func TestOriginRewriteUsesTheOriginsSSHHostOutsideGitHub(t *testing.T) {
+	withDeployKey(t)
+	dir := originRepo(t, "https://git.acme.test/acme/agent.git")
+
+	ConfigureOriginRewrite(dir)
+
+	if got, want := resolvedOrigin(t, dir), "git@git.acme.test:acme/agent.git"; got != want {
 		t.Errorf("origin resolves to %q, want %q", got, want)
 	}
 }

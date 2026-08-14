@@ -1,11 +1,13 @@
 package knowledge
 
 import (
-	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/steadyspacecorp/openroutines/internal/creds"
+	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
 // Supervisor-written entries are committed and pushed, so a secret quoted in
@@ -22,7 +24,7 @@ func TestSupervisorEntriesRedactSecrets(t *testing.T) {
 	if _, err := creds.LoadKey(dir); err != nil {
 		t.Fatal(err)
 	}
-	registerDeployKey("-----BEGIN OPENSSH PRIVATE KEY-----\n" + deployKeyLine + "\n-----END OPENSSH PRIVATE KEY-----") // gitleaks:allow -- synthetic fixture
+	scrub.Register(map[string]string{"DEPLOY_KEY": deployKeyLine})
 
 	if err := NewStore(dir).AppendEvent("2026-07-29 supervisor: push failed with key " + deployKeyLine + " and master key " + masterKey); err != nil {
 		t.Fatal(err)
