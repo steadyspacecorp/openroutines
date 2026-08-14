@@ -169,9 +169,6 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Run executes Git with the repository's fixed child environment and config.
-func Run(dir string, args ...string) (string, error) { return git(dir, args...) }
-
 // Runs a git command like git, with extra environment entries appended
 // after the constructed hermetic environment.
 func gitEnv(dir string, env []string, args ...string) (string, error) {
@@ -185,8 +182,14 @@ func gitEnv(dir string, env []string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func RunEnv(dir string, env []string, args ...string) (string, error) {
-	return gitEnv(dir, env, args...)
+// Reports the status git exited with, or -1 when it never got to
+// exit -- "git answered no" versus "git could not answer".
+func gitExitCode(err error) int {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	return -1
 }
 
 func gitStdin(dir, stdin string, args ...string) (string, error) {
@@ -198,8 +201,4 @@ func gitStdin(dir, stdin string, args ...string) (string, error) {
 		return "", cmd.fail(args, err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
-}
-
-func RunStdin(dir, stdin string, args ...string) (string, error) {
-	return gitStdin(dir, stdin, args...)
 }

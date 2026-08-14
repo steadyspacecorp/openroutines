@@ -38,7 +38,7 @@ func TestOriginRewriteRoutesHTTPSOriginThroughDeployKey(t *testing.T) {
 	withDeployKey(t)
 	dir := originRepo(t, "https://github.com/acme/agent.git")
 
-	ConfigureOriginRewrite(dir)
+	Open(dir).configureOriginRewrite()
 
 	if got, want := resolvedOrigin(t, dir), "git@github.com:acme/agent.git"; got != want {
 		t.Errorf("origin resolves to %q, want %q", got, want)
@@ -49,7 +49,7 @@ func TestOriginRewriteUsesTheOriginsSSHHostOutsideGitHub(t *testing.T) {
 	withDeployKey(t)
 	dir := originRepo(t, "https://git.acme.test/acme/agent.git")
 
-	ConfigureOriginRewrite(dir)
+	Open(dir).configureOriginRewrite()
 
 	if got, want := resolvedOrigin(t, dir), "git@git.acme.test:acme/agent.git"; got != want {
 		t.Errorf("origin resolves to %q, want %q", got, want)
@@ -68,7 +68,7 @@ func TestOriginRewriteLeavesOriginsTheDeployKeyCannotServe(t *testing.T) {
 			withDeployKey(t)
 			dir := originRepo(t, origin)
 
-			ConfigureOriginRewrite(dir)
+			Open(dir).configureOriginRewrite()
 
 			if got := resolvedOrigin(t, dir); got != origin {
 				t.Errorf("origin resolves to %q, want it untouched (%q)", got, origin)
@@ -82,7 +82,7 @@ func TestOriginRewriteRequiresADeployKey(t *testing.T) {
 	sshCommand = ""
 	dir := originRepo(t, "https://github.com/acme/agent.git")
 
-	ConfigureOriginRewrite(dir)
+	Open(dir).configureOriginRewrite()
 
 	if got := resolvedOrigin(t, dir); got != "https://github.com/acme/agent.git" {
 		t.Errorf("origin rewritten without a deploy key to authenticate it: %q", got)

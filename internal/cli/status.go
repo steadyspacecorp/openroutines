@@ -172,7 +172,7 @@ func printKnowledgeStatus(dir string) {
 		}
 		printConsumerStatus(store)
 	}
-	if !store.HasOrigin() {
+	if !status.Durable {
 		fmt.Printf("  %s no git origin -- knowledge is not durable until one is set\n", warnMark)
 	}
 }

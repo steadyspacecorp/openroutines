@@ -17,6 +17,8 @@ import (
 func (s *Supervisor) syncOnce() {
 	rep := s.store.Sync()
 	switch {
+	case rep.LocalOnly:
+		return
 	case rep.Rewritten:
 		s.blockers.syncBlocked = true
 		s.blockOnce("sync", "knowledge branch history rewritten on origin -- sync stopped, running on local state", errors.New(rep.Detail), &s.blockers.syncWarned)
@@ -153,9 +155,6 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 // blocked the record goes to the supervisor-owned blocked ref instead; once
 // the branch carries the same state, the stranded copy is dropped.
 func (s *Supervisor) pushBestEffort() {
-	if s.noOrigin {
-		return
-	}
 	if s.blockers.syncBlocked {
 		s.strandBlocked()
 		return

@@ -20,7 +20,7 @@ type OriginSnapshot struct {
 	Dir       string
 	Commit    string
 	FetchedAt time.Time
-	repoDir   string
+	repo      *repository.Repository
 }
 
 // SnapshotFile is one regular file in a snapshot.
@@ -59,13 +59,13 @@ type SnapshotRelation struct {
 // a temporary directory. Unlike Sync it neither reads nor changes the local
 // knowledge worktree.
 func (store *Store) FetchOriginSnapshot() (*OriginSnapshot, error) {
-	if !store.HasOrigin() {
+	if !store.repo.Remote() {
 		return nil, errors.New("no origin remote -- knowledge exists locally only")
 	}
-	if _, err := repository.Run(store.repoDir, "fetch", "--quiet", "origin", Branch); err != nil {
+	if _, err := store.repo.Run("fetch", "--quiet", "origin", Branch); err != nil {
 		return nil, fmt.Errorf("fetching origin/%s: %w", Branch, err)
 	}
-	commit, err := repository.Run(store.repoDir, "rev-parse", "refs/remotes/origin/"+Branch)
+	commit, err := store.repo.Run("rev-parse", "refs/remotes/origin/"+Branch)
 	if err != nil {
 		return nil, fmt.Errorf("origin has no %s branch", Branch)
 	}
@@ -77,7 +77,7 @@ func (store *Store) FetchOriginSnapshot() (*OriginSnapshot, error) {
 	// repository's own, which would leave the whole branch staged there. A
 	// scratch index keeps the read-only export read-only.
 	index := filepath.Join(dir, ".openroutines-export-index")
-	if _, err := repository.RunEnv(store.repoDir, []string{"GIT_INDEX_FILE=" + index}, "--work-tree="+dir, "checkout", "--quiet", commit, "--", "."); err != nil {
+	if _, err := store.repo.RunEnv([]string{"GIT_INDEX_FILE=" + index}, "--work-tree="+dir, "checkout", "--quiet", commit, "--", "."); err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("exporting origin/%s: %w", Branch, err)
 	}
@@ -85,7 +85,7 @@ func (store *Store) FetchOriginSnapshot() (*OriginSnapshot, error) {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("exporting origin/%s: %w", Branch, err)
 	}
-	return &OriginSnapshot{Dir: dir, Commit: commit, FetchedAt: time.Now(), repoDir: store.repoDir}, nil
+	return &OriginSnapshot{Dir: dir, Commit: commit, FetchedAt: time.Now(), repo: store.repo}, nil
 }
 
 // Close removes the exported temporary tree.
@@ -100,7 +100,7 @@ func (s *OriginSnapshot) ChangesSince(cutoff time.Time) (string, error) {
 		"--format=commit %H%nwhen %cI%nsubject %s", "-p", "-U1", "--no-color",
 		"--since=" + cutoff.Format(time.RFC3339), s.Commit, "--", ".",
 	}, deliveryExcludes...)
-	out, err := repository.Run(s.repoDir, args...)
+	out, err := s.repo.Run(args...)
 	if err != nil {
 		return "", err
 	}
@@ -118,17 +118,17 @@ func (s *OriginSnapshot) Relation(store *Store) SnapshotRelation {
 	if !status.Materialized {
 		return r
 	}
-	local, err := repository.Run(store.Worktree(), "rev-parse", "HEAD")
+	local, err := store.worktree.Run("rev-parse", "HEAD")
 	if err != nil || local == s.Commit {
 		return r
 	}
-	if isAncestor(s.repoDir, local, s.Commit) {
-		out, _ := repository.Run(s.repoDir, "rev-list", "--count", local+".."+s.Commit)
+	if behind, _ := s.repo.IsAncestor(local, s.Commit); behind {
+		out, _ := s.repo.Run("rev-list", "--count", local+".."+s.Commit)
 		r.Behind, _ = strconv.Atoi(out)
 		return r
 	}
-	if isAncestor(s.repoDir, s.Commit, local) {
-		out, _ := repository.Run(s.repoDir, "rev-list", "--count", s.Commit+".."+local)
+	if ahead, _ := s.repo.IsAncestor(s.Commit, local); ahead {
+		out, _ := s.repo.Run("rev-list", "--count", s.Commit+".."+local)
 		r.Ahead, _ = strconv.Atoi(out)
 		return r
 	}
@@ -212,7 +212,7 @@ func (s *OriginSnapshot) resolve(rel string) (string, error) {
 }
 
 func (s *OriginSnapshot) fileChanged(path string) (time.Time, error) {
-	out, err := repository.Run(s.repoDir, "log", "-1", "--format=%cI", s.Commit, "--", path)
+	out, err := s.repo.Run("log", "-1", "--format=%cI", s.Commit, "--", path)
 	if err != nil || out == "" {
 		return time.Time{}, err
 	}
@@ -232,7 +232,7 @@ func (s *OriginSnapshot) Stats() (SnapshotStats, error) {
 			st.LargestPath, st.LargestBytes = f.Path, f.Size
 		}
 	}
-	last, err := repository.Run(s.repoDir, "show", "-s", "--format=%cI%n%s", s.Commit)
+	last, err := s.repo.Run("show", "-s", "--format=%cI%n%s", s.Commit)
 	if err != nil {
 		return SnapshotStats{}, err
 	}
@@ -244,12 +244,12 @@ func (s *OriginSnapshot) Stats() (SnapshotStats, error) {
 	if len(parts) == 2 {
 		st.LastSubject = parts[1]
 	}
-	root, err := repository.Run(s.repoDir, "rev-list", "--max-parents=0", s.Commit)
+	root, err := s.repo.Run("rev-list", "--max-parents=0", s.Commit)
 	if err != nil {
 		return SnapshotStats{}, err
 	}
 	root = strings.Split(root, "\n")[0]
-	first, err := repository.Run(s.repoDir, "show", "-s", "--format=%cI", root)
+	first, err := s.repo.Run("show", "-s", "--format=%cI", root)
 	if err != nil {
 		return SnapshotStats{}, err
 	}
@@ -258,7 +258,7 @@ func (s *OriginSnapshot) Stats() (SnapshotStats, error) {
 		return SnapshotStats{}, err
 	}
 	st.HistoryDays = max(0, int(st.LastWrite.Sub(st.FirstWrite).Hours()/24))
-	count, err := repository.Run(s.repoDir, "rev-list", "--count", s.Commit)
+	count, err := s.repo.Run("rev-list", "--count", s.Commit)
 	if err != nil {
 		return SnapshotStats{}, err
 	}

@@ -46,7 +46,7 @@ func cmdSync(args []string) int {
 
 	rep := store.Sync()
 	switch {
-	case rep.NoOrigin:
+	case rep.LocalOnly:
 		fmt.Println("no origin -- knowledge is local only, nothing to reconcile")
 		return 0
 	case rep.RemoteMissing:

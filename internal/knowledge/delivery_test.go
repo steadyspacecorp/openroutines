@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/steadyspacecorp/openroutines/internal/repository"
 )
 
 func deliveryFixture(t *testing.T) string {
@@ -210,7 +208,7 @@ func TestChangesRejectsUnreachableCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	orphan, _ := NewStore(dir).Head()
-	if _, err := repository.Run(NewStore(dir).Worktree(), "reset", "--hard", "HEAD~1"); err != nil {
+	if _, err := NewStore(dir).worktree.Run("reset", "--hard", "HEAD~1"); err != nil {
 		t.Fatal(err)
 	}
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: the repaired fact")

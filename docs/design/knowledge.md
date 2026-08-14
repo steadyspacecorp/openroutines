@@ -15,6 +15,10 @@ Keeping knowledge off `main` means agent commits never trigger CI/CD, never race
 One agent, one runtime → one writer → pushes fast-forward in the normal case; the rare exceptions (human curation racing a run) are handled by the defensive sync rules below, never silently.
 Code rolls back; knowledge persists -- like a database, and reviewing what your agent has learned is `git log knowledge`.
 Humans may curate the branch (pruning bad learnings is part of maintaining an agent); the agent pulls before each run.
+
+The package boundary follows that contract.
+`repository` owns the root Git repository, deploy-key authentication, hermetic Git children, and persistence of the Git-backed supervisor lease; `knowledge` owns the `knowledge` branch, its worktree, sync and safety refs, staged import, and records; `supervisor` owns lease timing and takeover policy.
+A single repository handle carries root identity and remote capability through boot, knowledge, and lease operations; an attached worktree handle binds commands that operate on `knowledge/`, so callers neither pass repository directories repeatedly, re-probe Git configuration, nor branch on whether an origin happens to exist.
 By convention -- stated in the standing instruction injected into every run -- each routine keeps a ledger file named after itself (`knowledge/ledgers/<routine>.md`) recording what it examined and decided, and prunes that ledger as part of its own prompt: knowledge hygiene is part of the job description, not a framework feature.
 
 Mechanically, `knowledge/` is a **git worktree** of the `knowledge` branch, ignored by `main` and created lazily by the CLI (locally) or the supervisor (in the container) -- one directory, two histories.
@@ -156,4 +160,3 @@ Cursor-per-consumer fixes that with machinery the design already had -- every ru
 The failure mode is honest: cursor advancement and an external post are not atomic, so a crash between posting and consuming re-presents the change set -- at-least-once, same as run execution, and the same answer applies (destinations with idempotency keys or searchable artifacts dedupe; others tolerate a rare duplicate).
 What OpenRoutines promises is only that an unconsumed change remains available; duplicate prevention belongs to the adapter that knows its destination.
 (Model and problem statement: Adam's work-primitives brief, product-pal repo.)
-

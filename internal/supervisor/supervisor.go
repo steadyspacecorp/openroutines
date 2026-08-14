@@ -39,7 +39,6 @@ type Supervisor struct {
 
 	repo      *repository.Repository
 	store     *knowledge.Store
-	noOrigin  bool
 	loc       *time.Location
 	retention time.Duration
 	lastTrim  time.Time
@@ -96,7 +95,7 @@ func New(dir string) (*Supervisor, error) {
 		return nil, err
 	}
 	repo := repository.Open(dir)
-	store := knowledge.NewStore(dir)
+	store := knowledge.NewStoreForRepository(repo)
 	knowledgeMu, err := lock.Locker(dir, "knowledge")
 	if err != nil {
 		return nil, err
@@ -112,7 +111,6 @@ func New(dir string) (*Supervisor, error) {
 		knowledgeMu: knowledgeMu,
 		loc:         loc,
 		retention:   retention,
-		noOrigin:    !store.HasOrigin(),
 		lease: leaseKeeper{
 			instanceID: instanceID(),
 			ttl:        leaseTTL,
@@ -162,14 +160,10 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}(); err != nil {
 		return err
 	}
-	if s.noOrigin {
-		slog.Warn("no git origin -- knowledge is not durable and the single-instance lease is disabled (local mode)")
-	} else {
-		if err := s.acquireLease(ctx); err != nil {
-			return err
-		}
-		defer func() { s.repo.ReleaseLease(s.lease.sha) }()
+	if err := s.acquireLease(ctx); err != nil {
+		return err
 	}
+	defer func() { s.repo.ReleaseLease(s.lease.sha) }()
 	slog.Info("supervising", "dir", s.Dir, "instance", s.lease.instanceID, "tick", TickInterval)
 	if err := verifyIsolation(); err != nil {
 		return err
