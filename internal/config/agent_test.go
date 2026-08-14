@@ -9,15 +9,33 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
+// instructions is optional standing context -- absent is valid, but an
+// unfilled scaffold placeholder must never reach a run as prompt text.
+func TestInstructionsOptional(t *testing.T) {
+	a := Agent{
+		Name:     "a",
+		Owner:    Owner{Email: "o@example.com"},
+		Timezone: "UTC",
+		Defaults: Defaults{Model: "anthropic/claude-sonnet-5"},
+	}
+	if p := a.Problems(); len(p) != 0 {
+		t.Fatalf("unset instructions flagged: %v", p)
+	}
+	a.Instructions = "{{JOB_DESCRIPTION}}"
+	if p := a.Problems(); len(p) != 1 || !strings.Contains(p[0], "instructions") {
+		t.Fatalf("placeholder instructions: want one problem, got %v", p)
+	}
+}
+
 // Variable names must map cleanly onto env vars and never shadow what the
 // framework itself sets.
 func TestVariableNameValidation(t *testing.T) {
 	base := Agent{
-		Name:        "a",
-		Description: "d",
-		Owner:       Owner{Email: "o@example.com"},
-		Timezone:    "UTC",
-		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
+		Name:         "a",
+		Instructions: "d",
+		Owner:        Owner{Email: "o@example.com"},
+		Timezone:     "UTC",
+		Defaults:     Defaults{Model: "anthropic/claude-sonnet-5"},
 	}
 	valid := base
 	valid.Variables = map[string]string{"product_repo": "acme/widgets"}
@@ -43,11 +61,11 @@ func TestVariableNameValidation(t *testing.T) {
 // when absent, a reported problem (never fail-open to unlimited) when junk.
 func TestMaxTimeoutCeiling(t *testing.T) {
 	a := Agent{
-		Name:        "a",
-		Description: "d",
-		Owner:       Owner{Email: "o@example.com"},
-		Timezone:    "UTC",
-		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
+		Name:         "a",
+		Instructions: "d",
+		Owner:        Owner{Email: "o@example.com"},
+		Timezone:     "UTC",
+		Defaults:     Defaults{Model: "anthropic/claude-sonnet-5"},
 	}
 	if got := a.MaxRunTimeout(); got != DefaultMaxTimeout {
 		t.Fatalf("unset max_timeout = %s, want the %s default", got, DefaultMaxTimeout)
@@ -75,11 +93,11 @@ func TestMaxTimeoutCeiling(t *testing.T) {
 // template is what opts new agents in), and a negative value is a problem.
 func TestConcurrencyConfig(t *testing.T) {
 	a := Agent{
-		Name:        "a",
-		Description: "d",
-		Owner:       Owner{Email: "o@example.com"},
-		Timezone:    "UTC",
-		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
+		Name:         "a",
+		Instructions: "d",
+		Owner:        Owner{Email: "o@example.com"},
+		Timezone:     "UTC",
+		Defaults:     Defaults{Model: "anthropic/claude-sonnet-5"},
 	}
 	if got := a.RunSlots(); got != 1 {
 		t.Fatalf("unset concurrency = %d, want serial", got)
@@ -141,12 +159,12 @@ func TestPathResolvesLegacySpellings(t *testing.T) {
 func TestSaveUsesTwoSpaceIndent(t *testing.T) {
 	dir := t.TempDir()
 	a := Agent{
-		Name:        "a",
-		Description: "d",
-		Owner:       Owner{Name: "o", Email: "o@example.com"},
-		Timezone:    "UTC",
-		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
-		Variables:   map[string]string{"product_repo": "acme/widgets"},
+		Name:         "a",
+		Instructions: "d",
+		Owner:        Owner{Name: "o", Email: "o@example.com"},
+		Timezone:     "UTC",
+		Defaults:     Defaults{Model: "anthropic/claude-sonnet-5"},
+		Variables:    map[string]string{"product_repo": "acme/widgets"},
 	}
 	if err := a.Save(dir); err != nil {
 		t.Fatal(err)
@@ -179,11 +197,11 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 // a typed entry needs a known type and its type's configuration.
 func TestCredentialEntryValidation(t *testing.T) {
 	base := Agent{
-		Name:        "a",
-		Description: "d",
-		Owner:       Owner{Email: "o@example.com"},
-		Timezone:    "UTC",
-		Defaults:    Defaults{Model: "anthropic/claude-sonnet-5"},
+		Name:         "a",
+		Instructions: "d",
+		Owner:        Owner{Email: "o@example.com"},
+		Timezone:     "UTC",
+		Defaults:     Defaults{Model: "anthropic/claude-sonnet-5"},
 	}
 	valid := base
 	valid.Credentials = map[string]creds.Spec{"github_app_private_key": {Type: "github_app", AppID: "4361572"}}

@@ -14,7 +14,7 @@ import (
 )
 
 const statusAgentYAML = `name: test-agent
-description: Tests status
+instructions: Tests status
 owner:
   name: CI
   email: ci@example.invalid

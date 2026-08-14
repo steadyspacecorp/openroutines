@@ -39,19 +39,19 @@ openroutines configure
 
 A `knowledge/` directory appears on first run -- a checkout of the agent's dedicated knowledge branch, kept out of `main`'s history.
 
-`configure` is idempotent -- run it whenever. It fills in `openroutines.yml` (name, job description, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
+`configure` is idempotent -- run it whenever. It fills in `openroutines.yml` (name, owner, timezone, default model), generates the master key for encrypted credentials, and reports anything the agent still needs.
 
-### Name and job description
+### Name and instructions
 
-The agent's `name` and `description` are standing context, not metadata for people reading the repository. Every run begins by telling the model its name and injecting the description as "your job description"; the routine body then supplies the instructions for that particular run. A routine inherits the job description and does not need to restate it.
+The agent's `name` is standing context, not metadata for people reading the repository: every run begins by telling the model its name. The optional `instructions` key is more standing context -- injected into every run before the routine body supplies the instructions for that particular run. Leave it out and runs get only the routine bodies; set it and every routine inherits it without restating it.
 
-Choose both at the altitude where the agent will remain coherent as you add routines. Name the domain, not the first routine. Write the description as a durable mandate: what outcomes the agent owns and where its responsibility ends. A tagline is usually too vague to guide a run, while a checklist of current routines is too specific -- schedules and individual procedures belong in routine files.
+Choose both at the altitude where the agent will remain coherent as you add routines. Name the domain, not the first routine. Write instructions as a durable mandate: what outcomes the agent owns and where its responsibility ends. A tagline is usually too vague to guide a run, while a checklist of current routines is too specific -- schedules and individual procedures belong in routine files.
 
 For example, an agent that starts by checking documentation but may later synthesize research and report on releases could use:
 
 ```yaml
 name: Product intelligence
-description: Maintain an accurate picture of what customers need and what the product team has shipped, then surface gaps and decisions to the team.
+instructions: Maintain an accurate picture of what customers need and what the product team has shipped, then surface gaps and decisions to the team.
 ```
 
 `Documentation checker` would corner the same agent around its first routine. Conversely, "Help the product team" would give every routine too little direction. If the work needs a genuinely different mandate, create another agent -- one agent still means one job.

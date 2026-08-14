@@ -12,7 +12,7 @@ import (
 )
 
 const checkAgentYAML = `name: test-agent
-description: Tests check
+instructions: Tests check
 owner:
   name: CI
   email: ci@example.invalid

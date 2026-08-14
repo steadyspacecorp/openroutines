@@ -53,7 +53,6 @@ func cmdStatus(args []string) int {
 
 func printAgentStatus(dir string, agent *config.Agent) *time.Location {
 	fmt.Printf("agent      %s\n", orUnset(agent.Name))
-	fmt.Printf("job        %s\n", orUnset(firstLine(agent.Description)))
 	fmt.Printf("owner      %s <%s>\n", orUnset(agent.Owner.Name), orUnset(agent.Owner.Email))
 
 	// The supervisor refuses to start on an unloadable timezone; status carries

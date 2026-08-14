@@ -149,7 +149,7 @@ var instructionTmpl = template.Must(template.New("instruction").Parse(instructio
 
 type instructionData struct {
 	AgentName     string
-	Description   string
+	Instructions  string
 	RoutineName   string
 	RunID         string
 	RecordsEvents bool
@@ -223,7 +223,7 @@ func renderDefinition(agent *config.Agent, r *routine.Routine, servers []string,
 
 	if err := instructionTmpl.Execute(&b, instructionData{
 		AgentName:     agent.Name,
-		Description:   strings.TrimSpace(agent.Description),
+		Instructions:  strings.TrimSpace(agent.Instructions),
 		RoutineName:   r.Name,
 		RunID:         attempt.RunID,
 		RecordsEvents: r.Frontmatter.RecordsEvents(),

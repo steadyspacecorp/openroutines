@@ -4,7 +4,7 @@ Guidance for coding agents working on the OpenRoutines framework itself. (If you
 
 ## What this is
 
-OpenRoutines generates and runs single-purpose autonomous AI agents: one agent, one job description, one runtime, defined as a git repo and deployed as a Docker container. Routines are markdown files with frontmatter; execution goes through headless opencode; knowledge lives on a dedicated git branch.
+OpenRoutines generates and runs single-purpose autonomous AI agents: one agent, one job, one runtime, defined as a git repo and deployed as a Docker container. Routines are markdown files with frontmatter; execution goes through headless opencode; knowledge lives on a dedicated git branch.
 
 ## Sources of truth
 

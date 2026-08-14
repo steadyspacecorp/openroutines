@@ -13,7 +13,7 @@ import (
 
 func TestStageUsesSuppliedKnowledgeSnapshotWithoutMaterializingLocalBranch(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte("name: Test\ndescription: Test agent\nowner:\n  email: test@example.com\ntimezone: UTC\ndefaults:\n  model: test/model\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte("name: Test\ninstructions: Test agent\nowner:\n  email: test@example.com\ntimezone: UTC\ndefaults:\n  model: test/model\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := t.TempDir()
