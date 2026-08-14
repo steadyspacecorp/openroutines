@@ -245,10 +245,13 @@ type Attempt struct {
 // relative path against different directories. Resolving is for the check
 // only -- a backend must name paths to the run exactly as the runner named them.
 func (a Attempt) validate() error {
+	if !filepath.IsAbs(a.Workspace) {
+		return fmt.Errorf("attempt workspace must be absolute: %s", a.Workspace)
+	}
 	workspace := resolve(a.Workspace)
 	for _, p := range a.Writable {
-		if !filepath.IsAbs(p) || !filepath.IsAbs(a.Workspace) {
-			return fmt.Errorf("attempt paths must be absolute: workspace %s, writable %s", a.Workspace, p)
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("attempt writable path must be absolute: %s", p)
 		}
 		if !within(resolve(p), workspace) {
 			return fmt.Errorf("writable path %s is outside the attempt workspace %s", p, a.Workspace)
