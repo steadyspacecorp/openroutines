@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,14 @@ const (
 // The subdirectory of the supervisor-owned state/ directory
 // holding per-routine trigger state.
 const StateDirName = "triggers"
+
+var credentialReferencePattern = regexp.MustCompile(`\$[A-Z][A-Z0-9_]*`)
+
+// CredentialReference returns the run-environment spelling used to substitute
+// a credential into a poll URL.
+func CredentialReference(name string) string {
+	return "$" + strings.ToUpper(name)
+}
 
 // One routine's durable trigger record: the last comparison value
 // and the conditional-request validators that produced it. Poll timing is
@@ -109,6 +118,18 @@ func (t Spec) Validate() error {
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
 		return fmt.Errorf("trigger: poll %q is not an http(s) URL", t.Poll)
 	}
+	references := credentialReferencePattern.FindAllString(t.Poll, -1)
+	for _, reference := range references {
+		if strings.Contains(u.Host, reference) {
+			return fmt.Errorf("trigger: %s cannot appear in the poll host -- the destination must be reviewable", reference)
+		}
+		if t.Credential == "" {
+			return fmt.Errorf("trigger: poll has a %s reference but no credential", reference)
+		}
+		if want := CredentialReference(t.Credential); reference != want {
+			return fmt.Errorf("trigger: poll credential reference %s does not match %s", reference, want)
+		}
+	}
 	if t.Select != "" {
 		if err := validatePointer(t.Select); err != nil {
 			return fmt.Errorf("trigger: select: %w", err)
@@ -138,16 +159,27 @@ type Result struct {
 
 // Performs one change-detection request. prior may be nil (first
 // sight): the first observation establishes the baseline and never reports a
-// change. The credential, when present, is sent as a bearer token and never
+// change. The credential, when present, is sent as a bearer token -- or
+// substituted for its run-environment reference in the URL instead -- and never
 // appears in errors.
 func Poll(client *http.Client, spec Spec, credential string, name string, prior *State) (Result, error) {
-	req, err := http.NewRequest(http.MethodGet, spec.Poll, nil)
+	pollURL := spec.Poll
+	reference := CredentialReference(spec.Credential)
+	substituted := spec.Credential != "" && strings.Contains(pollURL, reference)
+	if substituted {
+		if credential == "" {
+			return Result{}, fmt.Errorf("poll has a %s reference but no credential value", reference)
+		}
+		pollURL = strings.ReplaceAll(pollURL, reference, credential)
+	}
+	req, err := http.NewRequest(http.MethodGet, pollURL, nil)
 	if err != nil {
-		return Result{}, err
+		// The substituted URL may carry the credential; the error would echo it.
+		return Result{}, errors.New("poll URL does not form a valid request")
 	}
 	req.Header.Set("User-Agent", "openroutines-trigger")
 	req.Header.Set("Accept", "*/*")
-	if credential != "" {
+	if credential != "" && !substituted {
 		req.Header.Set("Authorization", "Bearer "+credential)
 	}
 	if prior != nil {
