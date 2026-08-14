@@ -41,9 +41,9 @@ func TestValidate(t *testing.T) {
 	if err := good.Validate(); err != nil {
 		t.Fatalf("valid spec rejected: %v", err)
 	}
-	placeholder := Spec{Poll: "https://api.telegram.org/bot{credential}/getUpdates", Credential: "telegram_bot_token"}
-	if err := placeholder.Validate(); err != nil {
-		t.Fatalf("placeholder spec rejected: %v", err)
+	reference := Spec{Poll: "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getUpdates", Credential: "telegram_bot_token"}
+	if err := reference.Validate(); err != nil {
+		t.Fatalf("credential reference spec rejected: %v", err)
 	}
 	bad := []Spec{
 		{},
@@ -52,8 +52,9 @@ func TestValidate(t *testing.T) {
 		{Poll: "https://example.com", Select: "no-slash"},
 		{Poll: "https://example.com", Select: "/x~2y"},
 		{Poll: "https://example.com", Interval: "often"},
-		{Poll: "https://api.telegram.org/bot{credential}/getUpdates"},
-		{Poll: "https://{credential}.example.com/x", Credential: "token"},
+		{Poll: "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getUpdates"},
+		{Poll: "https://$TOKEN.example.com/x", Credential: "token"},
+		{Poll: "https://api.telegram.org/bot$WRONG_TOKEN/getUpdates", Credential: "telegram_bot_token"},
 	}
 	for i, s := range bad {
 		if err := s.Validate(); err == nil {
@@ -158,11 +159,11 @@ func TestPollRawBodyHashAndETag(t *testing.T) {
 	}
 }
 
-func TestPollCredentialPlaceholder(t *testing.T) {
+func TestPollCredentialReference(t *testing.T) {
 	ps := &pollServer{body: `{"ok":true,"result":[]}`}
 	srv := httptest.NewServer(http.HandlerFunc(ps.handler))
 	defer srv.Close()
-	spec := Spec{Poll: srv.URL + "/bot{credential}/getUpdates"}
+	spec := Spec{Poll: srv.URL + "/bot$TELEGRAM_BOT_TOKEN/getUpdates", Credential: "telegram_bot_token"}
 
 	res, err := Poll(srv.Client(), spec, "12345:secret", "r", nil)
 	if err != nil || res.Changed {
@@ -176,7 +177,7 @@ func TestPollCredentialPlaceholder(t *testing.T) {
 	}
 
 	if _, err := Poll(srv.Client(), spec, "", "r", nil); err == nil {
-		t.Fatal("placeholder with no credential value should be an error")
+		t.Fatal("credential reference with no value should be an error")
 	} else if strings.Contains(err.Error(), "secret") {
 		t.Fatalf("error leaks material: %v", err)
 	}

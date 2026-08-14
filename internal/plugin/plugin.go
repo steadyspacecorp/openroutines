@@ -208,7 +208,7 @@ func (p *Plugin) Summary() string {
 			if t := r.Frontmatter.Trigger; t != nil {
 				w("    trigger: polls %s", t.Poll)
 				if t.Credential != "" {
-					if strings.Contains(t.Poll, trigger.CredentialPlaceholder) {
+					if strings.Contains(t.Poll, trigger.CredentialReference(t.Credential)) {
 						w(" with credential %s substituted into the URL", t.Credential)
 					} else {
 						w(" with credential %s as a bearer token", t.Credential)

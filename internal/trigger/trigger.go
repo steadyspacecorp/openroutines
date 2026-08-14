@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -42,11 +43,13 @@ const (
 // holding per-routine trigger state.
 const StateDirName = "triggers"
 
-// Marks where in the poll URL the credential is substituted at
-// request time, for APIs (Telegram among them) that authenticate in the URL
-// rather than a header. The committed URL carries the placeholder, never the
-// secret.
-const CredentialPlaceholder = "{credential}"
+var credentialReferencePattern = regexp.MustCompile(`\$[A-Z][A-Z0-9_]*`)
+
+// CredentialReference returns the run-environment spelling used to substitute
+// a credential into a poll URL.
+func CredentialReference(name string) string {
+	return "$" + strings.ToUpper(name)
+}
 
 // One routine's durable trigger record: the last comparison value
 // and the conditional-request validators that produced it. Poll timing is
@@ -115,11 +118,17 @@ func (t Spec) Validate() error {
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
 		return fmt.Errorf("trigger: poll %q is not an http(s) URL", t.Poll)
 	}
-	if strings.Contains(u.Host, CredentialPlaceholder) {
-		return fmt.Errorf("trigger: %s cannot appear in the poll host -- the destination must be reviewable", CredentialPlaceholder)
-	}
-	if strings.Contains(t.Poll, CredentialPlaceholder) && t.Credential == "" {
-		return fmt.Errorf("trigger: poll has a %s placeholder but no credential", CredentialPlaceholder)
+	references := credentialReferencePattern.FindAllString(t.Poll, -1)
+	for _, reference := range references {
+		if strings.Contains(u.Host, reference) {
+			return fmt.Errorf("trigger: %s cannot appear in the poll host -- the destination must be reviewable", reference)
+		}
+		if t.Credential == "" {
+			return fmt.Errorf("trigger: poll has a %s reference but no credential", reference)
+		}
+		if want := CredentialReference(t.Credential); reference != want {
+			return fmt.Errorf("trigger: poll credential reference %s does not match %s", reference, want)
+		}
 	}
 	if t.Select != "" {
 		if err := validatePointer(t.Select); err != nil {
@@ -151,16 +160,17 @@ type Result struct {
 // Performs one change-detection request. prior may be nil (first
 // sight): the first observation establishes the baseline and never reports a
 // change. The credential, when present, is sent as a bearer token -- or
-// substituted for the URL's {credential} placeholder instead -- and never
+// substituted for its run-environment reference in the URL instead -- and never
 // appears in errors.
 func Poll(client *http.Client, spec Spec, credential string, name string, prior *State) (Result, error) {
 	pollURL := spec.Poll
-	substituted := strings.Contains(pollURL, CredentialPlaceholder)
+	reference := CredentialReference(spec.Credential)
+	substituted := spec.Credential != "" && strings.Contains(pollURL, reference)
 	if substituted {
 		if credential == "" {
-			return Result{}, fmt.Errorf("poll has a %s placeholder but no credential value", CredentialPlaceholder)
+			return Result{}, fmt.Errorf("poll has a %s reference but no credential value", reference)
 		}
-		pollURL = strings.ReplaceAll(pollURL, CredentialPlaceholder, credential)
+		pollURL = strings.ReplaceAll(pollURL, reference, credential)
 	}
 	req, err := http.NewRequest(http.MethodGet, pollURL, nil)
 	if err != nil {

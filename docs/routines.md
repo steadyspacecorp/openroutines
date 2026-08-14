@@ -62,8 +62,8 @@ trigger:
 ```
 
 - `poll` -- the URL to check.
-  It may contain a `{credential}` placeholder, substituted at request time for APIs that authenticate in the URL rather than a header (Telegram's Bot API, for one) -- the committed URL carries the placeholder, never the secret, and the placeholder cannot appear in the host.
-- `credential` -- optional; sent as a bearer token, or substituted for the URL's `{credential}` placeholder instead, and must also appear in the routine's `credentials`. Raw credentials are sent verbatim; typed credentials contribute only short-lived bearer material derived fresh for the poll, never their stored root secret.
+  It may contain the credential's environment reference (for example, `$TELEGRAM_BOT_TOKEN` for `telegram_bot_token`), substituted at request time for APIs that authenticate in the URL rather than a header (Telegram's Bot API, for one) -- the committed URL carries the reference, never the secret, and the reference cannot appear in the host.
+- `credential` -- optional; sent as a bearer token, or substituted for its environment reference in the URL instead, and must also appear in the routine's `credentials`. Raw credentials are sent verbatim; typed credentials contribute only short-lived bearer material derived fresh for the poll, never their stored root secret.
 - `select` -- optional; extracts one value from a JSON response by RFC 6901 pointer (e.g. `/messages/0/ts`); without it, the response is reduced to a digest and compared
 - `interval` -- poll cadence (default 5m, floor one minute)
 
