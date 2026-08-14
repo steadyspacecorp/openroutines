@@ -6,7 +6,7 @@ Security reports: see [SECURITY.md](SECURITY.md).
 
 ## Working on the framework
 
-The CLI, supervisor, and embedded agent template all live in this repo. You'll need Go 1.26.5 and [golangci-lint](https://golangci-lint.run) (install them however you like; `.tool-versions` records the versions CI uses). The Makefile holds every task entry point:
+The CLI, supervisor, and embedded agent template all live in this repo. You'll need Go and [golangci-lint](https://golangci-lint.run) (install them however you like; `go.mod` and `.tool-versions` record the versions CI uses). The Makefile holds every task entry point:
 
 ```bash
 make build      # the openroutines binary, into bin/
