@@ -68,22 +68,13 @@ func TestPreparePreservesTheRuntimeRepositoryOnRestart(t *testing.T) {
 	if err := repo.Prepare("https://github.com/acme/agent.git", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "local"), []byte("unpublished"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CommitAll("Unpublished runtime state"); err != nil {
-		t.Fatal(err)
-	}
-	tip := gitT(t, dir, "rev-parse", "HEAD")
+	gitT(t, dir, "remote", "add", "preserved", "https://example.invalid/preserved.git")
 
 	if err := Open(dir).Prepare("https://github.com/acme/agent.git", true); err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, dir, "rev-parse", "HEAD"); got != tip {
-		t.Fatalf("runtime tip changed from %s to %s", tip, got)
-	}
-	if raw, err := os.ReadFile(filepath.Join(dir, "local")); err != nil || string(raw) != "unpublished" {
-		t.Fatalf("runtime state was not preserved: %q, %v", raw, err)
+	if got := gitT(t, dir, "remote", "get-url", "preserved"); got != "https://example.invalid/preserved.git" {
+		t.Fatalf("runtime Git state was not preserved: %q", got)
 	}
 }
 
@@ -94,23 +85,17 @@ func TestPrepareRefusesToReplaceRuntimeRepositoryForAChangedRepo(t *testing.T) {
 	if err := repo.Prepare("https://github.com/acme/original.git", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "local"), []byte("unpublished"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CommitAll("Unpublished runtime state"); err != nil {
-		t.Fatal(err)
-	}
-	tip := gitT(t, dir, "rev-parse", "HEAD")
+	gitT(t, dir, "remote", "add", "preserved", "https://example.invalid/preserved.git")
 
 	err := Open(dir).Prepare("https://github.com/acme/replacement.git", true)
 	if err == nil || !strings.Contains(err.Error(), "refusing to replace") {
 		t.Fatalf("err=%v", err)
 	}
-	if got := gitT(t, dir, "rev-parse", "HEAD"); got != tip {
-		t.Fatalf("runtime tip changed from %s to %s", tip, got)
-	}
 	if got := rawOriginURL(t, dir); got != "ssh://git@ssh.github.com:443/acme/original.git" {
 		t.Fatalf("origin changed to %q", got)
+	}
+	if got := gitT(t, dir, "remote", "get-url", "preserved"); got != "https://example.invalid/preserved.git" {
+		t.Fatalf("runtime Git state was not preserved: %q", got)
 	}
 }
 

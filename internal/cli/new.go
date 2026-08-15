@@ -94,14 +94,8 @@ func cmdNew(args []string) int {
 		return fail(err)
 	}
 
-	// A fresh agent is a fresh git repo with the scaffold as its initial
-	// commit, so later changes land as a reviewable diff.
-	repo, err := repository.Initialize(target)
-	if err != nil {
+	if err := repository.Initialize(target); err != nil {
 		return fail(err)
-	}
-	if err := repo.CommitAll("Scaffold agent " + name); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not create the initial commit: %v\n", err)
 	}
 
 	fmt.Printf("Created agent %q at %s\n\nNext steps:\n  cd %s\n  openroutines configure\n", name, target, target)

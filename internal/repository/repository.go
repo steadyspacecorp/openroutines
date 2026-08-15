@@ -22,23 +22,12 @@ func Open(dir string) *Repository { return &Repository{dir: dir} }
 
 func (repo *Repository) Dir() string { return repo.dir }
 
-func Initialize(dir string) (*Repository, error) {
-	if err := initialize(dir); err != nil {
-		return nil, err
-	}
-	return Open(dir), nil
+func Initialize(dir string) error {
+	return initialize(dir)
 }
 
 func initialize(dir string) error {
 	_, err := git(dir, "init", "--quiet", "--initial-branch=main")
-	return err
-}
-
-func (repo *Repository) CommitAll(message string) error {
-	if _, err := repo.Run("add", "-A"); err != nil {
-		return err
-	}
-	_, err := repo.Run("commit", "--quiet", "-m", message)
 	return err
 }
 

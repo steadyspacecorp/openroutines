@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,6 +71,27 @@ func TestNewKeepsFrameworkFilesUnderOpenRoutines(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".openroutines-version")); !os.IsNotExist(err) {
 		t.Fatalf("legacy version pin exists: %v", err)
+	}
+}
+
+func TestNewInitializesRepoWithoutCommittingScaffold(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
+	}
+	cmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
+	cmd.Dir = dir
+	if err := cmd.Run(); err == nil {
+		t.Fatal("new created an initial commit")
+	}
+	cmd = exec.Command("git", "status", "--porcelain")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "?? openroutines.yml\n") {
+		t.Fatalf("scaffold is not present as uncommitted work:\n%s", out)
 	}
 }
 
