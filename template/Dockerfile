@@ -12,9 +12,10 @@
 #
 #   agent   -- the deployable image and default build target: base + the pinned
 #              openroutines release (the supervisor, its entrypoint) + this repository.
-#              A sealed box: no ports, logs on stdout, and two secrets mounted
-#              read-only at boot, named by OPENROUTINES_MASTER_KEY_FILE and
-#              OPENROUTINES_DEPLOY_KEY_FILE. Neither secret is ever built into the image.
+#              A sealed box: no ports, logs on stdout, and two secrets supplied
+#              at boot through environment values or mounted at the conventional
+#              /agent/master.key and /agent/deploy.key paths. Neither secret is
+#              ever built into the image.
 
 FROM debian:trixie-slim AS base
 

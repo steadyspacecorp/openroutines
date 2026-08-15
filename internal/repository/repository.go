@@ -60,12 +60,12 @@ func (repo *Repository) Prepare(reference string, deployed bool) error {
 	if err != nil {
 		return err
 	}
-	configuredKey, err := configureDeployKey()
+	configuredKey, err := configureDeployKey(repo.dir)
 	if err != nil {
 		return fmt.Errorf("deploy key: %w", err)
 	}
 	if !configuredKey {
-		return fmt.Errorf("deploy key is required in deployed containers")
+		return fmt.Errorf("deploy key is required in deployed containers: set %s or %s, or mount %s in the agent root", EnvDeployKey, EnvDeployKeyFile, DeployKeyFileName)
 	}
 	prepared, err := repo.prepared(origin)
 	if err != nil {

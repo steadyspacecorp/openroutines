@@ -106,7 +106,7 @@ func New(dir string) (*Supervisor, error) {
 	}
 	// Before the deploy key is materialized or anything touches git: a key the
 	// runs could read is worth failing on while the deployment is unchanged.
-	if err := VerifyKeyDelivery(); err != nil {
+	if err := ValidateKeyFileLocations(dir); err != nil {
 		return nil, err
 	}
 	repo := repository.Open(dir)

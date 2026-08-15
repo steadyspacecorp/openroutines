@@ -2,13 +2,8 @@
 # never in main's history.
 knowledge/
 
-# The master key unlocks .openroutines/credentials.yml.enc. Local only; production reads
-# it from a mounted file (OPENROUTINES_MASTER_KEY_FILE) or env var.
-master.key
-
 # Belt and suspenders: no key material of any kind belongs in this repo.
-# Generate deploy keys outside it (see the README) -- these patterns catch
-# the accident anyway.
+# That includes the conventional master.key and deploy.key runtime mounts.
 *.key
 *.pem
 id_*

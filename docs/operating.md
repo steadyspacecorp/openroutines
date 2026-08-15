@@ -16,7 +16,7 @@ flowchart LR
 ## Deploying
 
 First, set `repo` in `openroutines.yml` to the published repository, then give the agent its own identity for pushing knowledge -- a deploy key scoped to that repository.
-Generate it *outside* the agent repo (a private key must never sit in the repo or its image):
+Generate it *outside* the agent repo (a private key must never enter Git or the image):
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.keys/my-agent_deploy_key -N "" -C "my-agent deploy key"
@@ -27,11 +27,11 @@ The agent image is self-contained: the Dockerfile installs the pinned `openrouti
 
 ```bash
 docker build -t my-agent .
+OPENROUTINES_MASTER_KEY="$(cat master.key)" \
+OPENROUTINES_DEPLOY_KEY="$(cat ~/.keys/my-agent_deploy_key)" \
 docker run -d --name my-agent --restart unless-stopped --stop-timeout 30 \
-  -v ~/.keys/my-agent-master.key:/run/secrets/master.key:ro \
-  -v ~/.keys/my-agent_deploy_key:/run/secrets/deploy_key:ro \
-  -e OPENROUTINES_MASTER_KEY_FILE=/run/secrets/master.key \
-  -e OPENROUTINES_DEPLOY_KEY_FILE=/run/secrets/deploy_key \
+  -e OPENROUTINES_MASTER_KEY \
+  -e OPENROUTINES_DEPLOY_KEY \
   my-agent
 ```
 
@@ -92,7 +92,16 @@ The image contains the pinned `openroutines` binary, opencode, git, `gh` (can au
 - **The master key** (a copy of `master.key`) decrypts the credentials file. Routines receive only the credentials their frontmatter declares.
 - **The deploy key** lets the agent push its knowledge. On boot the supervisor fetches the `knowledge` branch -- creating it if it doesn't exist yet, so first boot self-heals -- and after each run it commits and pushes what the agent recorded.
 
-Mount them as files and point `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEPLOY_KEY_FILE` at the paths, as above -- file delivery keeps key material out of the process environment. Mount them somewhere like `/run/secrets`, outside the OS paths every run's sandbox grants: a run holds the supervisor's own user, so a key file inside one of those is readable by your routines whatever its permissions are. The sandbox grants `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, and a named list of `/etc` entries -- not `/etc` as a whole, precisely because that is where several platforms mount secret files, so a platform default like `/etc/secrets` is fine. You do not have to work this out: the supervisor resolves both paths at boot and refuses to start rather than run with a readable key, naming the variable to fix. On platforms where mounting a file is awkward, the values can arrive directly in `OPENROUTINES_MASTER_KEY` / `OPENROUTINES_DEPLOY_KEY` instead, but environment delivery has a weaker process-exposure posture and is not the recommended production configuration. When a key value is in its environment the supervisor logs a warning once at boot -- if you see it after moving to file delivery, the old variable is still set and should be unset.
+For each secret, a direct `OPENROUTINES_MASTER_KEY` / `OPENROUTINES_DEPLOY_KEY` value wins; otherwise OpenRoutines reads the path in `OPENROUTINES_MASTER_KEY_FILE` / `OPENROUTINES_DEPLOY_KEY_FILE`, then falls back to `master.key` / `deploy.key` in the agent root.
+The command above passes the values to Docker by variable name, so the secret text does not appear in its command arguments.
+On a deployment platform, set those same two variables as secrets in the service environment.
+The supervisor constructs every child environment from scratch, so neither value is passed to routines or Git subprocesses.
+Platforms that mount secrets as files can instead mount them at the conventional `/agent/master.key` and `/agent/deploy.key` paths with no environment variables, or point the file environment variables at other paths.
+All three delivery forms are supported production configurations.
+The conventional `/agent` paths are outside the routine filesystem, and the run workspace is assembled from an allow-list that excludes both files.
+If your platform mounts them elsewhere and you use the file environment variables, choose somewhere like `/run/secrets`, outside the OS paths every run's sandbox grants: a run holds the supervisor's own user, so a key file inside one of those is readable by your routines whatever its permissions are.
+The sandbox grants `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, and a named list of `/etc` entries -- not `/etc` as a whole, precisely because that is where several platforms mount secret files, so a platform default like `/etc/secrets` is fine.
+You do not have to work this out: the supervisor resolves both selected paths at boot and refuses to start rather than run with a readable key, naming the file to move and the variable to set.
 
 ## Operational properties
 

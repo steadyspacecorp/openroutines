@@ -125,7 +125,7 @@ composition, the destination, and what counts as delivered.
   typed credential, the supervisor derives a fresh bearer for that poll and
   disposes of it immediately afterward; the stored root secret is never sent.
   No entry means the value injects verbatim.
-- `master.key` must never be committed or printed.
+- `master.key` and `deploy.key` must never be committed or printed.
 - Two config files, two systems -- each belongs to the system that
   interprets it. `opencode.json` is the harness's: the permission policy
   plus, when a custom endpoint is needed (an AI gateway, a proxy),

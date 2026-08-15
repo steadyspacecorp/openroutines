@@ -141,6 +141,64 @@ func TestPrepareRequiresDeployKeyBeforeRemovingDeployedGit(t *testing.T) {
 	}
 }
 
+func TestDeployKeyPrecedence(t *testing.T) {
+	previousSSH := sshCommand
+	t.Cleanup(func() { sshCommand = previousSSH })
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	defaultKey := "default fixture"
+	fileKey := "file fixture"
+	valueKey := "value fixture"
+	file := filepath.Join(t.TempDir(), "mounted-deploy.key")
+	if err := os.WriteFile(filepath.Join(dir, "deploy.key"), []byte(defaultKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(fileKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvDeployKeyFile, file)
+	t.Setenv(EnvDeployKey, valueKey)
+
+	assertConfiguredDeployKey(t, dir, home, valueKey)
+	t.Setenv(EnvDeployKey, "")
+	assertConfiguredDeployKey(t, dir, home, fileKey)
+	t.Setenv(EnvDeployKeyFile, "")
+	assertConfiguredDeployKey(t, dir, home, defaultKey)
+}
+
+func assertConfiguredDeployKey(t *testing.T, dir, home, want string) {
+	t.Helper()
+	configured, err := configureDeployKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configured {
+		t.Fatal("deploy key was not configured")
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".ssh", "openroutines_deploy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != want {
+		t.Errorf("materialized deploy key = %q, want %q", got, want)
+	}
+}
+
+func TestPrepareUsesConventionalDeployKey(t *testing.T) {
+	dir := originRepo(t, "https://github.com/acme/legacy.git")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(EnvDeployKey, "")
+	t.Setenv(EnvDeployKeyFile, "")
+	if err := os.WriteFile(filepath.Join(dir, "deploy.key"), []byte("default fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Open(dir).Prepare("acme/agent", true); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrepareValidatesRepoBeforeRemovingDeployedGit(t *testing.T) {
 	deployedRepository(t)
 	dir := originRepo(t, "https://github.com/acme/legacy.git")

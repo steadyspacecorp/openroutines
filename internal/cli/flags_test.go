@@ -74,3 +74,28 @@ func TestConfigureRefusesNonInteractiveWithoutYes(t *testing.T) {
 		t.Fatalf("configure must not generate a master key when it refuses to run")
 	}
 }
+
+func TestConfigureReportsGeneratedMasterKeyWithoutDeploymentInstructions(t *testing.T) {
+	dir := statusAgent(t, nil)
+
+	stdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	os.Stdin = r
+	defer func() { os.Stdin = stdin }()
+
+	out := capture(t, dir, func() {
+		if code := cmdConfigure([]string{"--yes"}); code != 0 {
+			t.Fatalf("configure exited %d", code)
+		}
+	})
+	if !strings.Contains(out, "Generated master.key\n") {
+		t.Fatalf("configure did not report the generated key plainly:\n%s", out)
+	}
+	if strings.Contains(out, "mount") || strings.Contains(out, creds.EnvMasterKeyFile) {
+		t.Fatalf("configure included deployment instructions in the generated-key message:\n%s", out)
+	}
+}

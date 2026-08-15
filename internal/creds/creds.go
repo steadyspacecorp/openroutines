@@ -1,6 +1,6 @@
 // Implements the Rails-style encrypted credentials store:
 // one AES-256-GCM encrypted YAML file committed to the repo, one master key
-// kept out of it (master.key locally, OPENROUTINES_MASTER_KEY in production).
+// kept out of it.
 package creds
 
 import (
@@ -58,35 +58,43 @@ func GenerateKey() string {
 	return hex.EncodeToString(buf)
 }
 
-// Resolves the master key, in order: the OPENROUTINES_MASTER_KEY_FILE
-// path (preferred in production -- a file never appears in /proc/pid/environ),
-// the OPENROUTINES_MASTER_KEY environment variable, then the gitignored
-// master.key file (local).
-func LoadKey(dir string) ([]byte, error) {
-	keyHex := ""
+// MasterKeyFilePath reports the selected key file, or nothing when a direct
+// value wins or the conventional file does not exist.
+func MasterKeyFilePath(dir string) string {
+	if strings.TrimSpace(os.Getenv(EnvMasterKey)) != "" {
+		return ""
+	}
 	if path := os.Getenv(EnvMasterKeyFile); path != "" {
+		return path
+	}
+	path := filepath.Join(dir, KeyFileName)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return ""
+	}
+	return path
+}
+
+// Resolves the master key from a direct value, a configured file, or the
+// conventional master.key file in the agent root.
+func LoadKey(dir string) ([]byte, error) {
+	keyHex := strings.TrimSpace(os.Getenv(EnvMasterKey))
+	if keyHex == "" {
+		path := MasterKeyFilePath(dir)
+		if path == "" {
+			return nil, fmt.Errorf("no master key: set %s or %s, or create %s", EnvMasterKey, EnvMasterKeyFile, KeyFileName)
+		}
 		if mode.Current() == mode.DeployedContainer {
 			info, err := os.Stat(path)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", EnvMasterKeyFile, err)
+				return nil, fmt.Errorf("master key file %s: %w", path, err)
 			}
 			if info.Mode().Perm()&0o077 != 0 {
-				return nil, fmt.Errorf("%s must not be readable by group or other users in production (mode %04o)", EnvMasterKeyFile, info.Mode().Perm())
+				return nil, fmt.Errorf("master key file %s must not be readable by group or other users in production (mode %04o)", path, info.Mode().Perm())
 			}
 		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", EnvMasterKeyFile, err)
-		}
-		keyHex = strings.TrimSpace(string(raw))
-	}
-	if keyHex == "" {
-		keyHex = strings.TrimSpace(os.Getenv(EnvMasterKey))
-	}
-	if keyHex == "" {
-		raw, err := os.ReadFile(filepath.Join(dir, KeyFileName))
-		if err != nil {
-			return nil, fmt.Errorf("no master key: set %s or create %s (openroutines configure generates one)", EnvMasterKey, KeyFileName)
+			return nil, fmt.Errorf("master key file %s: %w", path, err)
 		}
 		keyHex = strings.TrimSpace(string(raw))
 	}

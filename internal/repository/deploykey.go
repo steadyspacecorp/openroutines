@@ -10,37 +10,49 @@ import (
 )
 
 // Delivers the SSH private key that lets a deployed agent push
-// its knowledge branch. Scope the key to the one repository. EnvDeployKeyFile
-// is the preferred production delivery: a path to the key, so the key value
-// itself never appears in /proc/pid/environ.
+// its knowledge branch. Scope the key to the one repository.
 const (
-	EnvDeployKey     = "OPENROUTINES_DEPLOY_KEY"
-	EnvDeployKeyFile = "OPENROUTINES_DEPLOY_KEY_FILE"
+	DeployKeyFileName = "deploy.key"
+	EnvDeployKey      = "OPENROUTINES_DEPLOY_KEY"
+	EnvDeployKeyFile  = "OPENROUTINES_DEPLOY_KEY_FILE"
 )
 
 // When set, is exported as GIT_SSH_COMMAND on every git
 // invocation so pushes and fetches authenticate with the deploy key.
 var sshCommand string
 
-// Materializes OPENROUTINES_DEPLOY_KEY (if present) as a
-// supervisor-only key file and routes all git SSH through it. Returns whether
-// a key was configured. Host keys are trusted on first use (accept-new);
-// pinning is tracked in the hardening backlog.
-func configureDeployKey() (bool, error) {
-	sshCommand = ""
-	key := ""
+// DeployKeyFilePath reports the selected key file, or nothing when a direct
+// value wins or the conventional file does not exist.
+func DeployKeyFilePath(dir string) string {
+	if os.Getenv(EnvDeployKey) != "" {
+		return ""
+	}
 	if path := os.Getenv(EnvDeployKeyFile); path != "" {
+		return path
+	}
+	path := filepath.Join(dir, DeployKeyFileName)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return ""
+	}
+	return path
+}
+
+// Materializes the selected deploy key as a supervisor-only file and routes
+// all Git SSH through it. Host keys are trusted on first use (accept-new);
+// pinning is tracked in the hardening backlog.
+func configureDeployKey(dir string) (bool, error) {
+	sshCommand = ""
+	key := os.Getenv(EnvDeployKey)
+	if key == "" {
+		path := DeployKeyFilePath(dir)
+		if path == "" {
+			return false, nil
+		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			return false, fmt.Errorf("%s: %w", EnvDeployKeyFile, err)
+			return false, fmt.Errorf("deploy key file %s: %w", path, err)
 		}
 		key = string(raw)
-	}
-	if key == "" {
-		key = os.Getenv(EnvDeployKey)
-	}
-	if key == "" {
-		return false, nil
 	}
 	registerDeployKey(key)
 	home, err := os.UserHomeDir()

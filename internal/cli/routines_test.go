@@ -21,6 +21,7 @@ func TestRoutinesTestCommandIsRemoved(t *testing.T) {
 func TestManualRunRefusesAKeyFileTheSandboxWouldGrant(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(creds.EnvMasterKey, "")
 	t.Setenv(creds.EnvMasterKeyFile, "/usr/local/etc/master.key")
 	r, w, err := os.Pipe()
 	if err != nil {

@@ -291,6 +291,9 @@ EOF
   cp "$repo/testdata/isolation/Dockerfile" "$ctx/Dockerfile"
   cp "$repo/testdata/isolation/opencode" "$ctx/opencode"
   cp "$repo/testdata/isolation/ssh" "$ctx/ssh"
+  export OPENROUTINES_MASTER_KEY="$(cat master.key)"
+  export OPENROUTINES_DEPLOY_KEY=synthetic-deploy-key
+  mv master.key "$work/isolation-master.key"
   arch="$(docker version --format '{{.Server.Arch}}')"
   (cd "$repo" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$ctx/openroutines" ./cmd/openroutines)
   docker build --quiet -t openroutines-isolation-smoke "$ctx" >"$work/out" 2>&1 || die "isolation image build"
@@ -363,9 +366,10 @@ SCRIPT
   # Debug level only to read back which mechanism the ladder picked: the
   # supervisor does not announce it, because no operator chooses it.
   docker run --rm \
+    -e OPENROUTINES_MASTER_KEY \
+    -e OPENROUTINES_DEPLOY_KEY \
     -e EXPECT_TREE_COLLAPSE=1 \
     -e OPENROUTINES_LOG_LEVEL=debug \
-    -e OPENROUTINES_DEPLOY_KEY=synthetic-deploy-key \
     --security-opt seccomp=unconfined \
     --security-opt apparmor=unconfined \
     openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
@@ -381,9 +385,10 @@ SCRIPT
   step "run isolation works in-container on the bubblewrap rung: private pid, mount, and ipc namespaces"
 
   docker run --rm \
+    -e OPENROUTINES_MASTER_KEY \
+    -e OPENROUTINES_DEPLOY_KEY \
     -e EXPECT_TREE_COLLAPSE=0 \
     -e OPENROUTINES_LOG_LEVEL=debug \
-    -e OPENROUTINES_DEPLOY_KEY=synthetic-deploy-key \
     --security-opt no-new-privileges \
     openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
     || die "in-container isolation run (landlock rung, no lifting flags)"
@@ -401,15 +406,16 @@ SCRIPT
   # is what proves this run really was unconfined rather than quietly
   # sandboxed anyway.
   docker run --rm \
+    -e OPENROUTINES_MASTER_KEY \
+    -e OPENROUTINES_DEPLOY_KEY \
     -e EXPECT_TREE_COLLAPSE=0 \
     -e OPENROUTINES_DISABLE_SANDBOX=1 \
-    -e OPENROUTINES_DEPLOY_KEY=synthetic-deploy-key \
     openroutines-isolation-smoke sh -c "$isolation_script" >"$work/out" 2>&1 \
     || die "in-container run with the sandbox disabled"
   grep -q 'run sandbox disabled' "$work/out" || die "the supervisor ran unconfined without noting it at boot"
   grep -q 'agent-repo=$' "$work/out" || die "the sandbox was still in force with OPENROUTINES_DISABLE_SANDBOX=1"
   # The supervisor's own protection is not the sandbox's doing, so it must
-  # survive the hatch: non-dumpable plus keys delivered outside the environment.
+  # survive the hatch even when both keys arrived in its environment.
   grep -q 'supervisor-environ=Permission denied' "$work/out" || die "an unconfined run could read the supervisor's environment"
   step "the sandbox escape hatch runs unconfined, noted at boot, with the supervisor still protected"
 

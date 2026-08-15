@@ -96,10 +96,9 @@ func routinesRun(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	// The same preflight supervise-boot runs: this command spawns a sandboxed
-	// model process too, and a key layout boot would refuse must not be
-	// reachable through the manual entrance.
-	if err := supervisor.VerifyKeyDelivery(); err != nil {
+	// Apply the same key-file preflight as supervisor boot before this command
+	// spawns a routine directly.
+	if err := supervisor.ValidateKeyFileLocations("."); err != nil {
 		return fail(err)
 	}
 	fixture := ""
