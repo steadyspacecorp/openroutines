@@ -1,13 +1,26 @@
+# Required. Human-readable identity for this agent.
 name: "{{AGENT_NAME}}"
+# Optional for local use; required for deployment. Git URL where knowledge is persisted.
 repo:
+# Optional. Contact details for the person responsible for this agent.
 owner:
+  # Optional. Human-readable owner name.
   name: "{{OWNER_NAME}}"
+  # Optional. Owner address reported by openroutines status.
   email: "{{OWNER_EMAIL}}"
+# Required. IANA timezone used to evaluate routine schedules.
 timezone: "{{TIMEZONE}}"
+# Required. Agent-wide values used when a routine does not override them.
 defaults:
+  # Required. Default provider/model; routines may override it. Browse models at https://models.dev.
   model: "{{DEFAULT_MODEL}}"
+  # Optional. Per-run timeout when a routine does not set one; defaults to 5m.
   timeout: 5m
+# Optional. Runaway-spend ceiling for routine timeouts; defaults to 6h.
 max_timeout: 6h
+# Optional. Maximum simultaneous routines; unset means serial. Range: 1-32.
 concurrency: 2
+# Optional. Working-knowledge behavior; all settings have defaults.
 knowledge:
+  # Optional. Age at which working knowledge is trimmed; defaults to 30d. Git history is retained.
   retention: 30d

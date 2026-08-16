@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
@@ -97,5 +98,41 @@ func TestConfigureReportsGeneratedMasterKeyWithoutDeploymentInstructions(t *test
 	}
 	if strings.Contains(out, "mount") || strings.Contains(out, creds.EnvMasterKeyFile) {
 		t.Fatalf("configure included deployment instructions in the generated-key message:\n%s", out)
+	}
+}
+
+func TestConfigureDoesNotChooseAModel(t *testing.T) {
+	dir := t.TempDir()
+	raw := "name: agent\nrepo:\nowner:\n  name:\n  email: owner@example.com\ntimezone: UTC\ndefaults:\n  model: '{{DEFAULT_MODEL}}'\n  timeout: 5m\n"
+	if err := os.WriteFile(filepath.Join(dir, config.FileName), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	stdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	os.Stdin = r
+	defer func() { os.Stdin = stdin }()
+
+	out := capture(t, dir, func() {
+		if code := cmdConfigure([]string{"--yes"}); code != 0 {
+			t.Fatalf("configure exited %d", code)
+		}
+	})
+	saved, err := os.ReadFile(filepath.Join(dir, config.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "anthropic/") {
+		t.Fatalf("configure chose a model:\n%s", saved)
+	}
+	for _, want := range []string{"Owner name (optional)", "Owner email (optional)", "browse https://models.dev", "defaults.model is not set"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("configure output missing %q:\n%s", want, out)
+		}
 	}
 }

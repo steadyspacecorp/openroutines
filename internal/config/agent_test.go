@@ -216,6 +216,43 @@ func TestSaveUsesTwoSpaceIndent(t *testing.T) {
 	}
 }
 
+func TestSavePreservesComments(t *testing.T) {
+	dir := t.TempDir()
+	raw := "# Required. Agent identity.\nname: old\nowner:\n  # Optional. Owner name.\n  name: old owner\n"
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Name = "new"
+	a.Owner.Name = "new owner"
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(filepath.Join(dir, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Required. Agent identity.\nname: new", "# Optional. Owner name.\n  name: new owner"} {
+		if !strings.Contains(string(saved), want) {
+			t.Fatalf("saved YAML lost comment %q:\n%s", want, saved)
+		}
+	}
+}
+
+func TestProblemsAllowsOwnerToBeUnset(t *testing.T) {
+	a := Agent{
+		Name:     "agent",
+		Timezone: "UTC",
+		Defaults: Defaults{Model: "provider/model"},
+	}
+	if problems := a.Problems(); len(problems) != 0 {
+		t.Fatalf("unset optional owner reported as a problem: %v", problems)
+	}
+}
+
 // openroutines.yml decodes strictly: a misspelled key is an error, not silently
 // ignored configuration.
 func TestLoadRejectsUnknownKeys(t *testing.T) {
