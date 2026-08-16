@@ -8,6 +8,7 @@
 set -euo pipefail
 
 BASE_URL="https://get.openroutines.dev"
+GITHUB_RELEASES_URL="https://github.com/steadyspacecorp/openroutines/releases/download"
 
 fail() {
   printf '%s\n' "$@" >&2
@@ -38,14 +39,45 @@ INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 
 BINARY="openroutines_${VERSION}_${OS}_${ARCH}"
 RELEASE_URL="$BASE_URL/releases/download/$VERSION"
+GITHUB_RELEASE_URL="$GITHUB_RELEASES_URL/$VERSION"
 
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 cd "$TMP_DIR"
 
 echo "Downloading openroutines $VERSION ($OS/$ARCH)..."
-curl -fsSLO "$RELEASE_URL/$BINARY" || fail "Could not download $RELEASE_URL/$BINARY."
-curl -fsSLO "$RELEASE_URL/checksums.txt" || fail "Could not download $RELEASE_URL/checksums.txt."
+download() {
+  local url="$1" destination="$2" status
+  if ! status=$(curl -sS -L -o "$destination" -w '%{http_code}' "$url"); then
+    return 1
+  fi
+  case "$status" in
+    2??) return 0 ;;
+    404) return 44 ;;
+    *) return 1 ;;
+  esac
+}
+
+release_url="$RELEASE_URL"
+result=0
+download "$release_url/$BINARY" "$BINARY" || result=$?
+if [ "$result" -ne 0 ]; then
+  if [ "$result" -ne 44 ]; then
+    fail "Could not download $release_url/$BINARY."
+  fi
+  release_url="$GITHUB_RELEASE_URL"
+  download "$release_url/$BINARY" "$BINARY" || fail "Version $VERSION is no longer mirrored and could not be downloaded from GitHub Releases -- run openroutines update."
+fi
+result=0
+download "$release_url/checksums.txt" checksums.txt || result=$?
+if [ "$result" -ne 0 ]; then
+  if [ "$result" -eq 44 ] && [ "$release_url" = "$RELEASE_URL" ]; then
+    release_url="$GITHUB_RELEASE_URL"
+    download "$release_url/checksums.txt" checksums.txt || fail "Version $VERSION is no longer mirrored and its checksum could not be downloaded from GitHub Releases -- run openroutines update."
+  else
+    fail "Could not download $release_url/checksums.txt."
+  fi
+fi
 
 EXPECTED=$(awk -v f="$BINARY" '$2 == f { print $1; exit }' checksums.txt)
 [ -n "$EXPECTED" ] || fail "No checksum for $BINARY in checksums.txt."
