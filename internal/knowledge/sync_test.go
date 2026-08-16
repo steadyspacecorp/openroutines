@@ -192,4 +192,7 @@ func TestSyncReportsConflictAndAborts(t *testing.T) {
 	if status := gitT(t, filepath.Join(b, "knowledge"), "status", "--porcelain"); status != "" {
 		t.Fatalf("worktree left dirty after aborted rebase: %q", status)
 	}
+	if strings.Contains(rep.Detail, "hint:") || !strings.Contains(rep.Detail, "CONFLICT") {
+		t.Fatalf("conflict detail should retain the conflict and omit stale Git hints: %q", rep.Detail)
+	}
 }
