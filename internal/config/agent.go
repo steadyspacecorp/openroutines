@@ -235,9 +235,6 @@ func (a *Agent) Problems() []string {
 	if isPlaceholder(a.Instructions) {
 		out = append(out, "instructions still holds a scaffold placeholder -- write the standing instructions or remove the key")
 	}
-	if a.Owner.Email == "" || isPlaceholder(a.Owner.Email) {
-		out = append(out, "owner email is not set")
-	}
 	if a.Timezone == "" || isPlaceholder(a.Timezone) {
 		out = append(out, "timezone is not set")
 	} else if _, err := time.LoadLocation(a.Timezone); err != nil {

@@ -242,6 +242,17 @@ func TestSavePreservesComments(t *testing.T) {
 	}
 }
 
+func TestProblemsAllowsOwnerToBeUnset(t *testing.T) {
+	a := Agent{
+		Name:     "agent",
+		Timezone: "UTC",
+		Defaults: Defaults{Model: "provider/model"},
+	}
+	if problems := a.Problems(); len(problems) != 0 {
+		t.Fatalf("unset optional owner reported as a problem: %v", problems)
+	}
+}
+
 // openroutines.yml decodes strictly: a misspelled key is an error, not silently
 // ignored configuration.
 func TestLoadRejectsUnknownKeys(t *testing.T) {

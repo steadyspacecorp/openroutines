@@ -69,7 +69,7 @@ func cmdConfigure(args []string) int {
 
 	agent.Name = prompt("Agent name (required)", agent.Name)
 	agent.Owner.Name = prompt("Owner name (optional)", agent.Owner.Name)
-	agent.Owner.Email = prompt("Owner email (required)", agent.Owner.Email)
+	agent.Owner.Email = prompt("Owner email (optional)", agent.Owner.Email)
 	agent.Timezone = prompt("Timezone (IANA; required)", defaultTimezone(agent.Timezone))
 	agent.Defaults.Model = prompt("Default model (provider/model; required; browse https://models.dev)", agent.Defaults.Model)
 	if agent.Defaults.Timeout == "" || strings.Contains(agent.Defaults.Timeout, "{{") {

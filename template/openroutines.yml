@@ -2,11 +2,11 @@
 name: "{{AGENT_NAME}}"
 # Optional for local use; required for deployment. Git URL where knowledge is persisted.
 repo:
-# Required. Contact details for the person responsible for this agent.
+# Optional. Contact details for the person responsible for this agent.
 owner:
   # Optional. Human-readable owner name.
   name: "{{OWNER_NAME}}"
-  # Required. Owner address reported in agent metadata.
+  # Optional. Owner address reported by openroutines status.
   email: "{{OWNER_EMAIL}}"
 # Required. IANA timezone used to evaluate routine schedules.
 timezone: "{{TIMEZONE}}"

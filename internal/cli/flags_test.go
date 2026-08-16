@@ -130,7 +130,7 @@ func TestConfigureDoesNotChooseAModel(t *testing.T) {
 	if strings.Contains(string(saved), "anthropic/") {
 		t.Fatalf("configure chose a model:\n%s", saved)
 	}
-	for _, want := range []string{"Owner name (optional)", "browse https://models.dev", "defaults.model is not set"} {
+	for _, want := range []string{"Owner name (optional)", "Owner email (optional)", "browse https://models.dev", "defaults.model is not set"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("configure output missing %q:\n%s", want, out)
 		}
