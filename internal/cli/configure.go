@@ -67,11 +67,11 @@ func cmdConfigure(args []string) int {
 		return line
 	}
 
-	agent.Name = prompt("Agent name", agent.Name)
-	agent.Owner.Name = prompt("Owner name", agent.Owner.Name)
-	agent.Owner.Email = prompt("Owner email", agent.Owner.Email)
-	agent.Timezone = prompt("Timezone (IANA)", defaultTimezone(agent.Timezone))
-	agent.Defaults.Model = prompt("Default model (provider/model)", defaultModel(agent.Defaults.Model))
+	agent.Name = prompt("Agent name (required)", agent.Name)
+	agent.Owner.Name = prompt("Owner name (optional)", agent.Owner.Name)
+	agent.Owner.Email = prompt("Owner email (required)", agent.Owner.Email)
+	agent.Timezone = prompt("Timezone (IANA; required)", defaultTimezone(agent.Timezone))
+	agent.Defaults.Model = prompt("Default model (provider/model; required; browse https://models.dev)", agent.Defaults.Model)
 	if agent.Defaults.Timeout == "" || strings.Contains(agent.Defaults.Timeout, "{{") {
 		agent.Defaults.Timeout = "5m"
 	}
@@ -103,27 +103,32 @@ func cmdConfigure(args []string) int {
 		return fail(err)
 	}
 
-	provider := strings.SplitN(agent.Defaults.Model, "/", 2)[0]
-	providerKey := creds.ProviderKeyName(provider)
-	if _, ok := store[providerKey]; !ok {
-		// Hidden input: a pasted key must not land on screen or in terminal
-		// scrollback. Piped stdin still reads a line, so scripted configure
-		// keeps working.
-		var val string
-		if term.IsTerminal(int(os.Stdin.Fd())) {
-			fmt.Printf("%s API key (hidden; enter to skip): ", provider)
-			raw, rerr := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Println()
-			if rerr != nil {
-				return fail(rerr)
+	provider, _, hasProvider := strings.Cut(agent.Defaults.Model, "/")
+	providerKey := ""
+	if hasProvider && provider != "" {
+		providerKey = creds.ProviderKeyName(provider)
+	}
+	if providerKey != "" {
+		if _, ok := store[providerKey]; !ok {
+			// Hidden input: a pasted key must not land on screen or in terminal
+			// scrollback. Piped stdin still reads a line, so scripted configure
+			// keeps working.
+			var val string
+			if term.IsTerminal(int(os.Stdin.Fd())) {
+				fmt.Printf("%s API key (hidden; enter to skip): ", provider)
+				raw, rerr := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Println()
+				if rerr != nil {
+					return fail(rerr)
+				}
+				val = strings.TrimSpace(string(raw))
+			} else {
+				line, _ := in.ReadString('\n')
+				val = strings.TrimSpace(line)
 			}
-			val = strings.TrimSpace(string(raw))
-		} else {
-			line, _ := in.ReadString('\n')
-			val = strings.TrimSpace(line)
-		}
-		if val != "" {
-			store[providerKey] = val
+			if val != "" {
+				store[providerKey] = val
+			}
 		}
 	}
 	if err := creds.Write(dir, key, store); err != nil {
@@ -136,8 +141,10 @@ func cmdConfigure(args []string) int {
 	// failure surfaces later as an opaque opencode server error and burns
 	// retry attempts before anyone learns why.
 	problems := agent.Problems()
-	if _, ok := store[providerKey]; !ok {
-		problems = append(problems, fmt.Sprintf("provider authentication: the default model needs %s (openroutines credentials set %s)", providerKey, providerKey))
+	if providerKey != "" {
+		if _, ok := store[providerKey]; !ok {
+			problems = append(problems, fmt.Sprintf("provider authentication: the default model needs %s (openroutines credentials set %s)", providerKey, providerKey))
+		}
 	}
 	if len(problems) > 0 {
 		fmt.Println("\nConfiguration saved. Still needed:")
@@ -160,11 +167,4 @@ func defaultTimezone(current string) string {
 		}
 	}
 	return "UTC"
-}
-
-func defaultModel(current string) string {
-	if current != "" && !strings.Contains(current, "{{") {
-		return current
-	}
-	return "anthropic/claude-sonnet-5"
 }

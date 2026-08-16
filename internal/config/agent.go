@@ -161,16 +161,65 @@ func Load(dir string) (*Agent, error) {
 // two-space indentation to match the scaffold template (yaml.v3 defaults
 // to 4, which would reformat this hand-edited file on every write, #65).
 func (a *Agent) Save(dir string) error {
+	path := Path(dir)
+	var existing yaml.Node
+	if raw, err := os.ReadFile(path); err == nil {
+		if err := yaml.Unmarshal(raw, &existing); err != nil {
+			return err
+		}
+	}
+
+	var next yaml.Node
+	if err := next.Encode(a); err != nil {
+		return err
+	}
+	if len(existing.Content) > 0 {
+		from := &existing
+		if from.Kind == yaml.DocumentNode {
+			from = from.Content[0]
+		}
+		to := &next
+		if to.Kind == yaml.DocumentNode {
+			to = to.Content[0]
+		}
+		copyYAMLComments(from, to)
+	}
+
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
-	if err := enc.Encode(a); err != nil {
+	if err := enc.Encode(&next); err != nil {
 		return err
 	}
 	if err := enc.Close(); err != nil {
 		return err
 	}
-	return os.WriteFile(Path(dir), buf.Bytes(), 0o644)
+	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
+
+func copyYAMLComments(from, to *yaml.Node) {
+	to.HeadComment = from.HeadComment
+	to.LineComment = from.LineComment
+	to.FootComment = from.FootComment
+	if from.Kind == yaml.DocumentNode && to.Kind == yaml.DocumentNode && len(from.Content) > 0 && len(to.Content) > 0 {
+		copyYAMLComments(from.Content[0], to.Content[0])
+		return
+	}
+	if from.Kind != yaml.MappingNode || to.Kind != yaml.MappingNode {
+		return
+	}
+	old := make(map[string][2]*yaml.Node, len(from.Content)/2)
+	for i := 0; i+1 < len(from.Content); i += 2 {
+		old[from.Content[i].Value] = [2]*yaml.Node{from.Content[i], from.Content[i+1]}
+	}
+	for i := 0; i+1 < len(to.Content); i += 2 {
+		pair, ok := old[to.Content[i].Value]
+		if !ok {
+			continue
+		}
+		copyYAMLComments(pair[0], to.Content[i])
+		copyYAMLComments(pair[1], to.Content[i+1])
+	}
 }
 
 func isPlaceholder(s string) bool {
