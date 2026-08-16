@@ -41,13 +41,21 @@ var imageBuildMu sync.Mutex
 func ensureRuntimeImage(agentDir, tag string) error {
 	imageBuildMu.Lock()
 	defer imageBuildMu.Unlock()
-	if err := exec.Command("docker", "image", "inspect", tag).Run(); err != nil {
-		slog.Info("building the local runtime image (first build downloads a Debian base and opencode -- this can take a few minutes)", "tag", tag)
+	cold := exec.Command("docker", "image", "inspect", tag).Run() != nil
+	if cold {
+		fmt.Fprintf(os.Stderr, "building the local runtime image (first build downloads a Debian base and opencode -- this can take a few minutes)\n")
+		slog.Debug("local runtime image build started", "tag", tag)
 	}
 	cmd := exec.Command("docker", "build", "--quiet", "--target", "runtime", "-t", tag, agentDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if cold {
+			fmt.Fprintln(os.Stderr, "local runtime image build failed")
+		}
 		return fmt.Errorf("building runtime image failed (is Docker running?): %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	if cold {
+		fmt.Fprintln(os.Stderr, "local runtime image ready")
 	}
 	return nil
 }
