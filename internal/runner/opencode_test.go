@@ -200,7 +200,7 @@ func TestContainerCaptureClearsAPlantedLandingFile(t *testing.T) {
 }
 
 // Local capture accepts that a planted workspace plugin runs inside the
-// capture container (docs/design/execution.md), bounded by the container.
+// capture container, bounded by the container.
 // Swapping the landing file for an absolute symlink mid-exec must not
 // breach that bound by walking the host filesystem with the supervisor's
 // eyes: the read must come from the descriptor opened before the exec,

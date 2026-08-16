@@ -1118,7 +1118,7 @@ func TestUnsettledRunIsNotReportedAsCompleted(t *testing.T) {
 
 // A lease lost between staging and start hands the reserved attempt back:
 // no model process ran, so the budget must not move -- a reservation that
-// never becomes a run is given back (docs/design.md), exactly as the
+// never becomes a run is given back, exactly as the
 // settlement-side twin of this branch already does.
 func TestLeaseLostAfterStagingHandsTheAttemptBack(t *testing.T) {
 	dir := fixture(t, "ok")
@@ -1535,7 +1535,7 @@ func TestBootRefusesAKeyFileRoutinesCanRead(t *testing.T) {
 	if err == nil {
 		t.Fatal("a master key inside the granted read-only OS was accepted")
 	}
-	want := "the master key file at /usr/local/etc/master.key is in a directory routines can read; move it to /run/secrets or another directory routines cannot access, set OPENROUTINES_MASTER_KEY_FILE to its new path, and see docs/operating.md"
+	want := "the master key file at /usr/local/etc/master.key is in a directory routines can read; move it to /run/secrets or another directory routines cannot access, set OPENROUTINES_MASTER_KEY_FILE to its new path, and see https://openroutines.dev/docs/deploying/"
 	if err.Error() != want {
 		t.Errorf("unexpected refusal:\n got: %s\nwant: %s", err, want)
 	}
@@ -1546,7 +1546,7 @@ func TestBootRefusesAKeyFileRoutinesCanRead(t *testing.T) {
 	if err == nil {
 		t.Fatal("a deploy key inside a granted /etc entry was accepted")
 	}
-	want = "the deploy key file at /etc/ld.so.conf.d/deploy is in a directory routines can read; move it to /run/secrets or another directory routines cannot access, set OPENROUTINES_DEPLOY_KEY_FILE to its new path, and see docs/operating.md"
+	want = "the deploy key file at /etc/ld.so.conf.d/deploy is in a directory routines can read; move it to /run/secrets or another directory routines cannot access, set OPENROUTINES_DEPLOY_KEY_FILE to its new path, and see https://openroutines.dev/docs/deploying/"
 	if err.Error() != want {
 		t.Errorf("unexpected refusal:\n got: %s\nwant: %s", err, want)
 	}

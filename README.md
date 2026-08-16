@@ -9,11 +9,11 @@
 
 **The framework for running simple, secure, and durable autonomous AI agents.**
 
-[Getting started](docs/getting-started.md) · [Creating routines](docs/routines.md) · [Extending your agent](docs/extending.md) · [Operating in production](docs/operating.md) · [CLI reference](docs/cli.md)
+[Getting started](https://openroutines.dev/docs/getting-started/) · [Creating routines](https://openroutines.dev/docs/routines/) · [Extending your agent](https://openroutines.dev/docs/extending/) · [Deploying your agent](https://openroutines.dev/docs/deploying/) · [CLI reference](https://openroutines.dev/docs/cli/)
 
 Plenty of tools will run a prompt on a schedule. OpenRoutines helps you run autonomous agents that have a _job_: a product management agent that gathers research, grooms the roadmap, and keeps docs true to what shipped, an IT ops agent that triages tickets and monitors licenses. One job, a handful of routines, and a way to report intentions and progress to the team. Scaffold one in minutes, test it locally, deploy it on your own infrastructure -- then maintain it like any other software you ship.
 
-<img alt="an OpenRoutines agent running in Steady" src="docs/assets/openroutines-in-action.webp" />
+<img alt="an OpenRoutines agent running in Steady" src=".github/assets/openroutines-in-action.webp" />
 
 *Product Pal, an OpenRoutines agent, reporting its intentions, progress, and blockers to its team in Steady.*
 
@@ -21,11 +21,11 @@ Plenty of tools will run a prompt on a schedule. OpenRoutines helps you run auto
 
 ### 📦 The repo is the agent
 
-Everything your agent is -- routines, skills, knowledge, encrypted credentials -- lives in one git repository that deploys as one Docker container. Routines are markdown files: frontmatter declares the scope, the body is the prompt. It runs anywhere a container runs -- a VPS, Fly, Render, your homelab -- with no database, queue, or secrets platform behind it, on any model provider opencode supports. Every run is [confined in a sandbox](docs/operating.md#run-confinement) with nothing to pass and nothing to configure. Simple, easy to reason about, shipped like the rest of your software.
+Everything your agent is -- routines, skills, knowledge, encrypted credentials -- lives in one git repository that deploys as one Docker container. Routines are markdown files: frontmatter declares the scope, the body is the prompt. It runs anywhere a container runs -- a VPS, Fly, Render, your homelab -- with no database, queue, or secrets platform behind it, on any model provider opencode supports. Every run is [confined in a sandbox](https://openroutines.dev/docs/deploying/#run-sandbox) with nothing to pass and nothing to configure. Simple, easy to reason about, shipped like the rest of your software.
 
 ### 🤝 A teammate, not a black box
 
-[Teamwork primitives come built in](docs/teamwork.md): recording work, owning tasks, stating intentions, surfacing blockers. One rule routes everything the agent remembers into events (it happened), tasks (someone must do it), or context (worth remembering). Knowledge lives on a git branch -- backed up on every push, surviving every redeploy -- and you review it like code. Any routine can consume what the agent recorded and report it anywhere -- Steady, Slack, a log line. You focus on the routines that do the work; the teamwork mostly takes care of itself.
+[Teamwork primitives come built in](https://openroutines.dev/docs/teamwork/): recording work, owning tasks, stating intentions, surfacing blockers. One rule routes everything the agent remembers into events (it happened), tasks (someone must do it), or context (worth remembering). Knowledge lives on a git branch -- backed up on every push, surviving every redeploy -- and you review it like code. Any routine can consume what the agent recorded and report it anywhere -- Steady, Slack, a log line. You focus on the routines that do the work; the teamwork mostly takes care of itself.
 
 ### 🔒 Safe to run unattended
 
@@ -44,7 +44,7 @@ openroutines routines new doc-drift    # edit the file, then:
 openroutines routines run doc-drift    # runs locally in the production container
 ```
 
-The full walkthrough -- install, configuration, models, your first routine -- is in [Getting started](docs/getting-started.md).
+The full walkthrough -- install, configuration, models, your first routine -- is in [Getting started](https://openroutines.dev/docs/getting-started/).
 
 ## Built by Steady
 

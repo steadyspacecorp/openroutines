@@ -30,7 +30,7 @@ func ValidateKeyFileLocations(dir string) error {
 	}
 	for _, key := range supervisorKeyFiles {
 		if path := key.path(dir); path != "" && sandbox.Exposes(path) {
-			return fmt.Errorf("the %s file at %s is in a directory routines can read; move it to /run/secrets or another directory routines cannot access, set %s to its new path, and see docs/operating.md", key.name, path, key.env)
+			return fmt.Errorf("the %s file at %s is in a directory routines can read; move it to /run/secrets or another directory routines cannot access, set %s to its new path, and see https://openroutines.dev/docs/deploying/", key.name, path, key.env)
 		}
 	}
 	return nil
@@ -52,7 +52,7 @@ func verifyIsolation() error {
 			slog.Warn("run sandbox disabled -- model processes run unconfined", "disabled_by", sandbox.EnvDisable)
 		case err != nil:
 			slog.Error("no run sandbox could be built here", "detail", err)
-			return fmt.Errorf("runs cannot be isolated on this host -- see docs/operating.md, or set %s=1 to run without a sandbox", sandbox.EnvDisable)
+			return fmt.Errorf("runs cannot be isolated on this host -- see https://openroutines.dev/docs/deploying/, or set %s=1 to run without a sandbox", sandbox.EnvDisable)
 		}
 	case mode.LocalNative:
 		slog.Warn("OPENROUTINES_NATIVE=1 -- model processes run unconfined (dev mode)")
