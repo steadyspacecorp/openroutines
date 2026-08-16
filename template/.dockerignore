@@ -1,7 +1,6 @@
 # Never bake these into an image: knowledge belongs to its branch, keys arrive
 # at boot (mounted file or env var), and generated/dev files are local.
 knowledge/
-master.key
 *.key
 *.pem
 id_*

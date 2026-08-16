@@ -14,6 +14,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/logging/logtest"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 	"github.com/steadyspacecorp/openroutines/internal/runner"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
@@ -152,14 +153,14 @@ func newSupervisor(t *testing.T, dir string) *Supervisor {
 func usurpLease(t *testing.T, s *Supervisor) (stop func()) {
 	t.Helper()
 	take := func() error {
-		lease, err := s.store.ReadLease()
+		lease, err := s.repo.ReadLease()
 		if err != nil {
 			return err
 		}
 		if lease == nil {
 			return fmt.Errorf("no lease to usurp")
 		}
-		_, err = s.store.WriteLease("usurper", time.Now(), lease.SHA)
+		_, err = s.repo.WriteLease("usurper", time.Now(), lease.SHA)
 		return err
 	}
 	var err error
@@ -1475,46 +1476,20 @@ func TestRunRecordCarriesUsage(t *testing.T) {
 	}
 }
 
-// Env delivery stays supported -- some platforms cannot mount a file -- but
-// boot names it as the weaker choice, because a deployment that picked it once
-// is never told again.
-func TestBootWarnsOnEnvDeliveredKeys(t *testing.T) {
+func TestBootAcceptsEnvDeliveredKeysWithoutLogging(t *testing.T) {
 	logs := logtest.Capture(t)
+	dir := t.TempDir()
 
 	t.Setenv(creds.EnvMasterKey, creds.GenerateKey())
-	t.Setenv(knowledge.EnvDeployKey, "PRIVATE KEY") // gitleaks:allow -- a placeholder, not a key
-	if err := VerifyKeyDelivery(); err != nil {
-		t.Fatal(err)
-	}
-	if got := logs.String(); got != "" {
-		t.Errorf("outside production there is nothing to warn about: %q", got)
-	}
-
+	t.Setenv(repository.EnvDeployKey, "PRIVATE KEY") // gitleaks:allow -- a placeholder, not a key
+	t.Setenv(creds.EnvMasterKeyFile, "/usr/local/etc/master.key")
+	t.Setenv(repository.EnvDeployKeyFile, "/etc/ld.so.conf.d/deploy")
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
-	if err := VerifyKeyDelivery(); err != nil {
-		t.Fatal(err)
-	}
-	logs.Expect(creds.EnvMasterKeyFile, knowledge.EnvDeployKeyFile)
-
-	keyFile := filepath.Join(t.TempDir(), "master.key")
-	if err := os.WriteFile(keyFile, []byte(creds.GenerateKey()), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(creds.EnvMasterKeyFile, keyFile)
-	logs.Reset()
-	if err := VerifyKeyDelivery(); err != nil {
-		t.Fatal(err)
-	}
-	logs.Expect(creds.EnvMasterKey)
-
-	t.Setenv(creds.EnvMasterKey, "")
-	t.Setenv(knowledge.EnvDeployKey, "")
-	logs.Reset()
-	if err := VerifyKeyDelivery(); err != nil {
+	if err := ValidateKeyFileLocations(dir); err != nil {
 		t.Fatal(err)
 	}
 	if got := logs.String(); got != "" {
-		t.Errorf("file delivery with no leftover variable is the recommended path: %q", got)
+		t.Errorf("environment-delivered keys should not produce logs: %q", got)
 	}
 }
 
@@ -1535,7 +1510,7 @@ func TestBootRunsUnconfinedWhenTheOperatorDisablesTheSandbox(t *testing.T) {
 	// than refusing a deployment over the smaller version of a tradeoff its
 	// operator already made.
 	t.Setenv(creds.EnvMasterKeyFile, "/usr/local/etc/master.key")
-	if err := VerifyKeyDelivery(); err != nil {
+	if err := ValidateKeyFileLocations(t.TempDir()); err != nil {
 		t.Errorf("with no sandbox there is no grant list to sit outside of: %v", err)
 	}
 }
@@ -1544,40 +1519,85 @@ func TestBootRunsUnconfinedWhenTheOperatorDisablesTheSandbox(t *testing.T) {
 // where the file sits: a run shares the supervisor's uid, so a key under a
 // granted path is readable at any mode. Fatal rather than a warning -- unlike
 // env delivery it is reachable by the very thing the sandbox contains.
-func TestBootRefusesAKeyFileTheSandboxWouldGrant(t *testing.T) {
+func TestBootRefusesAKeyFileRoutinesCanRead(t *testing.T) {
+	dir := t.TempDir()
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(repository.EnvDeployKey, "")
 	t.Setenv(creds.EnvMasterKeyFile, "/run/secrets/master.key")
-	t.Setenv(knowledge.EnvDeployKeyFile, "")
-	if err := VerifyKeyDelivery(); err != nil {
+	t.Setenv(repository.EnvDeployKeyFile, "")
+	if err := ValidateKeyFileLocations(dir); err != nil {
 		t.Errorf("a key outside every granted path is the supported deployment: %v", err)
 	}
 
 	t.Setenv(creds.EnvMasterKeyFile, "/usr/local/etc/master.key")
-	err := VerifyKeyDelivery()
+	err := ValidateKeyFileLocations(dir)
 	if err == nil {
 		t.Fatal("a master key inside the granted read-only OS was accepted")
 	}
-	if !strings.Contains(err.Error(), creds.EnvMasterKeyFile) {
-		t.Errorf("the refusal should name the variable to fix: %v", err)
+	want := "the master key file at /usr/local/etc/master.key is in a directory routines can read; move it to /run/secrets or another directory routines cannot access, set OPENROUTINES_MASTER_KEY_FILE to its new path, and see https://openroutines.dev/docs/deploying/"
+	if err.Error() != want {
+		t.Errorf("unexpected refusal:\n got: %s\nwant: %s", err, want)
 	}
 
 	t.Setenv(creds.EnvMasterKeyFile, "")
-	t.Setenv(knowledge.EnvDeployKeyFile, "/etc/ld.so.conf.d/deploy")
-	if err := VerifyKeyDelivery(); err == nil {
+	t.Setenv(repository.EnvDeployKeyFile, "/etc/ld.so.conf.d/deploy")
+	err = ValidateKeyFileLocations(dir)
+	if err == nil {
 		t.Fatal("a deploy key inside a granted /etc entry was accepted")
+	}
+	want = "the deploy key file at /etc/ld.so.conf.d/deploy is in a directory routines can read; move it to /run/secrets or another directory routines cannot access, set OPENROUTINES_DEPLOY_KEY_FILE to its new path, and see https://openroutines.dev/docs/deploying/"
+	if err.Error() != want {
+		t.Errorf("unexpected refusal:\n got: %s\nwant: %s", err, want)
 	}
 
 	// /etc is granted by named entry, so a secrets directory a host mounts
 	// under it is not one of them.
-	t.Setenv(knowledge.EnvDeployKeyFile, "/etc/secrets/deploy")
-	if err := VerifyKeyDelivery(); err != nil {
+	t.Setenv(repository.EnvDeployKeyFile, "/etc/secrets/deploy")
+	if err := ValidateKeyFileLocations(dir); err != nil {
 		t.Errorf("a platform secrets directory under /etc is a supported location: %v", err)
 	}
 
 	// Outside production the same misconfiguration is not an error: local
 	// runs are confined by their own container, which grants none of this.
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "")
-	if err := VerifyKeyDelivery(); err != nil {
+	if err := ValidateKeyFileLocations(dir); err != nil {
 		t.Errorf("outside production there is no sandbox grant list to violate: %v", err)
+	}
+}
+
+func TestBootRefusesAnExposedConventionalKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(creds.EnvMasterKeyFile, "")
+	t.Setenv(repository.EnvDeployKey, "")
+	t.Setenv(repository.EnvDeployKeyFile, "")
+	path := filepath.Join(dir, creds.KeyFileName)
+	if err := os.Symlink("/usr/bin/env", path); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ValidateKeyFileLocations(dir)
+	if err == nil {
+		t.Fatal("a conventional key file resolving inside the runtime OS was accepted")
+	}
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), creds.EnvMasterKeyFile) {
+		t.Errorf("the refusal should name the file to move and the override to set: %v", err)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	path = filepath.Join(dir, repository.DeployKeyFileName)
+	if err := os.Symlink("/usr/bin/env", path); err != nil {
+		t.Fatal(err)
+	}
+	err = ValidateKeyFileLocations(dir)
+	if err == nil {
+		t.Fatal("a conventional deploy key resolving inside the runtime OS was accepted")
+	}
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), repository.EnvDeployKeyFile) {
+		t.Errorf("the refusal should name the file to move and the override to set: %v", err)
 	}
 }

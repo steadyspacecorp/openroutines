@@ -16,7 +16,7 @@ It also makes the security model tractable: exactly one runtime means exactly on
 ## The repository is the agent
 
 **Decision.** Everything the agent is -- configuration, routines, skills, structured knowledge, encrypted credentials -- lives in one git repository.
-`openroutines scaffold` stamps out a new agent repo from the template embedded in the CLI binary (`template/` in this repo is its source, compiled in via Go's `embed`).
+`openroutines new` stamps out a new agent repo from the template embedded in the CLI binary (`template/` in this repo is its source, compiled in via Go's `embed`).
 The reviewed repository is trusted source code: whoever can change its routines, skills, configuration, or image can change the agent's behavior and authority.
 The security boundary isolates model-directed execution and external content from supervisor authority; it does not isolate an agent from its own source code or administrators.
 [SECURITY.md](../SECURITY.md) defines that threat model precisely.

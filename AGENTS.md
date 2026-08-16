@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on the OpenRoutines framework itself. (If you are working on a *scaffolded agent*, this is the wrong file -- see the AGENTS.md that `openroutines scaffold` placed in that repo.)
+Guidance for coding agents working on the OpenRoutines framework itself. (If you are working on a *scaffolded agent*, this is the wrong file -- see the AGENTS.md that `openroutines new` placed in that repo.)
 
 ## What this is
 
@@ -16,7 +16,7 @@ Add a Decision/Why entry to design.md only for a durable behavior choice whose r
 ## Ownership
 
 - `template/` is embedded into the CLI and is the source of every scaffolded agent.
-- `supervisor` plans and coordinates runs; `runner` prepares, executes, and settles attempts; `knowledge` owns persistence and import; `run` owns run identities and the persisted attempt record schema.
+- `supervisor` plans and coordinates runs; `runner` prepares, executes, and settles attempts; `repository` owns runtime Git initialization, authentication, execution, and lease persistence; `knowledge` owns the knowledge branch, worktree, persistence, and import; `run` owns run identities and the persisted attempt record schema.
 
 ## System invariants
 

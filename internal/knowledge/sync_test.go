@@ -1,14 +1,11 @@
 package knowledge
 
 import (
-	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Builds the #4 harness: a bare origin and two independent clones
@@ -49,71 +46,6 @@ func gitT(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// An origin that accepts connections and then says nothing --
-// a partitioned network drops packets rather than refusing them, so the
-// client waits on a reply that never comes. The URL is https so the stall
-// happens in a child helper (git-remote-https), where it happens in
-// production: a deadline that reached git alone would leave the helper
-// holding the output pipe.
-func blackhole(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ln.Close() })
-	go func() {
-		var held []net.Conn
-		defer func() {
-			for _, c := range held {
-				c.Close()
-			}
-		}()
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			held = append(held, conn)
-		}
-	}()
-	return fmt.Sprintf("https://%s/knowledge.git", ln.Addr().String())
-}
-
-// Every tick makes several network calls. A blackholed origin must cost the
-// tick a bounded wait, not park it until the TCP stack gives up -- and the
-// wait must end with the transport, not with the pipe drain giving up on a
-// helper the kill failed to reach.
-func TestGitAbandonsABlackholedRemote(t *testing.T) {
-	restore, restoreGrace := gitTimeout, gitKillGrace
-	gitTimeout, gitKillGrace = 500*time.Millisecond, 100*time.Millisecond
-	t.Cleanup(func() { gitTimeout, gitKillGrace = restore, restoreGrace })
-
-	dir := t.TempDir()
-	gitT(t, dir, "init", "-q", "-b", "main", ".")
-
-	remote := blackhole(t)
-	done := make(chan error, 1)
-	go func() {
-		_, err := git(dir, "ls-remote", remote, "refs/heads/knowledge")
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("expected the blackholed ls-remote to fail")
-		}
-		if !strings.Contains(err.Error(), "timed out") {
-			t.Fatalf("expected a timeout error, got %v", err)
-		}
-	// Comfortably past the deadline and its grace, and comfortably short of
-	// the drain deadline: returning only once the drain expires would mean
-	// the group kill never reached the helper holding the pipe.
-	case <-time.After(gitDrainDeadline - time.Second):
-		t.Fatal("git outlasted its deadline: the kill did not reach the stalled transport")
-	}
 }
 
 func writeKnowledge(t *testing.T, clone, name, content string) {
@@ -259,59 +191,5 @@ func TestSyncReportsConflictAndAborts(t *testing.T) {
 	// The rebase must have been aborted: worktree clean, still functional.
 	if status := gitT(t, filepath.Join(b, "knowledge"), "status", "--porcelain"); status != "" {
 		t.Fatalf("worktree left dirty after aborted rebase: %q", status)
-	}
-}
-
-func TestLeaseCASPreventsRaces(t *testing.T) {
-	a, b := twoClones(t)
-	shaA, err := NewStore(a).WriteLease("instance-a", time.Now(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// b races with a stale expectation ("no lease exists"): must lose.
-	if _, err := NewStore(b).WriteLease("instance-b", time.Now(), ""); err == nil {
-		t.Fatal("CAS should reject a write against a stale expectation")
-	}
-	// b reads the truth and takes over against the correct token: must win.
-	lease, err := NewStore(b).ReadLease()
-	if err != nil || lease == nil || lease.Holder != "instance-a" || lease.SHA != shaA {
-		t.Fatalf("unexpected lease read: %+v err=%v", lease, err)
-	}
-	if _, err := NewStore(b).WriteLease("instance-b", time.Now(), lease.SHA); err != nil {
-		t.Fatalf("CAS with correct token should succeed: %v", err)
-	}
-	if lease, _ = NewStore(a).ReadLease(); lease == nil || lease.Holder != "instance-b" {
-		t.Fatalf("takeover not visible: %+v", lease)
-	}
-	// Release is ownership-checked: the stale instance a (whose last-written
-	// SHA has been superseded by b's takeover) must NOT delete b's live lease.
-	NewStore(a).ReleaseLease(shaA)
-	current, _ := NewStore(a).ReadLease()
-	if current == nil || current.Holder != "instance-b" {
-		t.Fatalf("stale release deleted the live lease: %+v", current)
-	}
-	// The rightful holder releases with its own SHA: lease gone.
-	NewStore(b).ReleaseLease(current.SHA)
-	if lease, _ = NewStore(b).ReadLease(); lease != nil {
-		t.Fatalf("owned release should remove the lease: %+v", lease)
-	}
-}
-
-func TestLeasePreservesSubsecondHeartbeats(t *testing.T) {
-	a, b := twoClones(t)
-	now := time.Now().Truncate(time.Second).Add(375 * time.Millisecond)
-	if _, err := NewStore(a).WriteLease("instance-a", now, ""); err != nil {
-		t.Fatal(err)
-	}
-	lease, err := NewStore(b).ReadLease()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !lease.At.Equal(now) {
-		t.Fatalf("heartbeat read as %s, want %s", lease.At, now)
-	}
-	legacy, err := parseLeaseTime("1723165200")
-	if err != nil || !legacy.Equal(time.Unix(1723165200, 0)) {
-		t.Fatalf("legacy heartbeat parsed as %s: %v", legacy, err)
 	}
 }

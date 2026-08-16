@@ -86,6 +86,7 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 		".openroutines/plugins/demo/routines/plugin-daily.md": "---\nschedule: \"0 10 * * *\"\n---\nplugin work",
 		".openroutines/credentials.yml.enc":                   "ORV1:ciphertext",
 		"master.key":                                          "hex",
+		"deploy.key":                                          "PRIVATE KEY",
 		"agent_deploy_key":                                    "PRIVATE KEY",
 		"AGENTS.md":                                           "dev rules",
 		"CLAUDE.md":                                           "dev rules",

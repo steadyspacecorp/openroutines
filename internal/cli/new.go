@@ -4,30 +4,30 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	openroutines "github.com/steadyspacecorp/openroutines"
 	"github.com/steadyspacecorp/openroutines/internal/avatar"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
 const templateRoot = "template"
 
-const scaffoldUsage = "usage: openroutines scaffold <path>"
+const newUsage = "usage: openroutines new <path>"
 
-func cmdScaffold(args []string) int {
+func cmdNew(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {
 		return fail(err)
 	}
 	if help {
-		fmt.Println(scaffoldUsage)
+		fmt.Println(newUsage)
 		return 0
 	}
 	if len(positional) != 1 {
-		return fail(fmt.Errorf("%s", scaffoldUsage))
+		return fail(fmt.Errorf("%s", newUsage))
 	}
 	target := positional[0]
 	name := filepath.Base(target)
@@ -94,24 +94,8 @@ func cmdScaffold(args []string) int {
 		return fail(err)
 	}
 
-	// A fresh agent is a fresh git repo with the scaffold as its initial
-	// commit, so later changes land as a reviewable diff.
-	if out, err := exec.Command("git", "init", "--quiet", "--initial-branch=main", target).CombinedOutput(); err != nil {
-		return fail(fmt.Errorf("git init: %w: %s", err, out))
-	}
-	git := func(args ...string) error {
-		cmd := exec.Command("git", append([]string{"-C", target}, args...)...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
-		}
-		return nil
-	}
-	if err := git("add", "-A"); err != nil {
+	if err := repository.Initialize(target); err != nil {
 		return fail(err)
-	}
-	if err := git("-c", "user.name=openroutines", "-c", "user.email=agent@openroutines.dev", "commit", "--quiet", "-m", "Scaffold agent "+name); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not create the initial commit: %v\n", err)
 	}
 
 	fmt.Printf("Created agent %q at %s\n\nNext steps:\n  cd %s\n  openroutines configure\n", name, target, target)

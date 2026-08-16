@@ -1,11 +1,65 @@
-package knowledge
+package repository
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
+
+func blackhole(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		var held []net.Conn
+		defer func() {
+			for _, conn := range held {
+				conn.Close()
+			}
+		}()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			held = append(held, conn)
+		}
+	}()
+	return fmt.Sprintf("https://%s/knowledge.git", ln.Addr().String())
+}
+
+func TestGitAbandonsABlackholedRemote(t *testing.T) {
+	restore, restoreGrace := gitTimeout, gitKillGrace
+	gitTimeout, gitKillGrace = 500*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { gitTimeout, gitKillGrace = restore, restoreGrace })
+
+	dir := t.TempDir()
+	gitT(t, dir, "init", "--quiet", "--initial-branch=main")
+	remote := blackhole(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := git(dir, "ls-remote", remote, "refs/heads/knowledge")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected the blackholed ls-remote to fail")
+		}
+		if !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("expected a timeout error, got %v", err)
+		}
+	case <-time.After(gitDrainDeadline - time.Second):
+		t.Fatal("git outlasted its deadline: the kill did not reach the stalled transport")
+	}
+}
 
 func TestGitChildEnvExcludesSupervisorSecrets(t *testing.T) {
 	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899" // gitleaks:allow -- synthetic fixture

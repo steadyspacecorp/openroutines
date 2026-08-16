@@ -50,8 +50,8 @@ func TestRunRequiresAgentRepoBeforeCommandLogic(t *testing.T) {
 // hearing of the logging package.
 func TestRunConfiguresLoggingFromEnvironment(t *testing.T) {
 	t.Chdir(t.TempDir())
-	if code := Run([]string{"scaffold", "agent"}); code != 0 {
-		t.Fatalf("scaffold exit code = %d, want 0", code)
+	if code := Run([]string{"new", "agent"}); code != 0 {
+		t.Fatalf("new exit code = %d, want 0", code)
 	}
 	t.Chdir("agent")
 
@@ -63,15 +63,15 @@ func TestRunConfiguresLoggingFromEnvironment(t *testing.T) {
 	}
 }
 
-func TestRunAllowsScaffoldOutsideAnAgentRepo(t *testing.T) {
+func TestRunAllowsNewOutsideAnAgentRepo(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	if code := Run([]string{"scaffold", "new-agent"}); code != 0 {
-		t.Fatalf("scaffold exit code = %d, want 0", code)
+	if code := Run([]string{"new", "new-agent"}); code != 0 {
+		t.Fatalf("new exit code = %d, want 0", code)
 	}
 	if _, err := os.Stat("new-agent/openroutines.yml"); err != nil {
-		t.Fatalf("scaffold did not create an agent repo: %v", err)
+		t.Fatalf("new did not create an agent repo: %v", err)
 	}
 }
 

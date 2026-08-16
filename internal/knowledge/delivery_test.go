@@ -208,7 +208,7 @@ func TestChangesRejectsUnreachableCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	orphan, _ := NewStore(dir).Head()
-	if _, err := git(NewStore(dir).Worktree(), "reset", "--hard", "HEAD~1"); err != nil {
+	if _, err := NewStore(dir).worktree.Run("reset", "--hard", "HEAD~1"); err != nil {
 		t.Fatal(err)
 	}
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: the repaired fact")
@@ -237,19 +237,6 @@ func TestChangesKeepsEnvironmentFailuresRetryable(t *testing.T) {
 		t.Fatalf("an unanswerable git must stay retryable, got %v", err)
 	}
 
-	// A deadline this process imposed is the other way git stops answering,
-	// and the one an operator is likeliest to hit: the kill signal it reports
-	// must not be read as a verdict about the cursor.
-	restore, restoreGrace := gitTimeout, gitKillGrace
-	gitTimeout, gitKillGrace = time.Nanosecond, time.Millisecond
-	t.Cleanup(func() { gitTimeout, gitKillGrace = restore, restoreGrace })
-	_, err = NewStore(dir).Changes(head, head)
-	if err == nil {
-		t.Fatal("a git that cannot outrun its deadline should fail")
-	}
-	if errors.Is(err, ErrCursorUnreachable) {
-		t.Fatalf("a timed-out git must stay retryable, got %v", err)
-	}
 }
 
 func TestCursorRoundTripAndListing(t *testing.T) {

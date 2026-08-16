@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,10 +14,10 @@ import (
 // Claude Code reads CLAUDE.md, not AGENTS.md, so the scaffold links one to
 // the other -- a symlink, not a copy, so template updates to AGENTS.md can
 // never leave a stale CLAUDE.md behind.
-func TestScaffoldLinksClaudeMdToAgentsMd(t *testing.T) {
+func TestNewLinksClaudeMdToAgentsMd(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent")
-	if code := cmdScaffold([]string{dir}); code != 0 {
-		t.Fatalf("scaffold exited %d", code)
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
 	}
 	link := filepath.Join(dir, "CLAUDE.md")
 	fi, err := os.Lstat(link)
@@ -35,10 +36,10 @@ func TestScaffoldLinksClaudeMdToAgentsMd(t *testing.T) {
 	}
 }
 
-func TestScaffoldWritesAvatar(t *testing.T) {
+func TestNewWritesAvatar(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent")
-	if code := cmdScaffold([]string{dir}); code != 0 {
-		t.Fatalf("scaffold exited %d", code)
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
 	}
 	svg, err := os.ReadFile(filepath.Join(dir, "avatar.svg"))
 	if err != nil {
@@ -56,10 +57,10 @@ func TestScaffoldWritesAvatar(t *testing.T) {
 	}
 }
 
-func TestScaffoldKeepsFrameworkFilesUnderOpenRoutines(t *testing.T) {
+func TestNewKeepsFrameworkFilesUnderOpenRoutines(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent")
-	if code := cmdScaffold([]string{dir}); code != 0 {
-		t.Fatalf("scaffold exited %d", code)
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, ".openroutines", "version"))
 	if err != nil {
@@ -70,5 +71,40 @@ func TestScaffoldKeepsFrameworkFilesUnderOpenRoutines(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".openroutines-version")); !os.IsNotExist(err) {
 		t.Fatalf("legacy version pin exists: %v", err)
+	}
+}
+
+func TestNewInitializesRepoWithoutCommittingScaffold(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
+	}
+	cmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
+	cmd.Dir = dir
+	if err := cmd.Run(); err == nil {
+		t.Fatal("new created an initial commit")
+	}
+	cmd = exec.Command("git", "status", "--porcelain")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "?? openroutines.yml\n") {
+		t.Fatalf("scaffold is not present as uncommitted work:\n%s", out)
+	}
+}
+
+func TestNewLeavesRepoForAfterPublishing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	if code := cmdNew([]string{dir}); code != 0 {
+		t.Fatalf("new exited %d", code)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "openroutines.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "\nrepo:\n") {
+		t.Fatalf("new config does not contain an empty repo field:\n%s", raw)
 	}
 }

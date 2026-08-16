@@ -3,6 +3,7 @@ package cli
 import (
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,6 +68,66 @@ func TestCheckNamesBinaryPinMismatchFirst(t *testing.T) {
 	version.Version = "v0.0.0-dev"
 	if out := checkOutput(t, dir); strings.Contains(out, "but the agent pins") {
 		t.Fatalf("a dev binary must not report a pin mismatch:\n%s", out)
+	}
+}
+
+func TestCheckUsesConfiguredRepoWithoutACheckoutOrigin(t *testing.T) {
+	dir := t.TempDir()
+	config := checkAgentYAML + "repo: acme/agent\n"
+	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := checkOutput(t, dir)
+	if !strings.Contains(out, "repo configured") {
+		t.Fatalf("configured repo not reported:\n%s", out)
+	}
+	if strings.Contains(out, "no git origin") || strings.Contains(out, "no durable home") {
+		t.Fatalf("check still requires checkout metadata:\n%s", out)
+	}
+}
+
+func TestCheckDoesNotPrintCheckoutCredentials(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "--quiet"},
+		{"remote", "add", "origin", "https://build-user:secret-token@github.com/acme/agent.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	out := checkOutput(t, dir)
+	if strings.Contains(out, "build-user") || strings.Contains(out, "secret-token") {
+		t.Fatalf("check printed checkout credentials:\n%s", out)
+	}
+	if !strings.Contains(out, "repo is required for deployment") {
+		t.Fatalf("check did not require a durable repository:\n%s", out)
+	}
+	if !strings.Contains(out, "https://github.com/acme/agent.git") {
+		t.Fatalf("check did not report the redacted origin:\n%s", out)
+	}
+}
+
+func TestCheckAcceptsConfiguredGitHubRepoWithoutPrintingCredentials(t *testing.T) {
+	dir := t.TempDir()
+	config := checkAgentYAML + "repo: https://build-user:secret-token@github.com/acme/agent.git\n"
+	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := checkOutput(t, dir)
+	if strings.Contains(out, "build-user") || strings.Contains(out, "secret-token") {
+		t.Fatalf("check printed configured repo credentials:\n%s", out)
+	}
+	if !strings.Contains(out, "repo configured") {
+		t.Fatalf("check did not accept the configured repo:\n%s", out)
 	}
 }
 

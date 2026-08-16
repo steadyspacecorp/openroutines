@@ -37,7 +37,7 @@ You need git, Docker, and an API key for at least one model provider. Then:
 
 ```bash
 curl -fsSL https://get.openroutines.dev/install.sh | bash
-openroutines scaffold my-agent
+openroutines new my-agent
 cd my-agent
 openroutines configure
 openroutines routines new doc-drift    # edit the file, then:

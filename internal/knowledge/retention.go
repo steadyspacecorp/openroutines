@@ -49,7 +49,7 @@ func (store *Store) Trim(keep time.Duration, now time.Time) (bool, error) {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		ages, err := blameLineTimes(wt, name)
+		ages, err := store.blameLineTimes(name)
 		if err != nil {
 			return changed, fmt.Errorf("trim %s: %w", name, err)
 		}
@@ -98,8 +98,8 @@ func (store *Store) Trim(keep time.Duration, now time.Time) (bool, error) {
 
 // Maps 1-based line numbers to their commit times.
 // Uncommitted lines are absent from the map (and therefore kept).
-func blameLineTimes(worktree, file string) (map[int]time.Time, error) {
-	out, err := git(worktree, "blame", "--line-porcelain", "--", file)
+func (store *Store) blameLineTimes(file string) (map[int]time.Time, error) {
+	out, err := store.worktree.Run("blame", "--line-porcelain", "--", file)
 	if err != nil {
 		return nil, err
 	}

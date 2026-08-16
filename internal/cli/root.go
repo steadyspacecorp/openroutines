@@ -16,7 +16,7 @@ import (
 const usage = `OpenRoutines -- run simple, secure, and durable autonomous AI agents
 
 Usage:
-  openroutines scaffold <path>      create a new agent repository
+  openroutines new <path>           create a new agent repository
   openroutines configure            fill in openroutines.yml, generate the master key
   openroutines check                validate the agent; made for CI
   openroutines status               show what the agent has and still needs
@@ -31,14 +31,14 @@ Usage:
   openroutines update               bump the pinned framework version
   openroutines version              print the version
 
-Run any command from inside an agent repository (except scaffold).
+Run any command from inside an agent repository (except new).
 `
 
-// scaffold is exempt from the agent-repo check below because it creates the
+// new is exempt from the agent-repo check below because it creates the
 // repository; sandbox-exec because it is the supervisor re-entering its own
 // binary to confine one attempt, not something anyone types.
 var commands = map[string]func([]string) int{
-	"scaffold":          cmdScaffold,
+	"new":               cmdNew,
 	"configure":         cmdConfigure,
 	"check":             cmdCheck,
 	"routines":          cmdRoutines,
@@ -69,7 +69,7 @@ func cmdSandboxExec(args []string) int {
 }
 
 var repoOptional = map[string]bool{
-	"scaffold":          true,
+	"new":               true,
 	sandbox.ShimCommand: true,
 }
 

@@ -101,7 +101,7 @@ func (store *Store) Cursors() (map[string]Cursor, error) {
 // Returns the knowledge branch's current commit: the fixed `through`
 // boundary a change set is prepared against.
 func (store *Store) Head() (string, error) {
-	return git(store.Worktree(), "rev-parse", "HEAD")
+	return store.worktree.Run("rev-parse", "HEAD")
 }
 
 // One knowledge commit's model-facing changes.
@@ -135,21 +135,18 @@ var ErrCursorUnreachable = errors.New("consumer cursor is not on the knowledge b
 // Only git's own "no" (exit 1) counts; anything else is git failing to
 // answer, which must not abandon a run.
 func (store *Store) reachable(from, through string) error {
-	wt := store.Worktree()
-	full, err := git(wt, "rev-parse", "--verify", "--quiet", from+"^{commit}")
+	full, exists, err := store.worktree.ResolveCommit(from)
 	if err != nil {
-		if gitExitCode(err) != 1 {
-			return fmt.Errorf("delivery changes: reading cursor commit: %w", err)
-		}
+		return fmt.Errorf("delivery changes: reading cursor commit: %w", err)
+	}
+	if !exists {
 		return fmt.Errorf("%w: commit %.12s is not in this repository", ErrCursorUnreachable, from)
 	}
-	// Exit 1 here means no common ancestor at all -- as off-branch as a
-	// cursor gets, and reported as such by the empty base.
-	base, err := git(wt, "merge-base", full, through)
-	if err != nil && gitExitCode(err) != 1 {
+	ancestor, err := store.worktree.IsAncestor(full, through)
+	if err != nil {
 		return fmt.Errorf("delivery changes: relating cursor to boundary: %w", err)
 	}
-	if base != full {
+	if !ancestor {
 		return fmt.Errorf("%w: commit %.12s is not an ancestor of %.12s", ErrCursorUnreachable, from, through)
 	}
 	return nil
@@ -175,7 +172,7 @@ func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 		"--invert-grep", "--grep=^" + trimTrailer + "$",
 		from + ".." + through, "--", ".",
 	}, deliveryExcludes...)
-	out, err := git(store.Worktree(), args...)
+	out, err := store.worktree.Run(args...)
 	if err != nil {
 		return nil, err
 	}

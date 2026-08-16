@@ -106,11 +106,11 @@ An integration test builds real sandboxes on every rung available and asserts ea
 CI sets `OPENROUTINES_REQUIRE_SANDBOX=1` so "no sandbox here" fails rather than skips, and lifts the userns sysctl its runners set.
 
 **Decision (secrets).** A file-delivered master key in production must be mounted for the `agent` identity without group or other read bits, and key loading rejects a broader mode.
-The deploy key stays a file because `GIT_SSH_COMMAND` points `ssh -i` at a path, but its `0600` copy lives in the supervisor's `0700` home.
+The deploy key is materialized as a file because `GIT_SSH_COMMAND` points `ssh -i` at a path, but its `0600` copy lives in the supervisor's `0700` home regardless of how the key arrived.
 What keeps either from a run is that no sandbox grants it -- absence, not ownership, because a run holds the supervisor's own uid and satisfies every mode check the supervisor does.
-Two things follow from absence being a property of the grant list rather than of the file: the sandbox grants `/etc` entry by named entry, and the supervisor resolves both configured key paths at boot and refuses to start if either lands inside a granted path, naming the variable to fix.
+Two things follow from absence being a property of the grant list rather than of the file: the sandbox grants `/etc` entry by named entry, and the supervisor resolves both selected key paths at boot and refuses to start if either lands inside a granted path, naming the file to move and the variable to set.
 One boot step checks both keys against one rule -- can the thing we isolate reach it?
-A key file inside a granted path is fatal; a key value in the environment is a warning, exposed to the host but not to a run, whose environment is constructed rather than inherited.
+A key file inside a granted path is fatal; a key value in the environment needs no path validation and remains out of reach of a run, whose environment is constructed rather than inherited and whose access to the supervisor's process is denied on every rung.
 
 **Why.** Every property a UID boundary enforces is a statement about which UID may read which path, and expressing it that way costs a whole identity lifecycle -- allocating, granting, reaping, proving, poisoning, and reclaiming -- plus file capabilities on the supervisor binary and a reserved identity pool baked into the image.
 A sandbox expresses the same properties by construction and needs none of that machinery.

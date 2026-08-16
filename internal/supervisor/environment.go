@@ -4,47 +4,33 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/steadyspacecorp/openroutines/internal/creds"
-	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/mode"
+	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/sandbox"
 )
 
-// The secrets the supervisor holds and no run may have. Each arrives one of two
-// ways -- a value in the environment, or a path to a mounted file -- so each
-// answers the same two questions.
-var supervisorKeys = []struct{ what, valueEnv, fileEnv string }{
-	{"master key", creds.EnvMasterKey, creds.EnvMasterKeyFile},
-	{"deploy key", knowledge.EnvDeployKey, knowledge.EnvDeployKeyFile},
+var supervisorKeyFiles = []struct {
+	name, env string
+	path      func(string) string
+}{
+	{"master key", creds.EnvMasterKeyFile, creds.MasterKeyFilePath},
+	{"deploy key", repository.EnvDeployKeyFile, repository.DeployKeyFilePath},
 }
 
-// VerifyKeyDelivery inspects how the supervisor's own secrets arrived, in
-// production only. It runs at boot and again before a manual `routines run`, so
-// a layout boot would refuse cannot be accepted just because the supervisor is
-// not the one asking. It composes here because neither creds nor knowledge can
-// answer alone: the question is about a key *and* what the sandbox grants.
-//
-// A key file inside a granted path is fatal -- runs hold the supervisor's uid,
-// so the file's mode stops nobody. A key value in the environment is a warning:
-// weaker delivery, but out of reach of a run, whose environment is constructed
-// rather than inherited. It fires on a leftover variable too.
-func VerifyKeyDelivery() error {
+// ValidateKeyFileLocations rejects a production key file that routines can
+// read. It runs before every entry point that can spawn a routine.
+func ValidateKeyFileLocations(dir string) error {
 	if mode.Current() != mode.DeployedContainer {
 		return nil
 	}
-	// With the sandbox disabled there is no grant list to sit outside of, and
-	// refusing the smaller version of a tradeoff the operator already took would
-	// help nobody. The isolation check names that consequence.
-	confined := !sandbox.Disabled()
-	for _, key := range supervisorKeys {
-		if path := os.Getenv(key.fileEnv); confined && path != "" && sandbox.Exposes(path) {
-			return fmt.Errorf("%s=%s puts the %s inside a path every run's sandbox grants, where a run could read it -- runs share this process's uid, so the file's mode does not stop them. Mount it outside the granted OS paths instead (for example /run/secrets); see https://openroutines.dev/docs/deploying/", key.fileEnv, path, key.what)
-		}
-		if os.Getenv(key.valueEnv) != "" {
-			slog.Warn("the "+key.what+" value is in this process's environment -- readable wherever that environment is; mount the key as a file, point the file variable at the path, and unset the value variable",
-				"value_env", key.valueEnv, "file_env", key.fileEnv)
+	if sandbox.Disabled() {
+		return nil
+	}
+	for _, key := range supervisorKeyFiles {
+		if path := key.path(dir); path != "" && sandbox.Exposes(path) {
+			return fmt.Errorf("the %s file at %s is in a directory routines can read; move it to /run/secrets or another directory routines cannot access, set %s to its new path, and see https://openroutines.dev/docs/deploying/", key.name, path, key.env)
 		}
 	}
 	return nil

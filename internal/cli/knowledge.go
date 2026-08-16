@@ -395,7 +395,7 @@ func knowledgeSummarizeWithReader(snap *knowledge.OriginSnapshot, window time.Du
 			return 0
 		}
 	}
-	if err := supervisor.VerifyKeyDelivery(); err != nil {
+	if err := supervisor.ValidateKeyFileLocations("."); err != nil {
 		return fail(err)
 	}
 	through := snap.FetchedAt

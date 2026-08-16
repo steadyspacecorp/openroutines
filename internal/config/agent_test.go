@@ -27,6 +27,38 @@ func TestInstructionsOptional(t *testing.T) {
 	}
 }
 
+func TestRepoConfig(t *testing.T) {
+	dir := t.TempDir()
+	raw := `name: a
+repo: acme/agent
+owner:
+  email: o@example.com
+timezone: UTC
+defaults:
+  model: anthropic/claude-sonnet-5
+`
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := a.Repo, "acme/agent"; got != want {
+		t.Fatalf("repo = %q, want %q", got, want)
+	}
+	if problems := a.Problems(); len(problems) != 0 {
+		t.Fatalf("valid repository flagged: %v", problems)
+	}
+
+	// Existing and local-only agents may omit the field; deployment readiness
+	// is the check command's separate concern.
+	a.Repo = ""
+	if problems := a.Problems(); len(problems) != 0 {
+		t.Fatalf("omitted repository flagged: %v", problems)
+	}
+}
+
 // Variable names must map cleanly onto env vars and never shadow what the
 // framework itself sets.
 func TestVariableNameValidation(t *testing.T) {
@@ -161,6 +193,7 @@ func TestSaveUsesTwoSpaceIndent(t *testing.T) {
 	a := Agent{
 		Name:         "a",
 		Instructions: "d",
+		Repo:         "acme/agent",
 		Owner:        Owner{Name: "o", Email: "o@example.com"},
 		Timezone:     "UTC",
 		Defaults:     Defaults{Model: "anthropic/claude-sonnet-5"},
@@ -173,13 +206,50 @@ func TestSaveUsesTwoSpaceIndent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"owner:\n  name: o", "defaults:\n  model: anthropic/claude-sonnet-5", "variables:\n  product_repo: acme/widgets"} {
+	for _, want := range []string{"repo: acme/agent", "owner:\n  name: o", "defaults:\n  model: anthropic/claude-sonnet-5", "variables:\n  product_repo: acme/widgets"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("saved yaml should nest with 2 spaces, missing %q:\n%s", want, raw)
 		}
 	}
 	if strings.Contains(string(raw), "    ") {
 		t.Fatalf("saved yaml contains 4-space indentation:\n%s", raw)
+	}
+}
+
+func TestSavePreservesComments(t *testing.T) {
+	dir := t.TempDir()
+	raw := "# Required. Agent identity.\nname: old\nowner:\n  # Optional. Owner name.\n  name: old owner\n"
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Name = "new"
+	a.Owner.Name = "new owner"
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(filepath.Join(dir, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Required. Agent identity.\nname: new", "# Optional. Owner name.\n  name: new owner"} {
+		if !strings.Contains(string(saved), want) {
+			t.Fatalf("saved YAML lost comment %q:\n%s", want, saved)
+		}
+	}
+}
+
+func TestProblemsAllowsOwnerToBeUnset(t *testing.T) {
+	a := Agent{
+		Name:     "agent",
+		Timezone: "UTC",
+		Defaults: Defaults{Model: "provider/model"},
+	}
+	if problems := a.Problems(); len(problems) != 0 {
+		t.Fatalf("unset optional owner reported as a problem: %v", problems)
 	}
 }
 
