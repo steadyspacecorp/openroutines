@@ -50,7 +50,14 @@ func cmdSync(args []string) int {
 		fmt.Println("no origin -- knowledge is local only, nothing to reconcile")
 		return 0
 	case rep.RemoteMissing:
-		fmt.Printf("origin has no %s branch yet -- it is created the first time knowledge is pushed\n", knowledge.Branch)
+		if !push {
+			fmt.Printf("origin has no %s branch yet -- openroutines sync --push to create it\n", knowledge.Branch)
+			return 0
+		}
+		if err := store.Push(); err != nil {
+			return fail(fmt.Errorf("publishing knowledge: %w", err))
+		}
+		fmt.Printf("published knowledge to new origin/%s\n", knowledge.Branch)
 		return 0
 	case rep.Unreachable:
 		return fail(fmt.Errorf("origin unreachable: %s", rep.Detail))
@@ -59,7 +66,16 @@ func cmdSync(args []string) int {
 		return fail(fmt.Errorf("%s", rep.Detail))
 	case rep.Conflict:
 		reportStranded(store)
-		return fail(fmt.Errorf("knowledge does not reconcile cleanly: %s\n\nresolve inside knowledge/, commit, then rerun openroutines sync", rep.Detail))
+		return fail(fmt.Errorf(
+			"knowledge does not reconcile cleanly: %s\n\n"+
+				"recover with:\n"+
+				"  git -C knowledge rebase origin/%s\n"+
+				"  # resolve conflicts in knowledge/, then:\n"+
+				"  git -C knowledge add -A\n"+
+				"  git -C knowledge rebase --continue\n"+
+				"  openroutines sync --push",
+			rep.Detail, knowledge.Branch,
+		))
 	case rep.Detail != "":
 		return fail(fmt.Errorf("%s", rep.Detail))
 	}

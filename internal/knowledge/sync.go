@@ -1,6 +1,9 @@
 package knowledge
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type SyncReport struct {
 	LocalOnly     bool   // no remote persistence is configured
@@ -105,10 +108,22 @@ func (store *Store) Sync() SyncReport {
 	// Diverged (human curation raced local commits): rebase ours on top.
 	if _, err := store.worktree.Run("rebase", "--quiet", newTip); err != nil {
 		_, _ = store.worktree.Run("rebase", "--abort")
-		return SyncReport{Conflict: true, Detail: err.Error()}
+		return SyncReport{Conflict: true, Detail: conflictDetail(err)}
 	}
 	store.recordAccepted(newTip)
 	return SyncReport{Adopted: true}
+}
+
+func conflictDetail(err error) string {
+	lines := strings.Split(err.Error(), "\n")
+	out := lines[:0]
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "hint:") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 // Publishes the knowledge branch. Fast-forward only: rejections are
