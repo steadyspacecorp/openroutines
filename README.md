@@ -1,6 +1,7 @@
 # OpenRoutines
 
-> **Early alpha:** OpenRoutines is under active development and not ready for production use. APIs, configuration, and behavior may change without notice. We're sharing the work early -- watch the repository for updates.
+<!--
+> **Early alpha:** OpenRoutines is under active development and not ready for production use. APIs, configuration, and behavior may change without notice. We're sharing the work early -- watch the repository for updates. 
 
 [![ci](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml/badge.svg)](https://github.com/steadyspacecorp/openroutines/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/steadyspacecorp/openroutines?include_prereleases)](https://github.com/steadyspacecorp/openroutines/releases)
@@ -11,12 +12,16 @@
 
 [Getting started](https://openroutines.dev/docs/getting-started/) · [Creating routines](https://openroutines.dev/docs/routines/) · [Extending your agent](https://openroutines.dev/docs/extending/) · [Deploying your agent](https://openroutines.dev/docs/deploying/) · [CLI reference](https://openroutines.dev/docs/cli/)
 
+-->
+
 Plenty of tools will run a prompt on a schedule. OpenRoutines helps you run autonomous agents that have a _job_: a product management agent that gathers research, grooms the roadmap, and keeps docs true to what shipped, an IT ops agent that triages tickets and monitors licenses. One job, a handful of routines, and a way to report intentions and progress to the team. Scaffold one in minutes, test it locally, deploy it on your own infrastructure -- then maintain it like any other software you ship.
 
+<!--
 <img alt="an OpenRoutines agent running in Steady" src=".github/assets/openroutines-in-action.webp" />
 
 *Product Pal, an OpenRoutines agent, reporting its intentions, progress, and blockers to its team in Steady.*
 
+-->
 ## Why OpenRoutines?
 
 ### 📦 The repo is the agent
