@@ -14,22 +14,22 @@ import (
 
 const RehearsalFileName = "rehearsal.md"
 
-const fixturePreamble = `REHEARSAL RUN, fixture world. The fixtures in ./rehearsal.md replace
+const fixturePreamble = `REHEARSAL RUN, scenario. The data in ./rehearsal.md replaces
 every outside read for this run -- including ./changes.md and
-./schedule.md wherever the fixtures provide stand-ins. You have no
-credentials, no MCP servers, no skills, and no web access; do not
-attempt external calls, the fixtures are the world. Nothing you produce
-leaves the run: knowledge writes are discarded. Follow the routine
-below exactly, against the fixtures.
+./schedule.md wherever the rehearsal data provides stand-ins.
+The credentials, integrations, skills, and web access configured for this routine are unavailable.
+The model connection itself remains live. Do not attempt any other external
+calls; the rehearsal data is the outside world. Knowledge changes will not be saved.
+Follow the routine below exactly, using the rehearsal data.
 
 `
 
 const livePreamble = `REHEARSAL RUN, live world. Read anything this routine normally reads --
-your credentials and tools are present -- but treat every external
+this routine's usual outside access remains available -- but treat every external
 action as read-only and idempotent: write nothing, post nothing, change
 no state in any outside system. Anything the routine would deliver to a
 destination, print here instead; printed output is this rehearsal's
-delivery. Knowledge writes are discarded and nothing is consumed.
+delivery. Knowledge changes will not be saved.
 Follow the routine below exactly, under these restraints.
 
 `
