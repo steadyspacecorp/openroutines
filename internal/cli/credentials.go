@@ -65,20 +65,8 @@ func cmdCredentials(args []string) int {
 	}
 }
 
-func openStore() ([]byte, map[string]string, error) {
-	key, err := creds.LoadKey(".")
-	if err != nil {
-		return nil, nil, err
-	}
-	store, err := creds.Read(".", key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return key, store, nil
-}
-
 func credentialsList() int {
-	_, store, err := openStore()
+	_, store, err := creds.Load(".")
 	if err != nil {
 		return fail(err)
 	}
@@ -132,7 +120,7 @@ func credentialsSet(args []string) int {
 	if creds.ReservedEnvName(name) {
 		return fail(fmt.Errorf("credential name %q would shadow the %s environment variable in every run that declares it", name, strings.ToUpper(name)))
 	}
-	key, store, err := openStore()
+	key, store, err := creds.Load(".")
 	if err != nil {
 		return fail(err)
 	}
@@ -211,7 +199,7 @@ func credentialsRemove(args []string) int {
 		return fail(fmt.Errorf("usage: openroutines credentials remove <name>"))
 	}
 	name := positional[0]
-	key, store, err := openStore()
+	key, store, err := creds.Load(".")
 	if err != nil {
 		return fail(err)
 	}

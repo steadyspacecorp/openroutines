@@ -75,14 +75,9 @@ func printAgentStatus(dir string, agent *config.Agent) *time.Location {
 }
 
 func printCredentialStatus(dir string) {
-	key, err := creds.LoadKey(dir)
+	_, store, err := creds.Load(dir)
 	if err != nil {
-		fmt.Printf("master key MISSING -- run openroutines configure\n")
-		return
-	}
-	store, err := creds.Read(dir, key)
-	if err != nil {
-		fmt.Printf("master key present, but credentials do not decrypt: %v\n", err)
+		fmt.Printf("credentials error -- %v\n", err)
 		return
 	}
 	names := slices.Sorted(maps.Keys(store))

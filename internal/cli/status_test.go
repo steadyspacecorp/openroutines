@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 	"github.com/steadyspacecorp/openroutines/internal/supervisor"
@@ -72,6 +73,15 @@ func capture(t *testing.T, dir string, run func()) string {
 		t.Fatal(err)
 	}
 	return string(out)
+}
+
+func TestStatusReportsCredentialStoreErrors(t *testing.T) {
+	dir := statusAgent(t, nil)
+	out := capture(t, dir, func() { cmdStatus(nil) })
+	want := "credentials error -- " + creds.FileName + " is missing"
+	if !strings.Contains(out, want) {
+		t.Fatalf("status missing %q:\n%s", want, out)
+	}
 }
 
 // A routine mid-retry or sitting out a circuit-breaker cool-down must not

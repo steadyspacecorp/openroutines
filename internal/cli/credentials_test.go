@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,7 @@ func credentialsAgent(t *testing.T, agentYAML string) string {
 	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(agentYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600); err != nil {
+	if err := creds.Initialize(dir); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -89,6 +90,103 @@ func storedValue(t *testing.T, dir, name string) (string, bool) {
 	}
 	v, ok := store[name]
 	return v, ok
+}
+
+func captureCredentialsError(t *testing.T, dir string, run func() int) (int, string) {
+	t.Helper()
+	t.Chdir(dir)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = w
+	code := run()
+	os.Stderr = stderr
+	w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code, string(out)
+}
+
+func TestCredentialsListRequiresTheStore(t *testing.T) {
+	dir := statusAgent(t, nil)
+	code, out := captureCredentialsError(t, dir, credentialsList)
+	if code == 0 || !strings.Contains(out, creds.FileName+" is missing") {
+		t.Fatalf("credentials list without store: code=%d, output=%s", code, out)
+	}
+	for _, path := range []string{creds.KeyFileName, creds.FileName} {
+		if _, err := os.Stat(filepath.Join(dir, path)); !os.IsNotExist(err) {
+			t.Fatalf("credentials list created %s: %v", path, err)
+		}
+	}
+}
+
+func TestCredentialsListRefusesExistingStoreWithoutItsKey(t *testing.T) {
+	dir := statusAgent(t, nil)
+	key := []byte(strings.Repeat("a", 32))
+	if err := creds.Write(dir, key, map[string]string{"fake_api_key": "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(dir, creds.FileName)
+	before, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(creds.EnvMasterKeyFile, "")
+
+	code, out := captureCredentialsError(t, dir, credentialsList)
+	if code == 0 {
+		t.Fatalf("credentials list accepted a store without its key:\n%s", out)
+	}
+	for _, want := range []string{creds.FileName + " exists", "restore " + creds.KeyFileName} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("credentials list error missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "delete the store") {
+		t.Fatalf("credentials list suggested destructive recovery:\n%s", out)
+	}
+	if strings.Contains(out, "create "+creds.KeyFileName) {
+		t.Fatalf("credentials list suggested creating an incompatible key:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, creds.KeyFileName)); !os.IsNotExist(err) {
+		t.Fatalf("credentials list generated a replacement key: %v", err)
+	}
+	after, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("credentials list changed the locked store")
+	}
+}
+
+func TestCredentialsListRejectsAKeyWithoutTheStore(t *testing.T) {
+	dir := statusAgent(t, nil)
+	key := creds.GenerateKey() + "\n"
+	keyPath := filepath.Join(dir, creds.KeyFileName)
+	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := captureCredentialsError(t, dir, credentialsList)
+	if code == 0 || !strings.Contains(out, creds.FileName+" is missing") {
+		t.Fatalf("credentials list with only a key: code=%d, output=%s", code, out)
+	}
+	raw, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != key {
+		t.Fatal("credentials list replaced an existing master key")
+	}
+	if _, err := os.Stat(filepath.Join(dir, creds.FileName)); !os.IsNotExist(err) {
+		t.Fatalf("credentials list created the missing store: %v", err)
+	}
 }
 
 func TestCredentialsSetDescribesTypedCredential(t *testing.T) {

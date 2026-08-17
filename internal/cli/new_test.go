@@ -8,8 +8,45 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
+
+func TestNewInitializesCredentialsWithAFreshConventionalKey(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	t.Setenv(creds.EnvMasterKey, creds.GenerateKey())
+	t.Setenv(creds.EnvMasterKeyFile, "/tmp/should-not-be-used")
+	var code int
+	out := capture(t, ".", func() { code = cmdNew([]string{dir}) })
+	if code != 0 {
+		t.Fatalf("new exited %d", code)
+	}
+	if strings.Contains(out, "master.key") || strings.Contains(out, "credential") {
+		t.Fatalf("new exposed credential implementation details:\n%s", out)
+	}
+
+	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(creds.EnvMasterKeyFile, "")
+	keyPath := filepath.Join(dir, creds.KeyFileName)
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("master key mode = %04o, want 0600", info.Mode().Perm())
+	}
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := creds.Read(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store) != 0 {
+		t.Fatalf("new credential store = %v, want empty", store)
+	}
+}
 
 // Claude Code reads CLAUDE.md, not AGENTS.md, so the scaffold links one to
 // the other -- a symlink, not a copy, so template updates to AGENTS.md can
@@ -84,7 +121,7 @@ func TestNewInitializesRepoWithoutCommittingScaffold(t *testing.T) {
 	if err := cmd.Run(); err == nil {
 		t.Fatal("new created an initial commit")
 	}
-	cmd = exec.Command("git", "status", "--porcelain")
+	cmd = exec.Command("git", "status", "--porcelain", "--untracked-files=all")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -92,6 +129,12 @@ func TestNewInitializesRepoWithoutCommittingScaffold(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "?? openroutines.yml\n") {
 		t.Fatalf("scaffold is not present as uncommitted work:\n%s", out)
+	}
+	if !strings.Contains(string(out), "?? "+creds.FileName+"\n") {
+		t.Fatalf("encrypted credential store is not present as uncommitted work:\n%s", out)
+	}
+	if strings.Contains(string(out), creds.KeyFileName) {
+		t.Fatalf("master key is not ignored:\n%s", out)
 	}
 }
 
