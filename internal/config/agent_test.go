@@ -9,8 +9,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
-// instructions is optional standing context -- absent is valid, but an
-// unfilled scaffold placeholder must never reach a run as prompt text.
 func TestInstructionsOptional(t *testing.T) {
 	a := Agent{
 		Name:     "a",
@@ -51,16 +49,12 @@ defaults:
 		t.Fatalf("valid repository flagged: %v", problems)
 	}
 
-	// Existing and local-only agents may omit the field; deployment readiness
-	// is the check command's separate concern.
 	a.Repo = ""
 	if problems := a.Problems(); len(problems) != 0 {
 		t.Fatalf("omitted repository flagged: %v", problems)
 	}
 }
 
-// Variable names must map cleanly onto env vars and never shadow what the
-// framework itself sets.
 func TestVariableNameValidation(t *testing.T) {
 	base := Agent{
 		Name:         "a",
@@ -89,8 +83,6 @@ func TestVariableNameValidation(t *testing.T) {
 	}
 }
 
-// max_timeout is the agent-wide run ceiling: parsed when set, the default
-// when absent, a reported problem (never fail-open to unlimited) when junk.
 func TestMaxTimeoutCeiling(t *testing.T) {
 	a := Agent{
 		Name:         "a",
@@ -120,9 +112,6 @@ func TestMaxTimeoutCeiling(t *testing.T) {
 	}
 }
 
-// concurrency is the run-slot count: unset and 0 both mean serial (an
-// existing agent must not gain parallelism on upgrade -- the scaffold
-// template is what opts new agents in), and a negative value is a problem.
 func TestConcurrencyConfig(t *testing.T) {
 	a := Agent{
 		Name:         "a",
@@ -161,15 +150,11 @@ func TestConcurrencyConfig(t *testing.T) {
 	}
 }
 
-// The configuration file resolves newest spelling first: .yml, then the
-// legacy .yaml, then the original agent.yaml -- all read, so a pinned
-// agent renames on its own schedule (#50).
 func TestPathResolvesLegacySpellings(t *testing.T) {
 	dir := t.TempDir()
 	if got := filepath.Base(Path(dir)); got != FileName {
 		t.Fatalf("fresh dir should resolve to %s (the name a write creates), got %s", FileName, got)
 	}
-	// Oldest first: each newer spelling takes precedence once present.
 	names := make([]string, 0, len(LegacyFileNames)+1)
 	names = append(names, FileName)
 	names = append(names, LegacyFileNames...)
@@ -186,8 +171,6 @@ func TestPathResolvesLegacySpellings(t *testing.T) {
 	}
 }
 
-// Save keeps the scaffold's 2-space indentation: this file is hand-edited,
-// reviewed config, and configure must not reformat it (#65).
 func TestSaveUsesTwoSpaceIndent(t *testing.T) {
 	dir := t.TempDir()
 	a := Agent{
@@ -253,8 +236,6 @@ func TestProblemsAllowsOwnerToBeUnset(t *testing.T) {
 	}
 }
 
-// openroutines.yml decodes strictly: a misspelled key is an error, not silently
-// ignored configuration.
 func TestLoadRejectsUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, FileName), []byte("name: a\ndescriptoin: typo\n"), 0o644) //nolint:misspell // deliberate: strict decoding must name the typo
@@ -263,8 +244,6 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
-// Credential metadata entries are validated like the rest of openroutines.yml:
-// a typed entry needs a known type and its type's configuration.
 func TestCredentialEntryValidation(t *testing.T) {
 	base := Agent{
 		Name:         "a",

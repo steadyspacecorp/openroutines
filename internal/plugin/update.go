@@ -18,14 +18,10 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
-// A prepared update: the recorded and current upstream revisions,
-// what changed between them, and the validated upstream bundle. Apply is
-// reachable only through PrepareUpdate, so the merge cannot run past a
-// failed check.
 type Update struct {
 	Old, New Source
-	Changes  []string // upstream additions, modifications, and removals
-	Upstream *Plugin  // unset when Current
+	Changes  []string
+	Upstream *Plugin
 
 	name         string
 	agentDir     string
@@ -34,21 +30,14 @@ type Update struct {
 	cleanups     []func()
 }
 
-// Reports that the installed plugin already matches upstream; a
-// current Update carries no Changes or Upstream and has nothing to Apply.
 func (u *Update) Current() bool { return u.New.Revision == u.Old.Revision }
 
-// Releases the temporary clones.
 func (u *Update) Close() {
 	for _, f := range u.cleanups {
 		f()
 	}
 }
 
-// Fetches the plugin's current upstream and its recorded
-// revision, then validates everything the update depends on: the upstream
-// payload, its name, and collisions with agent content outside the plugin
-// itself.
 func PrepareUpdate(agentDir, name string) (*Update, error) {
 	if !skill.NamePattern.MatchString(name) {
 		return nil, fmt.Errorf("invalid plugin name %q", name)
@@ -106,11 +95,6 @@ func PrepareUpdate(agentDir, name string) (*Update, error) {
 	return u, nil
 }
 
-// Merges local edits, the recorded base, and upstream file-wise into a
-// staging directory, deactivates routines new since the base, revalidates
-// the merged bundle, and swaps it in atomically. Provenance advances only on
-// a conflict-free merge, so conflicted files keep their markers and rerunning
-// the update converges.
 func (u *Update) Apply() (conflicts []string, err error) {
 	ours := filepath.Join(u.agentDir, ".openroutines", "plugins", u.name)
 	merged, err := os.MkdirTemp(u.agentDir, ".openroutines-plugin-update-*")
@@ -237,8 +221,6 @@ func changes(base, next string) ([]string, error) {
 	return out, nil
 }
 
-// Performs a file-wise three-way merge into dest. Intentionally
-// excludes provenance: Apply advances that only after a clean merge.
 func mergeTrees(base, ours, theirs, dest string) ([]string, error) {
 	files := map[string]bool{}
 	for _, root := range []string{base, ours, theirs} {

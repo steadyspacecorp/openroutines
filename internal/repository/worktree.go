@@ -1,6 +1,5 @@
 package repository
 
-// Worktree is a Git working directory attached to a Repository.
 type Worktree struct {
 	dir string
 }

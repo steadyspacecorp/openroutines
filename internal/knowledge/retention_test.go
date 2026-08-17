@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// Commits the worktree's current state with a specific timestamp,
-// so blame-based aging has something old to find.
 func commitAt(t *testing.T, wt string, at time.Time, msg string) {
 	t.Helper()
 	cmd := exec.Command("git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
@@ -55,9 +53,6 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-40 * 24 * time.Hour)
 
-	// Old entries in the trimmed streams, plus one in the exempt tasks file.
-	// The seeded headers (prose + fenced format examples) are committed at
-	// the same old timestamp: documentation must survive trimming at any age.
 	appendLine(t, filepath.Join(wt, "events.md"), "- ancient fact")
 	appendLine(t, filepath.Join(wt, "context.md"), "- ancient context fact")
 	appendLine(t, filepath.Join(wt, "tasks.md"), "- [ ] `task-00000000-1` ancient but still open task")
@@ -65,12 +60,10 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 		[]byte(`{"run_id":"run_old","recorded_at":"`+old.UTC().Format(time.RFC3339)+`"}`+"\n"), 0o644)
 	commitAt(t, wt, old, "old entries")
 
-	// Recent entries.
 	appendLine(t, filepath.Join(wt, "events.md"), "- recent fact")
 	appendLine(t, filepath.Join(wt, "runs.jsonl"), `{"run_id":"run_new","recorded_at":"`+now.UTC().Format(time.RFC3339)+`"}`)
 	commitAt(t, wt, now, "recent entries")
 
-	// Uncommitted entry: must always survive.
 	appendLine(t, filepath.Join(wt, "events.md"), "- uncommitted fact")
 
 	changed, err := NewStore(dir).Trim(30*24*time.Hour, now)
@@ -85,8 +78,7 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 	if strings.Contains(string(events), "ancient fact") {
 		t.Fatalf("old entry survived: %q", events)
 	}
-	// Documentation survives at any age: heading, prose, and the fenced
-	// format example -- including its "- "-prefixed placeholder lines.
+
 	for _, want := range []string{
 		"# Events",
 		"append-only outcomes and observations",
@@ -115,7 +107,6 @@ func TestTrimAgesOutOldEntriesOnly(t *testing.T) {
 		t.Fatalf("run record trim wrong: %q", runs)
 	}
 
-	// Idempotent: a second trim changes nothing.
 	if changed, err := NewStore(dir).Trim(30*24*time.Hour, now); err != nil || changed {
 		t.Fatalf("second trim should be a no-op: changed=%v err=%v", changed, err)
 	}

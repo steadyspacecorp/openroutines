@@ -51,7 +51,7 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 	}
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 a11y-sweep NO-OP: all clean")
 	appendKnowledge(t, dir, "tasks.md", "- [ ] `task-20260721-1` decide the thing (source: doc-drift; added 2026-07-21)")
-	// Ledger and supervisor-owned writes must never reach a consumer.
+
 	appendKnowledge(t, dir, "ledgers/doc-drift.md", "- private cursor note")
 	appendKnowledge(t, dir, "runs.jsonl", `{"run_id":"run_b"}`)
 	if _, err := NewStore(dir).Commit("Run a11y-sweep (run_b): completed"); err != nil {
@@ -90,8 +90,6 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 	}
 }
 
-// Appends one event, commits it, then trims and commits the trim
-// the way the supervisor does. Returns the commit the event landed in.
 func trimFixture(t *testing.T, dir string) string {
 	t.Helper()
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
@@ -99,7 +97,7 @@ func trimFixture(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	added, _ := NewStore(dir).Head()
-	// Age the whole worktree past the window rather than backdating commits.
+
 	if changed, err := NewStore(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
 		t.Fatalf("trim: changed=%v err=%v", changed, err)
 	}
@@ -109,9 +107,6 @@ func trimFixture(t *testing.T, dir string) string {
 	return added
 }
 
-// A line added and later removed must still appear as an addition to a
-// consumer that hasn't seen it -- the feed is commit-by-commit, never a net
-// endpoint diff.
 func TestChangesSurvivePruning(t *testing.T) {
 	dir := deliveryFixture(t)
 	from, _ := NewStore(dir).Head()
@@ -133,9 +128,6 @@ func TestChangesSurvivePruning(t *testing.T) {
 	}
 }
 
-// Retention pruning is not a change to report: a consumer whose cursor is
-// already past the trimmed entries must see nothing at all from the trim
-// commit, not a block of removals for history it consumed long ago.
 func TestRetentionTrimIsNotDelivered(t *testing.T) {
 	dir := deliveryFixture(t)
 	cursor := trimFixture(t, dir)
@@ -150,10 +142,6 @@ func TestRetentionTrimIsNotDelivered(t *testing.T) {
 	}
 }
 
-// The trim commit is the one commit the feed skips wholesale, so it must
-// carry nothing but the trim. Curation left uncommitted in the worktree --
-// which `status` invites, and a failed intent commit leaves behind -- would
-// otherwise ride along into it and never reach a consumer at all.
 func TestTrimCommitLeavesUnrelatedWorkDeliverable(t *testing.T) {
 	dir := deliveryFixture(t)
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: ephemeral fact")
@@ -162,7 +150,6 @@ func TestTrimCommitLeavesUnrelatedWorkDeliverable(t *testing.T) {
 	}
 	cursor, _ := NewStore(dir).Head()
 
-	// Curation sitting in the worktree when the daily trim fires.
 	appendKnowledge(t, dir, "tasks.md", "- [ ] `task-20260721-1` hand-curated ask (source: a human; added 2026-07-21)")
 	if changed, err := NewStore(dir).Trim(30*24*time.Hour, time.Now().Add(60*24*time.Hour)); err != nil || !changed {
 		t.Fatalf("trim: changed=%v err=%v", changed, err)
@@ -190,9 +177,6 @@ func TestTrimCommitLeavesUnrelatedWorkDeliverable(t *testing.T) {
 	}
 }
 
-// A cursor whose commit is not on the knowledge branch names no change set, and
-// no retry will make it name one: the feed reports that as its own error so
-// the caller can tell it apart from an attempt worth repeating.
 func TestChangesRejectsUnreachableCursor(t *testing.T) {
 	dir := deliveryFixture(t)
 	through, _ := NewStore(dir).Head()
@@ -201,8 +185,6 @@ func TestChangesRejectsUnreachableCursor(t *testing.T) {
 		t.Fatalf("a missing commit should report ErrCursorUnreachable, got %v", err)
 	}
 
-	// Present but off the branch: a repaired history leaves the old commit in
-	// the object store, where from..through would deliver the wrong set.
 	appendKnowledge(t, dir, "events.md", "- 2026-07-21 doc-drift: a fact")
 	if _, err := NewStore(dir).Commit("Run doc-drift (run_a): completed"); err != nil {
 		t.Fatal(err)
@@ -221,10 +203,6 @@ func TestChangesRejectsUnreachableCursor(t *testing.T) {
 	}
 }
 
-// Only git's answer "no such commit" means the cursor is unreachable. A git
-// that could not answer at all -- a broken repository, a lock, a full disk --
-// is an attempt worth repeating, and must not be classified as the permanent
-// failure that abandons a run on its first try.
 func TestChangesKeepsEnvironmentFailuresRetryable(t *testing.T) {
 	dir := deliveryFixture(t)
 	head, _ := NewStore(dir).Head()
@@ -257,7 +235,7 @@ func TestCursorRoundTripAndListing(t *testing.T) {
 	if err != nil || len(all) != 1 {
 		t.Fatalf("cursor listing failed: %+v, %v", all, err)
 	}
-	// Cursors live under state/: supervisor-owned, never staged into a run.
+
 	staging := t.TempDir()
 	if err := NewStore(dir).Snapshot(staging); err != nil {
 		t.Fatal(err)
@@ -304,8 +282,6 @@ func TestAppendHumanTaskSectionsAndDedup(t *testing.T) {
 	}
 }
 
-// Cursor values become git rev-range argv, and cursor files ride the
-// untrusted knowledge branch: anything but a commit SHA is rejected on load.
 func TestLoadCursorRejectsNonSHA(t *testing.T) {
 	dir := t.TempDir()
 	for _, bad := range []string{"--output=/tmp/evil", "HEAD", "refs/heads/main", "abc", ""} {

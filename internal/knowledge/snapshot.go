@@ -14,8 +14,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/repository"
 )
 
-// OriginSnapshot is one immutable, exported view of origin/knowledge. Close
-// removes its temporary tree; it never materializes or changes knowledge/.
 type OriginSnapshot struct {
 	Dir       string
 	Commit    string
@@ -23,14 +21,12 @@ type OriginSnapshot struct {
 	repo      *repository.Repository
 }
 
-// SnapshotFile is one regular file in a snapshot.
 type SnapshotFile struct {
 	Path        string    `json:"path"`
 	Size        int64     `json:"size_bytes"`
 	LastChanged time.Time `json:"last_changed"`
 }
 
-// SnapshotStats describes the checked-out tree and its reachable history.
 type SnapshotStats struct {
 	Commit       string    `json:"commit"`
 	FetchedAt    time.Time `json:"fetched_at"`
@@ -45,8 +41,6 @@ type SnapshotStats struct {
 	LargestBytes int64     `json:"largest_bytes"`
 }
 
-// SnapshotRelation describes how a materialized local worktree relates to a
-// fetched origin snapshot.
 type SnapshotRelation struct {
 	Materialized bool
 	Behind       int
@@ -55,9 +49,6 @@ type SnapshotRelation struct {
 	Uncommitted  int
 }
 
-// FetchOriginSnapshot fetches origin/knowledge and exports its current tree to
-// a temporary directory. Unlike Sync it neither reads nor changes the local
-// knowledge worktree.
 func (store *Store) FetchOriginSnapshot() (*OriginSnapshot, error) {
 	if !store.repo.Remote() {
 		return nil, errors.New("no origin remote -- knowledge exists locally only")
@@ -73,6 +64,7 @@ func (store *Store) FetchOriginSnapshot() (*OriginSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	// checkout <commit> -- <paths> writes whatever index it finds -- the agent
 	// repository's own, which would leave the whole branch staged there. A
 	// scratch index keeps the read-only export read-only.
@@ -88,12 +80,8 @@ func (store *Store) FetchOriginSnapshot() (*OriginSnapshot, error) {
 	return &OriginSnapshot{Dir: dir, Commit: commit, FetchedAt: time.Now(), repo: store.repo}, nil
 }
 
-// Close removes the exported temporary tree.
 func (s *OriginSnapshot) Close() error { return os.RemoveAll(s.Dir) }
 
-// ChangesSince renders the shared knowledge changes committed after cutoff.
-// It is context for an ephemeral summary, not a reporting cursor: repeated
-// calls intentionally cover the same window.
 func (s *OriginSnapshot) ChangesSince(cutoff time.Time) (string, error) {
 	args := append([]string{
 		"log", "--reverse", "--date=iso-strict",
@@ -110,8 +98,6 @@ func (s *OriginSnapshot) ChangesSince(cutoff time.Time) (string, error) {
 	return out + "\n", nil
 }
 
-// Relation compares the local knowledge worktree with this snapshot without
-// changing either one.
 func (s *OriginSnapshot) Relation(store *Store) SnapshotRelation {
 	status := store.Status()
 	r := SnapshotRelation{Materialized: status.Materialized, Uncommitted: status.Uncommitted}
@@ -136,7 +122,6 @@ func (s *OriginSnapshot) Relation(store *Store) SnapshotRelation {
 	return r
 }
 
-// Files returns every regular file at or below rel. Paths always use slashes.
 func (s *OriginSnapshot) Files(rel string) ([]SnapshotFile, error) {
 	root, err := s.resolve(rel)
 	if err != nil {
@@ -173,7 +158,6 @@ func (s *OriginSnapshot) Files(rel string) ([]SnapshotFile, error) {
 	return out, nil
 }
 
-// ReadFile reads one regular file beneath the snapshot.
 func (s *OriginSnapshot) ReadFile(rel string) ([]byte, error) {
 	path, err := s.resolve(rel)
 	if err != nil {
@@ -219,7 +203,6 @@ func (s *OriginSnapshot) fileChanged(path string) (time.Time, error) {
 	return time.Parse(time.RFC3339, out)
 }
 
-// Stats computes facts from the snapshot tree and reachable branch history.
 func (s *OriginSnapshot) Stats() (SnapshotStats, error) {
 	files, err := s.Files("")
 	if err != nil {

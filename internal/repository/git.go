@@ -13,17 +13,16 @@ import (
 	"time"
 )
 
-// Everything a git child inherits from this process --
-// what git and ssh need to work at all.
+// Everything a git child inherits from this process -- what git and ssh need
+// to work at all. Secrets are added separately only when a specific operation
+// requires them.
 var gitPassthrough = []string{
-	"PATH",          // git's own subcommands, ssh, credential helpers
-	"HOME",          // ~/.ssh: known_hosts and the operator's keys and config
-	"SSH_AUTH_SOCK", // the operator's ssh-agent
+	"PATH",
+	"HOME",
+	"SSH_AUTH_SOCK",
 	"TMPDIR",
 	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
 	"http_proxy", "https_proxy", "no_proxy",
-	// A TLS-inspecting proxy's CA bundle; the global config that could carry
-	// http.sslCAInfo is sent to /dev/null.
 	"GIT_SSL_CAINFO", "GIT_PROXY_SSL_CAINFO",
 }
 
@@ -33,15 +32,8 @@ type gitCmd struct {
 	cancel context.CancelFunc
 }
 
-// The one carve-out from the suppressed system and global git
-// configuration: credential.* entries, re-injected as -c flags. HTTPS
-// remotes authenticate through credential helpers declared exactly there
-// (macOS ships osxkeychain in the system gitconfig), so suppressing them
-// left every HTTPS fetch with no way to ask for credentials. The
-// passthrough already trusts the operator's SSH auth surface (HOME,
-// SSH_AUTH_SOCK); this is the same trust for HTTPS, and nothing else from
-// those files leaks in. Reading configuration executes nothing; a helper
-// runs only when git itself asks for credentials.
+// Credential helpers are the only system/global Git settings re-injected;
+// suppressing them would make HTTPS remotes unable to authenticate.
 var credentialConfig = sync.OnceValue(readCredentialConfig)
 
 func readCredentialConfig() []string {
@@ -69,11 +61,9 @@ func readCredentialConfig() []string {
 	return flags
 }
 
-// Builds a git invocation with a constructed environment and no
-// system or global config. Inheriting the environment would publish
-// OPENROUTINES_MASTER_KEY in the child's /proc/<pid>/environ -- non-dumpable
-// does not survive execve.
 func newGitCmd(dir string, args []string) *gitCmd {
+	// Construct the child environment explicitly; inheriting it would expose
+	// supervisor-only secrets through the child's /proc/<pid>/environ.
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(credentialConfig()), args...)...)
 	cmd.Dir = dir
@@ -86,18 +76,15 @@ func newGitCmd(dir string, args []string) *gitCmd {
 	if sshCommand != "" {
 		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND="+sshCommand)
 	}
-	// git does the network through children (ssh, git-remote-https); the
-	// deadline has to reach the whole group or a stalled transport keeps
-	// holding the output pipe.
+	// Git delegates network I/O to children, so timeout cancellation must kill
+	// the whole process group or a stalled transport keeps the output pipe open.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return killGitGroup(cmd.Process.Pid) }
 	cmd.WaitDelay = gitDrainDeadline
 	return &gitCmd{Cmd: cmd, ctx: ctx, cancel: cancel}
 }
 
-// Ends a timed-out invocation's process group: SIGTERM, grace,
-// SIGKILL. The grace matters: git releases its lock files on SIGTERM but not
-// SIGKILL, and a stranded lock fails every later invocation.
+// SIGTERM gets Git to release lock files before SIGKILL is used.
 func killGitGroup(pid int) error {
 	pgid := -pid
 	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
@@ -113,12 +100,6 @@ func killGitGroup(pid int) error {
 	return nil
 }
 
-// Wraps a failed invocation, naming the deadline when it was the cause
-// ("signal: killed" on a fetch would read as a supervisor bug, not an origin
-// gone dark). An abandoned drain is a failure even though git exited cleanly:
-// the output is truncated and callers parse it. Only the last case keeps the
-// error in the chain -- gitExitCode must never read an exit status out of a
-// deadline we imposed.
 func (c *gitCmd) fail(args []string, err error, out []byte) error {
 	switch {
 	case c.ctx.Err() != nil:
@@ -129,25 +110,16 @@ func (c *gitCmd) fail(args []string, err error, out []byte) error {
 	return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 }
 
-// The bounds on a git invocation; the drain has to outlast the grace.
-// gitTimeout sits above the transport's low-speed bounds because those only
-// fire once bytes move -- a blackholed connect parks for many minutes.
-// Variables so tests can drive them.
 var (
 	gitTimeout       = 2 * time.Minute
 	gitKillGrace     = 2 * time.Second
 	gitDrainDeadline = 5 * time.Second
 )
 
-// The -c configuration every git invocation carries: no
-// hooks, a fixed commit identity, no auto-gc (a detached gc keeps writing
-// .git/objects after the command returns), and low-speed bounds so a quiet
-// transfer is abandoned rather than parked forever.
 var hermeticConfig = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "protocol.file.allow=user",
-	// A repo-config grep.patternType=fixed would break the delivery feed's
-	// anchored --grep and quietly put every retention trim back in it.
+	// Delivery uses anchored --grep patterns; fixed mode would silently skip trims.
 	"-c", "grep.patternType=basic",
 	"-c", "user.name=openroutines",
 	"-c", "user.email=agent@openroutines.dev",
@@ -157,8 +129,6 @@ var hermeticConfig = []string{
 	"-c", "http.lowSpeedTime=60",
 }
 
-// Runs a git command against the repo with hermetic configuration:
-// no system/global config leaks in.
 func git(dir string, args ...string) (string, error) {
 	cmd := newGitCmd(dir, append(hermeticConfig, args...))
 	defer cmd.cancel()
@@ -169,8 +139,6 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Runs a git command like git, with extra environment entries appended
-// after the constructed hermetic environment.
 func gitEnv(dir string, env []string, args ...string) (string, error) {
 	cmd := newGitCmd(dir, append(hermeticConfig, args...))
 	defer cmd.cancel()
@@ -182,8 +150,6 @@ func gitEnv(dir string, env []string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Reports the status git exited with, or -1 when it never got to
-// exit -- "git answered no" versus "git could not answer".
 func gitExitCode(err error) int {
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {

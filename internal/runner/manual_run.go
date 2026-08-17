@@ -12,8 +12,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/run"
 )
 
-// The fixture document injected into a rehearsal run's
-// workspace.
 const RehearsalFileName = "rehearsal.md"
 
 const fixturePreamble = `REHEARSAL RUN, fixture world. The fixtures in ./rehearsal.md replace
@@ -26,9 +24,6 @@ below exactly, against the fixtures.
 
 `
 
-// Governs a rehearsal with no fixtures: grants stay so reads
-// work, the read-only restraint is asked of the model rather than enforced --
-// the enforced part is that nothing settles.
 const livePreamble = `REHEARSAL RUN, live world. Read anything this routine normally reads --
 your credentials and tools are present -- but treat every external
 action as read-only and idempotent: write nothing, post nothing, change
@@ -39,9 +34,6 @@ Follow the routine below exactly, under these restraints.
 
 `
 
-// Executes routine name manually; rehearsals always discard knowledge.
-// In the production container it needs no reservation of its own: its
-// sandbox is built from its own workspace, like every other run's.
 func RunManual(dir, name string, options ManualOptions) (result *ManualResult, err error) {
 	attempt := Attempt{RunID: run.NewID(), Number: 1, Rehearsal: options.Fixture}
 	agent, err := config.Load(dir)
@@ -55,8 +47,6 @@ func RunManual(dir, name string, options ManualOptions) (result *ManualResult, e
 	if options.Rehearse {
 		rr := *r
 		if options.Fixture != "" {
-			// Grants are stripped at the source so the existing pipeline
-			// enforces the absence.
 			rr.Frontmatter.Credentials = nil
 			rr.Frontmatter.MCP = nil
 			rr.Frontmatter.Skills = nil
@@ -90,7 +80,6 @@ func RunManual(dir, name string, options ManualOptions) (result *ManualResult, e
 	if err != nil {
 		return nil, err
 	}
-	// Echo the run's scrubbed output to the terminal as it streams.
 	prepared.echo = os.Stdout
 	attemptResult, workspace, err := prepared.Run(context.Background())
 	if err != nil {

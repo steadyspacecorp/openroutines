@@ -12,18 +12,11 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
 
-// The generated forward schedule injected into every
-// run workspace: what fires when, computed by the same parser that
-// schedules runs, so the model never derives fire times from cron by hand.
 const ScheduleFileName = "schedule.md"
 
 const (
-	// Bounds the forward scan; a weekly cron always
-	// lands inside it, and anything rarer honestly reports no fire.
 	scheduleHorizonDays = 14
-	// How many upcoming fires each routine shows --
-	// two, so a same-day retry slot never hides the next fresh fire.
-	scheduleFireCount = 2
+	scheduleFireCount   = 2
 )
 
 const timeLayout = "Mon 2006-01-02 15:04"
@@ -32,12 +25,9 @@ type scheduleRow struct {
 	name  string
 	spec  string
 	fires []time.Time
-	full  bool // fires fill the tables, not fact lines (full participation)
+	full  bool
 }
 
-// Renders the agent's forward schedule into the workspace.
-// Unparseable routines are skipped, not fatal -- `check` and the supervisor
-// already surface them.
 func prepareSchedule(dir, workspace string, r *routine.Routine, tz string, now time.Time) error {
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
@@ -48,11 +38,6 @@ func prepareSchedule(dir, workspace string, r *routine.Routine, tz string, now t
 	return os.WriteFile(filepath.Join(workspace, ScheduleFileName), []byte(rendered), 0o644)
 }
 
-// Formats the forward schedule a run receives: fact lines for
-// routines below full participation, tables for the rest, partitioned by the
-// running routine's window when it has one (computed even when inactive -- a
-// manually-run routine still has a schedule to stand in). Same bound parser
-// as dispatch, so what a routine reads and when it fires cannot disagree.
 func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time, loc *time.Location) string {
 	now = now.In(loc)
 	until := now.AddDate(0, 0, scheduleHorizonDays)
@@ -122,8 +107,6 @@ func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time
 	return b.String()
 }
 
-// Orders rows soonest-first; a routine with no fire in the
-// horizon sorts last.
 func firstFire(row scheduleRow) time.Time {
 	if len(row.fires) == 0 {
 		return time.Unix(1<<62, 0)

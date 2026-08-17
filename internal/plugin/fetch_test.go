@@ -31,8 +31,6 @@ func gitCommitAll(t *testing.T, dir, message string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// Fetch works from a temporary clone even for a local directory, so the
-// vendored payload corresponds to the recorded commit, not the working tree.
 func TestFetchLocalRepositoryRecordsProvenance(t *testing.T) {
 	repo := t.TempDir()
 	bundle := filepath.Join(repo, "plugins", "demo")
@@ -60,7 +58,6 @@ func TestFetchLocalRepositoryRecordsProvenance(t *testing.T) {
 		t.Fatalf("root %s should be a clone, not the source repository", root)
 	}
 
-	// An uncommitted edit must not reach the fetched payload.
 	if err := os.WriteFile(filepath.Join(bundle, FileName), []byte("---\nname: demo\ndescription: dirty\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

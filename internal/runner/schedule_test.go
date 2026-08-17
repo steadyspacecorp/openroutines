@@ -23,16 +23,13 @@ func scheduleFixture() []*routine.Routine {
 	}
 }
 
-// Tuesday 07:00 with a same-day retry slot and a Tue 17:00 near-miss: the
-// exact shape a daily reporting routine reads every morning.
 func TestRenderScheduleWindowSplit(t *testing.T) {
 	all := scheduleFixture()
-	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC) // Tuesday
+	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
 	got := renderSchedule(all, all[0], now, time.UTC)
 
 	for _, want := range []string{
 		"now: Tue 2026-07-28 07:00 (UTC)",
-		// The 08:00 retry slot is skipped; the window closes Wednesday.
 		"window: now → Wed 2026-07-29 07:00 (steady-check-in's next fire on its next fire-day)",
 		"fact: announcements next Tue 2026-07-28 08:30",
 		"fact: steady-inbox next Tue 2026-07-28 08:45",
@@ -51,10 +48,10 @@ func TestRenderScheduleWindowSplit(t *testing.T) {
 		t.Fatalf("teamwork: events routine must stay out of the work tables:\n%s", got)
 	}
 	for name, wantIn := range map[string]bool{
-		"doc-drift":       true,  // Tue 09:00, later today
-		"roadmap-groomer": true,  // Tue 17:00, before Wed 07:00
-		"a11y-sweep":      false, // Wed 09:30, after the close
-		"release-notes":   false, // next Monday
+		"doc-drift":       true,
+		"roadmap-groomer": true,
+		"a11y-sweep":      false,
+		"release-notes":   false,
 	} {
 		if strings.Contains(in, name) != wantIn {
 			t.Fatalf("%s in-window=%v, want %v:\n%s", name, !wantIn, wantIn, got)
@@ -68,7 +65,6 @@ func TestRenderScheduleWindowSplit(t *testing.T) {
 	}
 }
 
-// A trigger-only or unscheduled self gets facts, not a window.
 func TestRenderScheduleDegradesWithoutSelfSchedule(t *testing.T) {
 	all := scheduleFixture()
 	unscheduled := &routine.Routine{Name: "on-demand", Frontmatter: routine.Frontmatter{}}
@@ -82,8 +78,6 @@ func TestRenderScheduleDegradesWithoutSelfSchedule(t *testing.T) {
 	}
 }
 
-// An inactive self (a manually-run probe) still anchors a window: its
-// schedule is the stand-in for the routine it mirrors.
 func TestRenderScheduleInactiveSelfKeepsWindow(t *testing.T) {
 	probe := &routine.Routine{Name: "check-in-probe", Frontmatter: routine.Frontmatter{
 		Schedule: "0 7 * * 1-5", Active: boolPtr(false), Teamwork: routine.TeamworkOff,
@@ -96,16 +90,13 @@ func TestRenderScheduleInactiveSelfKeepsWindow(t *testing.T) {
 	}
 }
 
-// The schedule is the agent's wall clock, not the container's: the same
-// instant expressed in UTC must render as New York time, or a routine reads
-// fire times an offset away from the ones the supervisor dispatches at.
 func TestRenderScheduleUsesAgentTimezoneNotArgumentZone(t *testing.T) {
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip("no tz database")
 	}
 	all := scheduleFixture()
-	now := time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC) // Tuesday 07:00 EDT
+	now := time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC)
 	got := renderSchedule(all, all[0], now, ny)
 
 	for _, want := range []string{
@@ -120,8 +111,6 @@ func TestRenderScheduleUsesAgentTimezoneNotArgumentZone(t *testing.T) {
 	}
 }
 
-// Returns got between the line starting the `from` table and the
-// `to` marker ("" = end).
 func section(got, from, to string) string {
 	start := strings.Index(got, from)
 	if start < 0 {

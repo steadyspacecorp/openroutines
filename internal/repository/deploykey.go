@@ -10,20 +10,14 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// Delivers the SSH private key that lets a deployed agent push
-// its knowledge branch. Scope the key to the one repository.
 const (
 	DeployKeyFileName = "deploy.key"
 	EnvDeployKey      = "OPENROUTINES_DEPLOY_KEY"
 	EnvDeployKeyFile  = "OPENROUTINES_DEPLOY_KEY_FILE"
 )
 
-// When set, is exported as GIT_SSH_COMMAND on every git
-// invocation so pushes and fetches authenticate with the deploy key.
 var sshCommand string
 
-// DeployKeyFilePath reports the selected key file, or nothing when a direct
-// value wins or the conventional file does not exist.
 func DeployKeyFilePath(dir string) string {
 	if os.Getenv(EnvDeployKey) != "" {
 		return ""
@@ -38,9 +32,6 @@ func DeployKeyFilePath(dir string) string {
 	return path
 }
 
-// Materializes the selected deploy key as a supervisor-only file and routes
-// all Git SSH through it. Host keys are trusted on first use (accept-new);
-// pinning is tracked in the hardening backlog.
 func configureDeployKey(dir string) (bool, error) {
 	sshCommand = ""
 	key := os.Getenv(EnvDeployKey)
@@ -65,7 +56,8 @@ func configureDeployKey(dir string) (bool, error) {
 		return false, err
 	}
 	if !strings.HasSuffix(key, "\n") {
-		key += "\n" // OpenSSH requires a trailing newline
+		// OpenSSH rejects otherwise valid private keys without a final newline.
+		key += "\n"
 	}
 	keyPath := filepath.Join(sshDir, "openroutines_deploy")
 	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
@@ -99,10 +91,8 @@ func validateDeployKey(path string) error {
 	return fmt.Errorf("deploy key is not a usable unencrypted SSH private key -- provide the complete key, including its BEGIN/END lines: %s", detail)
 }
 
-// Puts the key material in the scrub registry the moment
-// it enters the process. The key is multi-line and redaction is line by
-// line, so each substantial line registers as its own value.
 func registerDeployKey(key string) {
+	// Register each substantial line immediately; scrub operates on exact values.
 	values := map[string]string{}
 	for i, line := range strings.Split(key, "\n") {
 		line = strings.TrimSpace(line)

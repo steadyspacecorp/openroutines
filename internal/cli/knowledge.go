@@ -86,8 +86,6 @@ func printKnowledgeOverview(mem *knowledge.Store, snap *knowledge.OriginSnapshot
 	return 0
 }
 
-// A missing local knowledge/ is not worth a line: the explorer always shows
-// origin, and with nothing materialized there is nothing to differ from it.
 func printSnapshotRelation(out io.Writer, r knowledge.SnapshotRelation) {
 	switch {
 	case !r.Materialized:
@@ -117,9 +115,6 @@ func knowledgeInteractive(mem *knowledge.Store, snap *knowledge.OriginSnapshot) 
 			}
 			return fail(err)
 		}
-		// The blank line keeps a choice's output off the prompt's back;
-		// browse brings its own. Never clear the screen: earlier output --
-		// a briefing someone is acting on -- is the point of the session.
 		switch strings.ToLower(strings.TrimSpace(choice)) {
 		case "1", "summarize", "s":
 			fmt.Println()
@@ -260,8 +255,6 @@ func knowledgeBrowse(snap *knowledge.OriginSnapshot, in *bufio.Reader) int {
 		if code := knowledgeShow(snap, []string{files[n-1].Path}); code != 0 {
 			return code
 		}
-		// The list would bury the file just shown; hold until the reader is
-		// done with it.
 		fmt.Print("\nb for the file list: ")
 		after, err := in.ReadString('\n')
 		if err != nil {
@@ -296,11 +289,6 @@ func knowledgeSummarize(snap *knowledge.OriginSnapshot, args []string) int {
 	return knowledgeSummarizeWithReader(snap, window, yes, bufio.NewReader(os.Stdin))
 }
 
-// briefingWriter renders the streamed briefing for a terminal. The model
-// answers in light markdown; on a tty the markers become the same ANSI
-// emphasis the rest of the CLI uses -- headings bold, bullet marks dimmed,
-// **spans** bold. Unstyled output passes through untouched, so a pipe gets
-// the model's raw text.
 type briefingWriter struct {
 	out io.Writer
 	buf []byte
@@ -324,7 +312,6 @@ func (w *briefingWriter) Write(p []byte) (int, error) {
 	}
 }
 
-// Flush styles whatever remains buffered without a trailing newline.
 func (w *briefingWriter) Flush() {
 	if len(w.buf) == 0 {
 		return
@@ -333,9 +320,6 @@ func (w *briefingWriter) Flush() {
 	w.buf = nil
 }
 
-// briefingHeadings are the sections the summary prompt asks for; they are
-// recognized whether the model writes them bare, as markdown headings, or
-// bold, and rendered the one way the CLI writes headings.
 var briefingHeadings = []string{"Recently", "Next", "Waiting on a human"}
 
 func styleBriefingLine(line string) string {
@@ -361,8 +345,6 @@ func styleBriefingLine(line string) string {
 	return styleInlineBold(line)
 }
 
-// styleInlineBold turns balanced **spans** into terminal bold; an odd edge
-// leaves the line untouched rather than guess.
 func styleInlineBold(s string) string {
 	parts := strings.Split(s, "**")
 	if len(parts) < 3 || len(parts)%2 == 0 {

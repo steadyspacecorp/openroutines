@@ -1,8 +1,3 @@
-// The long-running scheduler: the container entrypoint.
-// Every tick re-reads frontmatter, reconciles knowledge with origin, and
-// dispatches due routines into a bounded pool -- the durable two-phase run
-// model: a logical run exists durably before it acts, failed attempts retry
-// under the same run id, abandonment records a human-owned task.
 package supervisor
 
 import (
@@ -22,15 +17,11 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-// Scheduling constants: the tick cadence and the per-run attempt cap.
 const (
 	TickInterval = time.Minute
 	MaxAttempts  = 5
 )
 
-// Reports whether a tick will act on a routine at all. Exported
-// because reporting has to agree with dispatch -- a surface that disagrees
-// promises a retry that cannot happen.
 func Schedulable(r *routine.Routine) bool {
 	return r.Frontmatter.IsActive() && (r.Frontmatter.Schedule != "" || r.Frontmatter.Trigger != nil)
 }
@@ -148,11 +139,8 @@ func New(dir string) (*Supervisor, error) {
 
 func (s *Supervisor) stateDir() string { return s.store.StateDir() }
 
-// Returns the identity used to own the distributed lease.
 func (s *Supervisor) InstanceID() string { return s.lease.instanceID }
 
-// The supervise loop: startup, then one Tick per minute until ctx is
-// canceled, then shutdown (final commit and push, lease release).
 func (s *Supervisor) Run(ctx context.Context) error {
 	// Under knowledgeMu: first-boot materialization must not race a manual run's
 	// own locked Ensure.
@@ -190,10 +178,6 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 }
 
-// Performs one scheduling pass at the given time. Exported so tests can
-// drive the supervisor with synthetic clocks. The pass has two halves: plan
-// holds the knowledge lock and reconciles state; dispatch launches the due
-// attempts into the bounded pool and returns without waiting for them.
 func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	now = now.In(s.loc)
 	due, ok := s.plan(now)
@@ -209,7 +193,7 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	for _, planned := range due {
 		if ctx.Err() != nil {
 			slog.Debug("skipped", "reason", "shutting down")
-			return // shutting down: stop launching, nothing is reserved yet
+			return
 		}
 		// One attempt per routine at a time; the holder may be an earlier run
 		// still settling, or a manual `routines run`.
@@ -226,8 +210,6 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		case <-s.pool.slots:
 		default:
 			release()
-			// warn, not info: due work parked behind a full pool looks idle
-			// from outside.
 			if !s.pool.waitLogged[planned.routine.Name] {
 				s.pool.waitLogged[planned.routine.Name] = true
 				planned.routine.Log().Warn("all run slots busy -- waiting for a free one",

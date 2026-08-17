@@ -30,21 +30,15 @@ import (
 	"time"
 )
 
-// ErrUnavailable reports that no rung could confine a run here. Production
-// fails closed on it: an unconfined run reaches every peer's credentials and
-// the supervisor's own keys.
+// Production fails closed on an unavailable sandbox: an unconfined run could
+// reach peer credentials and the supervisor's own keys.
 var ErrUnavailable = errors.New("no run sandbox is available here")
 
-// EnvDisable is the escape hatch for a host that can build no rung at all.
 // Deliberately a deployment decision and never a routine's.
 const EnvDisable = "OPENROUTINES_DISABLE_SANDBOX"
 
-// ErrDisabled reports that the hatch is open -- a choice already made, which
-// callers must tell apart from "no rung worked".
 var ErrDisabled = errors.New("the run sandbox is disabled by " + EnvDisable + "=1")
 
-// Disabled reports whether the hatch is open. Read per call rather than settled
-// once: it answers about intent rather than about the host.
 func Disabled() bool { return os.Getenv(EnvDisable) == "1" }
 
 // Capabilities is what a backend's confinement actually provides. The zero
@@ -72,17 +66,12 @@ type Capabilities struct {
 	CollapsesTree bool
 }
 
-// A Backend is one rung of the ladder: a way to build one run's sandbox,
-// together with an honest account of what that sandbox is worth.
 type Backend interface {
 	Name() string
 	Capabilities() Capabilities
 	Command(workspace string, argv ...string) (*exec.Cmd, error)
 }
 
-// The rungs, strongest first. Probing decides between them because the answer
-// depends on masked paths, the seccomp profile, AppArmor policy and the kernel
-// at once.
 func candidates() []Backend {
 	return []Backend{
 		bubblewrap{proc: privateProc},
@@ -92,10 +81,6 @@ func candidates() []Backend {
 	}
 }
 
-// Reports the rung in force, or why there is none. The hatch is answered
-// outside the probe so every answer stays consistent with it: with the sandbox
-// off, Provides claims nothing and Command refuses rather than handing back a
-// rung that was never applied.
 func settle() (Backend, error) {
 	if Disabled() {
 		return nil, ErrDisabled
@@ -103,9 +88,6 @@ func settle() (Backend, error) {
 	return probeLadder()
 }
 
-// Picks the strongest rung that can really build a sandbox here, once per
-// process. Every failure is kept in the error: "no sandbox" alone gives whoever
-// is debugging the host nothing to act on.
 var probeLadder = sync.OnceValues(func() (Backend, error) {
 	return probeCandidates(candidates(), probe)
 })
@@ -137,14 +119,8 @@ func logProbeResults(results []slog.Attr, selected Backend) {
 	slog.Info("run sandbox probes complete", args...)
 }
 
-// Verify reports which rung confines runs here, building a throwaway sandbox
-// exactly as attempts will so the fail-closed policy fires at boot rather than
-// mid-run.
 func Verify() (Backend, error) { return settle() }
 
-// Provides reports what the active rung's confinement is worth, and the zero
-// value when there is none -- so keying behavior on a property gets the
-// conservative branch rather than an assumption about a sandbox that is absent.
 func Provides() Capabilities {
 	if b, _ := settle(); b != nil {
 		return b.Capabilities()
@@ -152,7 +128,6 @@ func Provides() Capabilities {
 	return Capabilities{}
 }
 
-// Command wraps argv and its workspace in the active sandbox rung.
 func Command(workspace string, argv ...string) (*exec.Cmd, error) {
 	b, err := settle()
 	if err != nil {
@@ -161,14 +136,12 @@ func Command(workspace string, argv ...string) (*exec.Cmd, error) {
 	return b.Command(workspace, argv...)
 }
 
-// The operating system an attempt gets: one shared policy each backend
-// expresses in its own vocabulary, which is what keeps Exposes correct on every
-// rung. A path that does not exist is skipped rather than failing the sandbox.
+// The operating system an attempt gets; keeping this allow-list shared by
+// every backend keeps Exposes correct across different sandbox vocabularies.
 var readOnlyOS = []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt"}
 
-// The part of /etc an attempt gets, named entry by entry rather than granted
-// whole: /etc is where container platforms deliver mounted secrets, and a run
-// shares the supervisor's uid, so a granted 0600 key file is a readable one.
+// /etc is named entry by entry because container platforms deliver mounted
+// secrets there, and the run shares the supervisor's uid.
 var osConfig = []string{
 	"/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
 	// Trust roots only, not `/etc/ssl` whole: Debian keeps `/etc/ssl/private`
@@ -199,12 +172,8 @@ func Exposes(path string) bool {
 	return false
 }
 
-// Puts a path in the form the kernel will bind: absolute, every symlink
-// followed. Both sides need it -- a key reached through a symlink into a bound
-// tree is exposed, and a bound entry that is itself a symlink exposes its
-// target. EvalSymlinks refuses a leaf that does not exist, the common case here
-// (an unmounted key file), so resolve the deepest ancestor that does exist and
-// re-attach the rest.
+// Resolve existing ancestors and reattach a missing leaf so symlinked key
+// files cannot evade the sandbox exposure check.
 func resolve(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
@@ -222,9 +191,6 @@ func resolve(path string) string {
 	}
 }
 
-// Reports whether path is root or lies beneath it, lexically. Callers resolve
-// first: comparing unresolved paths answers a question about names rather than
-// about what the kernel will open.
 func within(path, root string) bool {
 	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
@@ -241,12 +207,8 @@ func validateWorkspace(workspace string) error {
 	return nil
 }
 
-// Building a local namespace normally takes milliseconds. Ten seconds leaves
-// room for an oversubscribed host without letting a stuck helper hold boot.
 const probeTimeout = 10 * time.Second
 
-// Builds one throwaway sandbox on the given rung. The helpers explain their own
-// failures well, so their output is the error.
 func probe(b Backend) error { return probeWithin(b, probeTimeout) }
 
 func probeWithin(b Backend, timeout time.Duration) error {

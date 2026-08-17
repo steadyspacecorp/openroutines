@@ -15,8 +15,6 @@ func fixture(t *testing.T, name string) string {
 	return filepath.Join("..", "..", "testdata", "plugins", name)
 }
 
-// The synthetic fixtures cover the plugin feature matrix: each exercises a
-// different slice of the format, and this test is what keeps them loadable.
 func TestLoadFixturePlugins(t *testing.T) {
 	reporter, err := Load(fixture(t, "reporter"), nil)
 	if err != nil {
@@ -54,7 +52,6 @@ func TestLoadFixturePlugins(t *testing.T) {
 		t.Fatalf("toolkit shape: %d routines, %d skills", len(toolkit.Routines), len(toolkit.Skills))
 	}
 
-	// The grant summary must state the authorities the bundle asks for.
 	sum := watcher.Summary()
 	for _, want := range []string{"watcher", "watcher_app_key", "typed: github_app", "watch_repos"} {
 		if !strings.Contains(sum, want) {
@@ -146,13 +143,11 @@ func TestLoadRefusals(t *testing.T) {
 		}
 	}
 
-	// A routine's dangling skill is fine when the agent already has it.
 	dir := write(t, map[string]string{"routines/other.md": "---\nschedule: \"0 9 * * *\"\nskills: [ghost]\n---\nx\n"})
 	if _, err := Load(dir, map[string]bool{"ghost": true}); err != nil {
 		t.Fatalf("agent-satisfied skill should load: %v", err)
 	}
 
-	// A symlink anywhere is refused.
 	dir = write(t, nil)
 	if err := os.Symlink("/etc/hosts", filepath.Join(dir, "routines", "link.md")); err == nil {
 		if _, err := Load(dir, nil); err == nil || !strings.Contains(err.Error(), "regular file") {
@@ -160,15 +155,12 @@ func TestLoadRefusals(t *testing.T) {
 		}
 	}
 
-	// Manifest only: nothing to install.
 	empty := t.TempDir()
 	os.WriteFile(filepath.Join(empty, "PLUGIN.md"), []byte("---\nname: demo\ndescription: d\n---\n"), 0o644)
 	if _, err := Load(empty, nil); err == nil || !strings.Contains(err.Error(), "nothing to install") {
 		t.Fatalf("empty payload should be refused, got %v", err)
 	}
 
-	// Typed credentials work for plugin trigger polls too: installation
-	// supplies the metadata, and the supervisor sends only derived material.
 	dir = write(t, map[string]string{
 		"PLUGIN.md":        "---\nname: demo\ndescription: d\ncredentials:\n  gh_key:\n    description: App key\n    type: github_app\n---\n",
 		"routines/demo.md": "---\ntrigger:\n  poll: https://example.com/x\n  credential: gh_key\ncredentials: [gh_key]\n---\nx\n",
@@ -178,10 +170,6 @@ func TestLoadRefusals(t *testing.T) {
 	}
 }
 
-// A declared MCP server loads, and the grant summary states both halves of
-// the authority: the routine's grant and the endpoint the person must
-// define. The summary is the review gate -- an MCP grant it omitted would
-// be an authority the person never saw.
 func TestMCPDeclarationLoadsAndSummarizes(t *testing.T) {
 	dir := write(t, map[string]string{
 		"PLUGIN.md":        "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: A demo token\nmcp:\n  steady:\n    description: Steady's MCP server\n    url: https://example.test/mcp\n    credential: demo_token\n---\nBody.\n",
@@ -203,8 +191,6 @@ func TestMCPDeclarationLoadsAndSummarizes(t *testing.T) {
 	}
 }
 
-// Web access is off by default and a bundle can turn it on, so the summary --
-// the only review gate before install -- has to say so.
 func TestSummaryStatesWebAccess(t *testing.T) {
 	dir := write(t, map[string]string{
 		"routines/demo.md": "---\nschedule: \"0 9 * * *\"\ncredentials: [demo_token]\nwebfetch: true\nwebsearch: true\n---\nDo the demo.\n",
@@ -218,8 +204,6 @@ func TestSummaryStatesWebAccess(t *testing.T) {
 	}
 }
 
-// Valid provenance: Install validates it as strictly as
-// ReadSource does, so the revision has to be a full commit hash.
 var testSource = Source{
 	Repository: "example.test/demo.git",
 	Revision:   "0123456789abcdef0123456789abcdef01234567",
@@ -236,7 +220,6 @@ func TestPrepareInstallAndApply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No knowledge worktree yet: stubs go pending, the rest installs.
 	installed, pending, err := inst.Apply()
 	if err != nil {
 		t.Fatal(err)
@@ -257,8 +240,6 @@ func TestPrepareInstallAndApply(t *testing.T) {
 		t.Fatalf("installed %v, want the grouped plugin directory", installed)
 	}
 
-	// Now everything collides, and the refusal happens at prepare -- Apply
-	// is unreachable without a clean PrepareInstall.
 	_, err = PrepareInstall(agent, src, testSource)
 	if err == nil {
 		t.Fatal("reinstall over an existing plugin should be refused")
@@ -269,8 +250,6 @@ func TestPrepareInstallAndApply(t *testing.T) {
 		}
 	}
 
-	// With a worktree, the stub lands -- unless the ledger already exists,
-	// which is live knowledge and never clobbered.
 	install := func(agent string) (installed, pending []string, err error) {
 		t.Helper()
 		inst, err := PrepareInstall(agent, src, testSource)
@@ -300,10 +279,6 @@ func TestPrepareInstallAndApply(t *testing.T) {
 	}
 }
 
-// Provenance that later commands would reject must be refused at prepare
-// time, before the review prompt and before anything is copied -- otherwise
-// plugin list, plugin update, and check all fail against a plugin the user
-// was told installed fine.
 func TestPrepareInstallRefusesInvalidProvenance(t *testing.T) {
 	src := write(t, nil)
 	cases := map[string]Source{
@@ -325,9 +300,6 @@ func TestPrepareInstallRefusesInvalidProvenance(t *testing.T) {
 	}
 }
 
-// A duplicate plugin name is filtered out of the effective routine list, so
-// collision detection must inspect the raw plugin claims and refuse while the
-// namespace is invalid.
 func TestCollisionsFailClosedOnInvalidNamespace(t *testing.T) {
 	src := write(t, nil)
 	agent := t.TempDir()
@@ -389,8 +361,6 @@ func TestInstallRollsBackOnCopyFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Mutate the local development source after validation. Copy must recheck
-	// the boundary, fail, and remove the routine it created earlier.
 	if err := os.MkdirAll(filepath.Join(src, "skills", "demo-skill", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -408,9 +378,6 @@ func TestInstallRollsBackOnCopyFailure(t *testing.T) {
 	}
 }
 
-// The plugin validator consults the framework's shared derived-type list --
-// a second hardcoded copy drifted once (oauth2_client was refused here
-// while creds accepted it).
 func TestManifestAcceptsAllDerivedTypes(t *testing.T) {
 	manifest := func(typ string) string {
 		return "---\nname: demo\ndescription: d\ncredentials:\n  demo_token:\n    description: t\n  api_secret:\n    description: s\n    type: " + typ + "\n---\n"

@@ -49,10 +49,6 @@ func TestRunDefinitionAllowsActing(t *testing.T) {
 	}
 }
 
-// Web access is deny-by-default in every generated definition: opencode
-// allows webfetch out of the box, and fetched content is model context --
-// a prompt-injection vector. The rule must be explicit either way, so a
-// harness default change can never silently widen a routine's reach.
 func TestWebAccessDeniedByDefault(t *testing.T) {
 	def := genDef(t, Attempt{RunID: "run_t"})
 	for _, want := range []string{"webfetch: deny", "websearch: deny"} {
@@ -72,11 +68,6 @@ func TestWebAccessOptIn(t *testing.T) {
 	}
 }
 
-// The workspace is built by allow-list: exactly openroutines.yml,
-// opencode.json, and routines/ travel in. This is the audit's headline test --
-// no secret-shaped file (the encrypted store, keys) and no dev-session rules
-// file (AGENTS.md/CLAUDE.md, which opencode would load into run context) may
-// ever reach a run.
 func TestBuildWorkspaceAllowList(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
@@ -127,9 +118,6 @@ func TestBuildWorkspaceAllowList(t *testing.T) {
 	}
 }
 
-// One unparseable file is one broken routine, not a broken agent: a healthy
-// routine assembles a workspace without it. The broken routine's own run
-// still fails, and with the real reason.
 func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
@@ -175,10 +163,6 @@ func TestBuildWorkspaceIsolatesOtherRoutinesParseErrors(t *testing.T) {
 	}
 }
 
-// An ungranted MCP server's entry does not travel into the workspace's
-// opencode.json: the run's opencode never contacts it, so an ungranted run
-// cannot probe the endpoint or log its needs_auth refusal. Granted entries
-// and every other block pass through.
 func TestApplyDeclaredMCPFiltersUngrantedServers(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
@@ -243,9 +227,6 @@ func TestApplyDeclaredMCPFiltersUngrantedServers(t *testing.T) {
 	}
 }
 
-// The standing instruction renders from embedded instruction.md; every
-// conditional block must appear exactly when its flag is set, and no
-// template syntax may leak into the prompt.
 func TestInstructionRendering(t *testing.T) {
 	agent := &config.Agent{Name: "test-agent", Instructions: "Tests things"}
 	render := func(fm routine.Frontmatter) string {
@@ -302,8 +283,6 @@ func TestInstructionRendering(t *testing.T) {
 			t.Fatalf("teamwork: off instruction missing %q:\n%s", want, plain)
 		}
 	}
-	// reports: true with no explicit teamwork defaults to off: the reporting
-	// block renders, the event-recording one does not.
 	reporter := render(routine.Frontmatter{Reports: true})
 	if !strings.Contains(reporter, "This routine reports") {
 		t.Fatalf("reports: true should render the reporting block:\n%s", reporter)
@@ -321,9 +300,6 @@ func TestInstructionRendering(t *testing.T) {
 	}
 }
 
-// A frontmatter skill name is attacker-influencable repo content and becomes
-// a filesystem path in the run pipeline: traversal names must be rejected
-// before any path construction.
 func TestCopyDeclaredSkillsRejectsTraversal(t *testing.T) {
 	dir := t.TempDir()
 	outside := filepath.Join(dir, "victim")

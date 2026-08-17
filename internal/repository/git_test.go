@@ -93,9 +93,6 @@ func TestGitChildEnvExcludesSupervisorSecrets(t *testing.T) {
 	}
 }
 
-// HTTPS remotes authenticate through credential helpers declared in the
-// system and global gitconfig the hermetic environment suppresses; those
-// entries -- and only those -- must survive as -c flags.
 func TestCredentialConfigSurvivesHermeticSuppression(t *testing.T) {
 	home := t.TempDir()
 	config := "[credential]\n\thelper = store\n[core]\n\thooksPath = /tmp/evil\n"

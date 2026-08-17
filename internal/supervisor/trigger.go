@@ -12,15 +12,9 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/trigger"
 )
 
-// Runs one change-detection poll for a routine with no cron firing due, and
-// reports whether it should fire. A newly observed value is saved to
-// durable trigger state, persisted before the run it fires acts. Polls
-// happen at most once per interval; the last-poll clock is in-memory only
-// (persisting it would dirty the knowledge worktree on every poll), so a
-// restart costs one early poll.
 func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 	spec := *r.Frontmatter.Trigger
-	interval, _ := spec.IntervalDuration() // validated by the caller
+	interval, _ := spec.IntervalDuration()
 
 	log := r.Log()
 	if last, ok := s.triggers.lastPolled[r.Name]; ok && now.Before(last.Add(interval)) {
@@ -57,9 +51,6 @@ func (s *Supervisor) evaluateTrigger(r *routine.Routine, now time.Time) bool {
 	return true
 }
 
-// Re-observes the endpoint without firing, called when a scheduled run is
-// minted for a routine that also declares a trigger. Best effort: a failed
-// refresh costs at most one redundant run later.
 func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 	prior, err := trigger.Load(s.stateDir(), r.Name)
 	if err != nil {
@@ -75,8 +66,6 @@ func (s *Supervisor) refreshTriggerBaseline(r *routine.Routine, now time.Time) {
 	}
 }
 
-// Performs the HTTP observation, resolving the declared credential and
-// deduplicating error logs (log on transition, not every tick).
 func (s *Supervisor) poll(r *routine.Routine, spec trigger.Spec, prior *trigger.State, now time.Time) (trigger.Result, bool) {
 	s.triggers.lastPolled[r.Name] = now
 	log := r.Log()

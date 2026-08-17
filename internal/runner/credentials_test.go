@@ -15,8 +15,6 @@ import (
 	"testing"
 )
 
-// The constructed environment holds exactly the declared credentials plus
-// the model's provider key -- the audit's second headline claim.
 func TestResolveCredentialsScope(t *testing.T) {
 	dir := t.TempDir()
 	key := creds.GenerateKey()
@@ -70,7 +68,6 @@ func TestResolveCredentialsPreservesUnavailableStoreForDiagnostics(t *testing.T)
 	}
 }
 
-// Raw credentials inject verbatim under their uppercase names.
 func TestResolveCredentialsRaw(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, creds.KeyFileName), []byte(creds.GenerateKey()), 0o600); err != nil {
@@ -97,23 +94,16 @@ func TestResolveCredentialsRaw(t *testing.T) {
 	if s.env["STEADY_TOKEN"] != "sekrit" || s.env["OPENAI_API_KEY"] != "provider-key" {
 		t.Fatalf("raw injection wrong: %v", s.env)
 	}
-	// Decrypting the store is what registers its values for redaction.
 	if got := scrub.Redacted("carrying sekrit"); strings.Contains(got, "sekrit") {
 		t.Fatalf("stored credential not registered for redaction: %q", got)
 	}
 
 	typed := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{Credentials: []string{"gh_key"}}}
-	// A run with the typed credential fails at derivation (bad key)
-	// rather than injecting the stored root secret.
 	if _, err = resolveCredentials(dir, agent, typed, "openai/gpt"); err == nil {
 		t.Fatal("expected derivation failure for an invalid stored key")
 	}
 }
 
-// A resolve that fails partway has already minted whatever came before the
-// failure. That material dies with the abandoned run, so its registration
-// and its revocation must not outlive it -- the registry is bounded by live
-// material, not by history.
 func TestResolveCredentialsReleasesDerivedMaterialOnFailure(t *testing.T) {
 	const bearer = "bearer-of-an-abandoned-run"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -145,9 +135,6 @@ func TestResolveCredentialsReleasesDerivedMaterialOnFailure(t *testing.T) {
 	}
 }
 
-// An auth failure's hint names what the framework knows and the provider's
-// message does not: the resolved provider, the endpoint opencode.json
-// declares, and the credential the run injected -- or that none was (#60).
 func TestAuthHintNamesProviderEndpointAndCredential(t *testing.T) {
 	dir := t.TempDir()
 	cfg := `{"provider":{"my_gateway":{"options":{"baseURL":"https://gateway.example.com/v1/compat"}}}}`
@@ -162,8 +149,6 @@ func TestAuthHintNamesProviderEndpointAndCredential(t *testing.T) {
 		}
 	}
 
-	// No provider block: the provider name stands alone. No injected key:
-	// the hint says so instead of claiming a credential was rejected.
 	hint = authHint(dir, "anthropic/claude-x", false)
 	for _, want := range []string{"anthropic rejected the request", "no anthropic_api_key credential is stored"} {
 		if !strings.Contains(hint, want) {
@@ -172,9 +157,6 @@ func TestAuthHintNamesProviderEndpointAndCredential(t *testing.T) {
 	}
 }
 
-// Some providers' status text carries no key-shaped phrase -- the session
-// record's failure reads "...ended on an error: Unauthorized" -- and
-// unmatched it reports as a bare crash (#60).
 func TestAuthFailurePatternMatchesBareStatusText(t *testing.T) {
 	for _, line := range []string{
 		"the model session ended on an error: Unauthorized",

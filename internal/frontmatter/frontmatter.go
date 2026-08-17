@@ -20,7 +20,6 @@ type Document struct {
 	lineEnding  string
 }
 
-// Finds the leading frontmatter block without normalizing source bytes.
 func Split(raw []byte) (Document, error) {
 	lineEnding := "\n"
 	headerStart := len("---\n")
@@ -68,12 +67,10 @@ func Split(raw []byte) (Document, error) {
 	return Document{}, ErrUnterminated
 }
 
-// Returns the opening delimiter's line ending.
 func (d Document) LineEnding() string {
 	return d.lineEnding
 }
 
-// Replaces only the document's frontmatter bytes.
 func (d Document) WithFrontmatter(frontmatter []byte) []byte {
 	out := make([]byte, 0, len(d.raw)-len(d.Frontmatter)+len(frontmatter))
 	out = append(out, d.raw[:d.headerStart]...)

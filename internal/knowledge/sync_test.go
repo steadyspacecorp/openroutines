@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// Builds the #4 harness: a bare origin and two independent clones
-// (generations / machines) with knowledge materialized in each.
 func twoClones(t *testing.T) (a, b string) {
 	t.Helper()
 	base := t.TempDir()
@@ -76,7 +74,7 @@ func TestSyncFastForwardsWhenBehind(t *testing.T) {
 
 func TestSyncRebasesDivergedHistories(t *testing.T) {
 	a, b := twoClones(t)
-	// Human curation on a, agent commit on b, both from the same tip.
+
 	writeKnowledge(t, a, "tasks.md", "curated by human\n")
 	if _, err := NewStore(a).Commit("human curation"); err != nil {
 		t.Fatal(err)
@@ -104,11 +102,11 @@ func TestSyncRebasesDivergedHistories(t *testing.T) {
 
 func TestSyncRefusesRewrittenHistory(t *testing.T) {
 	a, b := twoClones(t)
-	// b must have seen the remote once so a rewrite is detectable.
+
 	if rep := NewStore(b).Sync(); rep.Rewritten || rep.Conflict {
 		t.Fatalf("baseline sync failed: %+v", rep)
 	}
-	// a force-rewrites the knowledge branch (attacker or confused human).
+
 	wtA := filepath.Join(a, "knowledge")
 	root := gitT(t, wtA, "rev-list", "--max-parents=0", "HEAD")
 	gitT(t, wtA, "reset", "-q", "--hard", root)
@@ -125,10 +123,6 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 		t.Fatalf("b adopted rewritten content: %q", got)
 	}
 
-	// The refusal must be durable, not one-shot: the first refusal's fetch
-	// updated the remote-tracking ref, and an implementation keyed on it
-	// would adopt the rewrite on the very next call. The accepted-ref
-	// baseline keeps refusing.
 	for i := 0; i < 3; i++ {
 		if rep := NewStore(b).Sync(); !rep.Rewritten {
 			t.Fatalf("sync call %d after rewrite: expected continued refusal, got %+v", i+2, rep)
@@ -139,15 +133,12 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 	}
 }
 
-// A container replacement used to launder a rewrite: the fresh clone has no
-// local baseline, so adoption took origin's branch wholesale. The accepted
-// ref survives the replacement and must block adoption.
 func TestEnsureWorktreeRefusesRewrittenHistoryAfterReplacement(t *testing.T) {
 	a, b := twoClones(t)
 	if rep := NewStore(b).Sync(); rep.Rewritten || rep.Conflict {
 		t.Fatalf("baseline sync failed: %+v", rep)
 	}
-	// Rewrite origin's knowledge branch while "the container is down".
+
 	wtA := filepath.Join(a, "knowledge")
 	root := gitT(t, wtA, "rev-list", "--max-parents=0", "HEAD")
 	gitT(t, wtA, "reset", "-q", "--hard", root)
@@ -156,8 +147,6 @@ func TestEnsureWorktreeRefusesRewrittenHistoryAfterReplacement(t *testing.T) {
 	gitT(t, wtA, "commit", "-qm", "rewritten")
 	gitT(t, wtA, "push", "-q", "--force", "origin", "knowledge")
 
-	// "Redeploy": a fresh clone with no local knowledge branch, like a new
-	// container generation.
 	base := filepath.Dir(a)
 	c := filepath.Join(base, "c")
 	gitT(t, base, "clone", "-q", filepath.Join(base, "origin.git"), c)
@@ -188,7 +177,7 @@ func TestSyncReportsConflictAndAborts(t *testing.T) {
 	if !rep.Conflict {
 		t.Fatalf("expected conflict report, got %+v", rep)
 	}
-	// The rebase must have been aborted: worktree clean, still functional.
+
 	if status := gitT(t, filepath.Join(b, "knowledge"), "status", "--porcelain"); status != "" {
 		t.Fatalf("worktree left dirty after aborted rebase: %q", status)
 	}

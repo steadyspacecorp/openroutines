@@ -13,9 +13,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/source"
 )
 
-// Vendors a skill from a git repository into skills/<name>, recording
-// provenance (source + commit) in the SKILL.md frontmatter. A skill is an
-// executable dependency: the user reviews the diff like code.
 const skillsAddUsage = "usage: openroutines skills add <git-url | owner/repo> [--path sub/dir]"
 
 func skillsAdd(args []string) int {
@@ -74,8 +71,6 @@ func skillsAdd(args []string) int {
 	return 0
 }
 
-// Returns the directory containing SKILL.md: root itself, or the one
-// SKILL.md found below it.
 func findSkillDir(root string) (string, error) {
 	if _, err := os.Stat(filepath.Join(root, "SKILL.md")); err == nil {
 		return root, nil
@@ -108,8 +103,6 @@ func findSkillDir(root string) (string, error) {
 	}
 }
 
-// Records source and revision in the SKILL.md frontmatter's metadata block
-// (string key-values, allowed by the Agent Skills spec).
 func stampProvenance(path, sourceRef, revision string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {

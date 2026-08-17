@@ -23,15 +23,10 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
-// Loosely constrains reasoning-effort values -- providers
-// define the real vocabulary; this just catches obvious mistakes.
 var effortPattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 const checkUsage = "usage: openroutines check"
 
-// Validates the agent repository: openroutines.yml, every routine's
-// frontmatter, skill references, credential names, and deploy prerequisites.
-// Exit code 1 on any failure -- made for CI.
 func cmdCheck(args []string) int {
 	positional, _, help, err := parseFlags(args, nil)
 	if err != nil {
@@ -99,9 +94,6 @@ func checkConfiguration(dir string, report *checkReport) (*config.Agent, *config
 }
 
 func checkSkills(dir string, report *checkReport) map[string]bool {
-	// Checked before plugins because plugin validation reads the agent's skill
-	// names. Duplicate global names are reported here because ListAgent drops
-	// them from its result.
 	report.section("skills/")
 	skills, errs := skill.ListAgent(dir)
 	for _, err := range errs {
@@ -184,8 +176,6 @@ func checkRoutines(dir string, agent *config.Agent, opencode *config.OpenCode, r
 }
 
 func checkRehearsals(dir string, routines []*routine.Routine, report *checkReport) {
-	// Fixtures are bound to routines by name; an orphan usually means the
-	// routine was renamed or removed without its rehearsal.
 	names := map[string]bool{}
 	for _, routine := range routines {
 		names[routine.Name] = true
@@ -223,7 +213,6 @@ func checkOpenCodeDrift(agent *config.Agent, routines []*routine.Routine, openco
 }
 
 func checkKnowledgeTasks(dir string, report *checkReport) {
-	// Task discipline is convention, not schema -- warn, never rewrite.
 	path := filepath.Join(knowledge.NewStore(dir).Worktree(), "tasks.md")
 	raw, err := os.ReadFile(path)
 	if err != nil {

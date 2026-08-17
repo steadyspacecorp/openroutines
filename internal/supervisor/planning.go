@@ -200,9 +200,9 @@ func (s *Supervisor) setRunning(name string, running bool) {
 	}
 }
 
-// Makes the knowledge worktree durable before anything acts on
-// it. Whatever the worktree carries is the intent: Commit no-ops on a clean
-// tree, so the normal path costs nothing.
+// Makes the knowledge worktree durable before anything acts on it. Whatever
+// the worktree carries is the intent: Commit no-ops on a clean tree, so the
+// normal path costs nothing.
 func (s *Supervisor) commitIntent(message string) bool {
 	sha, err := s.store.Commit(message)
 	if err != nil {
@@ -224,8 +224,6 @@ func (s *Supervisor) commitIntent(message string) bool {
 	return true
 }
 
-// Claims the attempt a routine is about to run. Returns the give-back
-// for an attempt that never becomes a run: a shutdown, a failed intent commit.
 func reserve(pending *schedule.Pending, now time.Time) (giveBack func()) {
 	prior := pending.LastAttemptAt
 	pending.Attempts++

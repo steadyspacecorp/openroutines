@@ -18,9 +18,6 @@ func genDefWithMCP(t *testing.T, attempt Attempt, fm routine.Frontmatter) string
 	return def
 }
 
-// Every configured server gets an explicit rule, deny unless granted --
-// the tools (and their third-party descriptions) never reach an ungranted
-// routine's model.
 func TestMCPServersDenyByDefault(t *testing.T) {
 	def := genDefWithMCP(t, Attempt{RunID: "run_t"}, routine.Frontmatter{})
 	for _, want := range []string{`"slack_*": deny`, `"steady_*": deny`} {
@@ -40,8 +37,6 @@ func TestMCPGrantOpensOnlyNamedServer(t *testing.T) {
 	}
 }
 
-// An agent with no opencode.json (or no mcp block) renders no MCP rules
-// -- the feature is invisible to agents that don't use it.
 func TestNoMCPConfigNoRules(t *testing.T) {
 	def := genDef(t, Attempt{RunID: "run_t"})
 	if strings.Contains(def, "_*") {
@@ -49,9 +44,6 @@ func TestNoMCPConfigNoRules(t *testing.T) {
 	}
 }
 
-// RenderDefinition carries the caller's server list into the rules -- check
-// previously rendered from an empty directory, so the MCP rules it claimed
-// to validate never existed in its output.
 func TestRenderDefinitionCoversMCPRules(t *testing.T) {
 	agent := &config.Agent{Name: "a", Instructions: "d"}
 	r := &routine.Routine{Name: "x", Frontmatter: routine.Frontmatter{MCP: []string{"steady"}}}

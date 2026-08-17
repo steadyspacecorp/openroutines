@@ -9,9 +9,7 @@ import (
 type ModePolicy uint8
 
 const (
-	// Writes every regular file as non-executable.
 	DataFiles ModePolicy = iota
-	// Carries the source executable bit into the copy.
 	PreserveExecutables
 )
 
@@ -20,7 +18,6 @@ type Options struct {
 	Skip func(rel string, entry fs.DirEntry) bool
 }
 
-// Copies directories and regular files, ignoring special files.
 func CopyRegular(src, dst string, options Options) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err

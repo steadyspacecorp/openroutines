@@ -2,8 +2,6 @@ package cli
 
 import "testing"
 
-// Color decorates; it never carries. With styling off the string is
-// untouched, with it on the words survive inside the escapes.
 func TestPaintGatesOnStyled(t *testing.T) {
 	was := styled
 	defer func() { styled = was }()

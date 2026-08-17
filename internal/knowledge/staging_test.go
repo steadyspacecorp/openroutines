@@ -61,11 +61,6 @@ func TestValidateRejectsHardLinks(t *testing.T) {
 	}
 }
 
-// Staging is not quiescent between validation and import: a descendant of
-// the model process can outlive it and swap a staged file for a symlink
-// after Validate has walked the tree. The copy path is therefore tested
-// directly, with no Validate in front of it: what it copies has to be
-// decided by the descriptor it reads from, not by an earlier walk.
 func TestStagedCopyNeverFollowsSymlinks(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "secret.txt")
 	os.WriteFile(secret, []byte("SECRET"), 0o644)
@@ -81,8 +76,6 @@ func TestStagedCopyNeverFollowsSymlinks(t *testing.T) {
 	}
 }
 
-// Same window, the alias a path check cannot see: a hard link the copy path
-// must recognize on the open file, not trust Validate to have caught.
 func TestStagedCopyRefusesHardLinks(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	os.WriteFile(outside, []byte("SECRET"), 0o644)
@@ -98,9 +91,6 @@ func TestStagedCopyRefusesHardLinks(t *testing.T) {
 	}
 }
 
-// The whole policy is re-applied at copy time, not just the file-type half:
-// a path Validate walked past and a descendant created afterwards is still a
-// path that must never enter the branch.
 func TestStagedCopyRefusesPathsValidateWouldReject(t *testing.T) {
 	for _, rel := range []string{".gitattributes", ".gitignore", filepath.Join(stateDirName, "sched.md"), "runs.jsonl"} {
 		staging, wt := t.TempDir(), t.TempDir()
@@ -115,8 +105,6 @@ func TestStagedCopyRefusesPathsValidateWouldReject(t *testing.T) {
 	}
 }
 
-// The size cap too: a file Validate measured can be grown before the copy
-// reads it, so the cap is enforced on the bytes actually copied.
 func TestStagedCopyRefusesOversizedFile(t *testing.T) {
 	staging, wt := t.TempDir(), t.TempDir()
 	os.WriteFile(filepath.Join(staging, "events.md"), make([]byte, maxFile+1), 0o644)
@@ -125,15 +113,12 @@ func TestStagedCopyRefusesOversizedFile(t *testing.T) {
 	}
 }
 
-// Rejecting halfway through must leave the worktree as it was found. Settle
-// commits the failure record, so a half-copied tree would be committed as the
-// failed run's knowledge -- exactly the atomicity staging exists to provide.
 func TestStagedCopyRejectionLeavesTheWorktreeUntouched(t *testing.T) {
 	staging, wt := t.TempDir(), t.TempDir()
 	os.WriteFile(filepath.Join(wt, "events.md"), []byte("committed\n"), 0o644)
 	os.WriteFile(filepath.Join(staging, "events.md"), []byte("committed\n- new\n"), 0o644)
 	os.WriteFile(filepath.Join(staging, "tasks.md"), []byte("- [ ] new\n"), 0o644)
-	// Sorts last: the good files are copied before the rejection lands.
+
 	if err := os.Symlink(filepath.Join(t.TempDir(), "secret.txt"), filepath.Join(staging, "zz.md")); err != nil {
 		t.Skip("symlinks unavailable")
 	}
@@ -148,9 +133,6 @@ func TestStagedCopyRejectionLeavesTheWorktreeUntouched(t *testing.T) {
 	}
 }
 
-// RestoreFile writes into staging after the run, so it needs the import
-// copy's confinement: a staged path swapped for a symlink must not redirect
-// the write out of the staging tree.
 func TestRestoreFileNeverWritesOutsideStaging(t *testing.T) {
 	base := t.TempDir()
 	os.WriteFile(filepath.Join(base, "events.md"), []byte("base events\n"), 0o644)
@@ -168,9 +150,6 @@ func TestRestoreFileNeverWritesOutsideStaging(t *testing.T) {
 	}
 }
 
-// Import must refuse to overwrite uncommitted human curation -- there is no
-// reflog for edits that were never committed. Supervisor-owned paths are the
-// attempt's own in-flight bookkeeping and do not gate.
 func TestImportRefusesDirtyWorktree(t *testing.T) {
 	repo := t.TempDir()
 	run := func(args ...string) {
@@ -187,7 +166,6 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 	staging := t.TempDir()
 	os.WriteFile(filepath.Join(staging, "events.md"), []byte("- staged fact\n"), 0o644)
 
-	// A human edit, uncommitted: refuse.
 	wt := NewStore(repo).Worktree()
 	os.WriteFile(filepath.Join(wt, "tasks.md"), []byte("- [ ] mid-edit\n"), 0o644)
 	if _, err := NewStore(repo).Import(staging, t.TempDir()); err == nil || !strings.Contains(err.Error(), "uncommitted") {
@@ -197,7 +175,6 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 		t.Fatalf("refused import still modified the worktree: %q", got)
 	}
 
-	// Committed: import proceeds.
 	if _, err := NewStore(repo).Commit("human curation"); err != nil {
 		t.Fatal(err)
 	}
@@ -205,12 +182,10 @@ func TestImportRefusesDirtyWorktree(t *testing.T) {
 		t.Fatalf("clean worktree should import: %v", err)
 	}
 
-	// The pipeline commits right after a successful import; mirror that.
 	if _, err := NewStore(repo).Commit("import"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Supervisor-owned dirt (this attempt's own bookkeeping) does not gate.
 	os.MkdirAll(filepath.Join(wt, "state"), 0o755)
 	os.WriteFile(filepath.Join(wt, "state", "r.json"), []byte("{}"), 0o644)
 	os.WriteFile(filepath.Join(staging, "events.md"), []byte("- staged fact\n- another\n"), 0o644)
@@ -224,8 +199,6 @@ func TestRestoreFileDiscardsStagedChange(t *testing.T) {
 	os.WriteFile(filepath.Join(base, "events.md"), []byte("base\n"), 0o644)
 	staging := t.TempDir()
 
-	// A staged edit is undone: the base copy wins, so the import's
-	// unchanged-versus-base rule then skips the file.
 	os.WriteFile(filepath.Join(staging, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
 	changed, err := RestoreFile(staging, base, "events.md")
 	if err != nil || !changed {
@@ -235,13 +208,11 @@ func TestRestoreFileDiscardsStagedChange(t *testing.T) {
 		t.Fatalf("staged events.md = %q, want base copy restored", got)
 	}
 
-	// An untouched file reports no change.
 	changed, err = RestoreFile(staging, base, "events.md")
 	if err != nil || changed {
 		t.Fatalf("untouched file: changed=%v err=%v, want false nil", changed, err)
 	}
 
-	// A staged deletion is undone too -- import would otherwise delete it.
 	os.Remove(filepath.Join(staging, "events.md"))
 	changed, err = RestoreFile(staging, base, "events.md")
 	if err != nil || !changed {
@@ -251,7 +222,6 @@ func TestRestoreFileDiscardsStagedChange(t *testing.T) {
 		t.Fatal("staged events.md not restored after deletion")
 	}
 
-	// A file the snapshot never had must not be created through staging.
 	os.WriteFile(filepath.Join(staging, "novel.md"), []byte("x\n"), 0o644)
 	changed, err = RestoreFile(staging, base, "novel.md")
 	if err != nil || !changed {
@@ -262,9 +232,6 @@ func TestRestoreFileDiscardsStagedChange(t *testing.T) {
 	}
 }
 
-// The import is a three-way merge against the run's base snapshot; these are
-// the decisions it can make, tested directly because the wrong one is silent
-// (design decision "Overlap: kernel locks, skip-don't-queue").
 func TestImportThreeWayMerge(t *testing.T) {
 	repo := t.TempDir()
 	wt := NewStore(repo).Worktree()
@@ -277,29 +244,25 @@ func TestImportThreeWayMerge(t *testing.T) {
 		}
 	}
 
-	// stale.md: untouched by the run while a concurrent settlement moved the
-	// worktree -- the stale staged copy must not regress it.
 	write(base, "stale.md", "v1\n")
 	write(staging, "stale.md", "v1\n")
 	write(wt, "stale.md", "v1\n- concurrent\n")
-	// mine.md: only this run changed it -- the staged copy lands whole.
+
 	write(base, "mine.md", "a\n")
 	write(staging, "mine.md", "a\nb\n")
 	write(wt, "mine.md", "a\n")
-	// both.md: both runs appended -- the verified append merge keeps both.
+
 	write(base, "both.md", "x\n")
 	write(staging, "both.md", "x\ntheirs\n")
 	write(wt, "both.md", "x\nours\n")
-	// semantic.md: both runs rewrote the same fact -- canonical stays valid
-	// and the competing version is quarantined for human resolution.
+
 	write(base, "semantic.md", "status: idle\n")
 	write(staging, "semantic.md", "status: away\n")
 	write(wt, "semantic.md", "status: shipping\n")
-	// gone.md: the run deleted it and nothing moved underneath -- deleted.
+
 	write(base, "gone.md", "old\n")
 	write(wt, "gone.md", "old\n")
-	// contested.md: the run deleted it but a concurrent settlement wrote to
-	// it -- the deletion loses.
+
 	write(base, "contested.md", "old\n")
 	write(wt, "contested.md", "old\n- news\n")
 

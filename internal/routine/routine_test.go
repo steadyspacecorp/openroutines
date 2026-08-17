@@ -101,7 +101,6 @@ func TestParseTriggerFrontmatter(t *testing.T) {
 		t.Fatalf("schedule should be empty for a trigger-only routine: %q", r.Frontmatter.Schedule)
 	}
 
-	// No trigger declared: the field stays nil.
 	r, err = Parse(writeTemp(t, "---\nschedule: \"* * * * *\"\n---\nBody.\n"))
 	if err != nil || r.Frontmatter.Trigger != nil {
 		t.Fatalf("trigger should be nil when undeclared: %+v err=%v", r.Frontmatter.Trigger, err)
@@ -141,8 +140,6 @@ func TestSetActiveTogglesInPlace(t *testing.T) {
 	}
 }
 
-// Names become filesystem paths; the grammar must be closed under path
-// construction.
 func TestNamePattern(t *testing.T) {
 	for _, ok := range []string{"daily", "steady-check-in", "a11y_sweep", "r2"} {
 		if !NamePattern.MatchString(ok) {
@@ -156,9 +153,6 @@ func TestNamePattern(t *testing.T) {
 	}
 }
 
-// A typo'd frontmatter key must be an error, not a silent fall-through to
-// the field's default (actve: false -> active-by-default was the audit's
-// example).
 func TestParseRejectsUnknownFrontmatterKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "x.md")
@@ -228,9 +222,6 @@ func TestLoadAgentRejectsDuplicatePluginRoutines(t *testing.T) {
 	}
 }
 
-// Load errors name the routine they are about, so one broken file can be
-// worked around by everyone else -- and so the broken routine's own lookup
-// reports the reason instead of "no routine".
 func TestLoadErrorsAreAttributedToTheirRoutine(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "routines"), 0o755); err != nil {
@@ -274,8 +265,6 @@ func TestLoadErrorsAreAttributedToTheirRoutine(t *testing.T) {
 	}
 }
 
-// Agent-owned precedence ignores the same plugin filename completely, even
-// when the shadowed plugin file does not parse.
 func TestAgentOwnedRoutineShadowsBrokenPluginRoutine(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{filepath.Join(root, "routines"), filepath.Join(root, ".openroutines", "plugins", "demo", "routines")} {
@@ -301,9 +290,6 @@ func TestAgentOwnedRoutineShadowsBrokenPluginRoutine(t *testing.T) {
 	}
 }
 
-// Log binds the routine's identity to the process logger: concurrent runs
-// share one stdout, so every line carries routine= (and whatever the caller
-// adds, like run_id) without the call site repeating it.
 func TestLogBindsRoutineIdentity(t *testing.T) {
 	logs := logtest.Capture(t)
 	(&Routine{Name: "check-in"}).Log().With("run_id", "run_abc").Error("attempt failed -- will retry", "detail", "exit status 1")

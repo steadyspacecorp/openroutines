@@ -8,9 +8,6 @@ import (
 	"image/png"
 )
 
-// rasterize paints the scene at size x size pixels with 4x4 supersampling.
-// Shapes are opaque and painted in order, so each sample takes the color of
-// the topmost shape containing it; averaging the samples antialiases edges.
 func rasterize(shapes []shape, fills []string, size int) ([]byte, error) {
 	colors := make([]color.RGBA, len(fills))
 	for i, f := range fills {

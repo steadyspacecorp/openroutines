@@ -15,76 +15,56 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-// Classifies how an attempt ended.
 type Outcome string
 
-// The terminal outcomes an attempt reports.
 const (
 	Completed Outcome = "completed"
 	Timeout   Outcome = "timeout"
 	Crashed   Outcome = "crashed"
-	Canceled  Outcome = "canceled" // shutdown interrupted the attempt
+	Canceled  Outcome = "canceled"
 )
 
-// Identifies one execution of a logical run.
 type Attempt struct {
 	RunID          string
 	Number         int
 	ScheduledFor   time.Time
 	CoveredThrough time.Time
-	Rehearsal      string // fixture path; set only for manual rehearsal runs
-	SnapshotDir    string // immutable knowledge tree supplied by a read-only CLI view
-	ReadOnly       bool   // deny acting and writing tools; no settlement path exists
+	Rehearsal      string
+	SnapshotDir    string
+	ReadOnly       bool
 }
 
-// Formats the attempt number for logs and environments.
 func (a Attempt) ID() string { return fmt.Sprintf("attempt_%02d", a.Number) }
 
-// Reports whether the attempt was dispatched outside the scheduler.
 func (a Attempt) Manual() bool { return a.ScheduledFor.IsZero() }
 
-// One attempt's outcome. Hint, when set, classifies a common
-// failure (currently: provider authentication) so it surfaces as a
-// configuration problem instead of an opaque crash.
 type AttemptResult struct {
 	Outcome  Outcome
 	ExitCode int
 	Duration time.Duration
 	Hint     string
-	Model    string // the resolved model this attempt ran with
-	Effort   string // frontmatter reasoning effort, when set
-	Usage    *Usage // token consumption; nil when the surface was unavailable
+	Model    string
+	Effort   string
+	Usage    *Usage
 }
 
-// Marks a start failure no retry can fix; a caller spending a retry
-// budget should give up now. The runner classifies because it assembled the
-// run; the supervisor only asks.
 var ErrFatal = errors.New("not retryable")
 
-// Marks a workspace that was not proven discarded.
 var ErrAttemptCleanup = errors.New("attempt workspace cleanup failed")
 
-// Fixes the knowledge range prepared for a reporting routine.
 type DeliveryBoundary struct {
 	Through  string
 	FirstRun bool
 }
 
-// The attempt's staged knowledge, awaiting import or discard.
 type AttemptWorkspace struct {
 	KnowledgeDir string
-	// The pristine snapshot the run started from, outside the
-	// run's reach; the import diffs staged knowledge against it so
-	// concurrent settlements compose.
-	BaseDir string
-	root    string
+	BaseDir      string
+	root         string
 
 	Delivery DeliveryBoundary
 }
 
-// Discards the whole run workspace, staging and base included. A run keeps the
-// supervisor's uid, so this process owns everything the model created and can
-// restore any modes it changed.
 func (s *AttemptWorkspace) Cleanup() error {
 	if err := removeTree(s.root); err != nil {
 		return fmt.Errorf("%w: remove %s: %w", ErrAttemptCleanup, s.root, err)
@@ -97,11 +77,8 @@ func (s *AttemptWorkspace) Cleanup() error {
 	return nil
 }
 
-// Deletes a tree a run may have chmodded shut behind itself. Owning every file
-// means the supervisor is *allowed* to restore the modes it needs, not that
-// os.RemoveAll does: a 0000 directory stops its walk with EACCES. One retry
-// pass is enough because WalkDir visits a directory before reading it.
 func removeTree(path string) error {
+	// chmod makes model-created 000 directories traversable when RemoveAll hits EACCES.
 	if err := os.RemoveAll(path); err == nil {
 		return nil
 	}
@@ -114,21 +91,19 @@ func removeTree(path string) error {
 	return os.RemoveAll(path)
 }
 
-// Reports whether the routine created the consume marker in staged knowledge.
 func (s *AttemptWorkspace) Consumed() bool {
 	_, err := os.Stat(filepath.Join(s.KnowledgeDir, knowledge.ConsumeMarker))
 	return err == nil
 }
 
-// A completed manual run.
 type ManualResult struct {
 	RunID     string
 	Outcome   Outcome
 	ExitCode  int
 	Duration  time.Duration
-	Commit    string               // knowledge commit hash, when one was made
-	Hint      string               // classified failure cause, when one was recognized
-	Conflicts []knowledge.Conflict // semantic edits preserved outside the canonical file
+	Commit    string
+	Hint      string
+	Conflicts []knowledge.Conflict
 }
 
 type ManualOptions struct {
@@ -137,7 +112,6 @@ type ManualOptions struct {
 	Fixture          string
 }
 
-// Resolves frontmatter over agent defaults.
 func EffectiveModel(agent *config.Agent, r *routine.Routine) (string, error) {
 	model := r.Frontmatter.Model
 	if model == "" {
@@ -149,22 +123,18 @@ func EffectiveModel(agent *config.Agent, r *routine.Routine) (string, error) {
 	return model, nil
 }
 
-// The declared timeout capped by the agent's max_timeout
-// ceiling -- applied here, not in `check`: a spend guard cannot rest on a
-// command the operator may never run.
+// The declared timeout capped by the agent's max_timeout ceiling -- applied
+// here, not in check: a spend guard cannot rest on a command the operator may
+// never run.
 func EffectiveTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 	return min(DeclaredTimeout(agent, r), agent.MaxRunTimeout())
 }
 
-// Resolves frontmatter over agent defaults over 5m, before the
-// ceiling applies. `check` reports on it; execution uses EffectiveTimeout.
 func DeclaredTimeout(agent *config.Agent, r *routine.Routine) time.Duration {
 	timeout, _ := declaredTimeout(agent, r)
 	return timeout
 }
 
-// Also reports the raw value that failed to parse, "" when
-// every declared value parsed clean, so Stage can warn about what it dropped.
 func declaredTimeout(agent *config.Agent, r *routine.Routine) (timeout time.Duration, badValue string) {
 	timeout = 5 * time.Minute
 	for _, t := range []string{agent.Defaults.Timeout, r.Frontmatter.Timeout} {

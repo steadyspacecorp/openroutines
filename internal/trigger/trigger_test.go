@@ -95,7 +95,6 @@ func TestPollBaselineChangeAndSelect(t *testing.T) {
 	defer srv.Close()
 	spec := Spec{Poll: srv.URL, Select: "/messages/0/ts"}
 
-	// First sight: baseline, never a change.
 	res, err := Poll(srv.Client(), spec, "tok-123", "r", nil)
 	if err != nil || res.Changed {
 		t.Fatalf("baseline poll: changed=%v err=%v", res.Changed, err)
@@ -107,21 +106,18 @@ func TestPollBaselineChangeAndSelect(t *testing.T) {
 		t.Fatalf("credential not sent as bearer: %q", ps.auth)
 	}
 
-	// Same value: no change.
 	prior := res.Next
 	res, err = Poll(srv.Client(), spec, "", "r", &prior)
 	if err != nil || res.Changed {
 		t.Fatalf("unchanged poll: changed=%v err=%v", res.Changed, err)
 	}
 
-	// New message: change.
 	ps.body = `{"messages":[{"ts":"200.2"}]}`
 	res, err = Poll(srv.Client(), spec, "", "r", &prior)
 	if err != nil || !res.Changed || res.Next.Value != "200.2" {
 		t.Fatalf("changed poll: %+v err=%v", res, err)
 	}
 
-	// Empty channel: absent pointer observes "", a change from "200.2".
 	ps.body = `{"messages":[]}`
 	p2 := res.Next
 	res, err = Poll(srv.Client(), spec, "", "r", &p2)
@@ -142,13 +138,11 @@ func TestPollRawBodyHashAndETag(t *testing.T) {
 	}
 	prior := res.Next
 
-	// Same ETag: served as 304, no change, no body compare.
 	res, err = Poll(srv.Client(), spec, "", "r", &prior)
 	if err != nil || res.Changed || ps.got304 != 1 {
 		t.Fatalf("304 path: changed=%v got304=%d err=%v", res.Changed, ps.got304, err)
 	}
 
-	// Content and ETag change together: fire.
 	ps.body, ps.etag = "v2", `"e2"`
 	res, err = Poll(srv.Client(), spec, "", "r", &prior)
 	if err != nil || !res.Changed {

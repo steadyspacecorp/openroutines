@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-// Parses a UTC-bound schedule; tests that care about a real zone call
-// Parse directly.
 func spec(t *testing.T, expr string) *Spec {
 	t.Helper()
 	s, err := Parse(expr, time.UTC)
@@ -32,12 +30,10 @@ func TestOccurrencesCollapseWindow(t *testing.T) {
 func TestOccurrencesIntervalIsHalfOpen(t *testing.T) {
 	daily := spec(t, "0 9 * * *")
 	nine := time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)
-	// after == a firing time: that firing is excluded (already accounted for).
 	first, _, n := Occurrences(daily, nine, nine.Add(30*time.Hour))
 	if n != 1 || first.Day() != 2 {
 		t.Fatalf("interval must be (after, until]: n=%d first=%v", n, first)
 	}
-	// until == a firing time: that firing is included.
 	_, last, n := Occurrences(daily, nine.Add(-time.Hour), nine)
 	if n != 1 || !last.Equal(nine) {
 		t.Fatalf("until must be inclusive: n=%d last=%v", n, last)
@@ -45,11 +41,6 @@ func TestOccurrencesIntervalIsHalfOpen(t *testing.T) {
 }
 
 func TestOccurrencesAcrossSpringForwardGap(t *testing.T) {
-	// US DST 2026: clocks jump 02:00 -> 03:00 on March 8 in New York.
-	// A 02:30 schedule has no valid firing that day; whatever the cron
-	// library does with it, the invariants that matter to the supervisor
-	// are: no panic, strictly increasing firings, and no lost days around
-	// the gap.
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip("no tz database")
@@ -67,14 +58,12 @@ func TestOccurrencesAcrossSpringForwardGap(t *testing.T) {
 	if !first.Before(last) {
 		t.Fatalf("firings must increase: first=%v last=%v", first, last)
 	}
-	// The day after the gap must fire normally.
 	if last.Day() != 10 && last.Day() != 9 {
 		t.Fatalf("post-gap firings lost: last=%v", last)
 	}
 }
 
 func TestOccurrencesAcrossFallBack(t *testing.T) {
-	// US DST end 2026: clocks repeat 01:00-02:00 on November 1 in New York.
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip("no tz database")
@@ -109,10 +98,6 @@ func TestOccurrencesHoldWallClockAfterStateRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Skip("no tz database")
 	}
-	// The release container sets no TZ, so time.Local is UTC and a watermark
-	// that round-tripped through the state file comes back in a fabricated
-	// fixed-offset zone. Reproduce that here instead of inheriting whatever
-	// zone the developer's machine happens to be in.
 	defer func(l *time.Location) { time.Local = l }(time.Local)
 	time.Local = time.UTC
 
@@ -135,8 +120,6 @@ func TestOccurrencesHoldWallClockAfterStateRoundTrip(t *testing.T) {
 	if n != 3 {
 		t.Fatalf("expected 3 firings, got %d", n)
 	}
-	// Oct 31 is EDT, Nov 2 is EST: 06:00 in New York on both sides of the
-	// fall-back, not 06:00 at whatever offset the watermark froze.
 	for _, tc := range []struct {
 		label string
 		got   time.Time
@@ -196,7 +179,6 @@ func TestBreakerTripAndReset(t *testing.T) {
 
 func TestNextFiresBoundedByCountAndHorizon(t *testing.T) {
 	weekdays := spec(t, "0 9 * * 1-5")
-	// Tue 2026-07-28 07:00.
 	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
 	fires := NextFires(weekdays, now, now.AddDate(0, 0, 14), 3)
 	if len(fires) != 3 {
@@ -213,7 +195,6 @@ func TestNextFiresBoundedByCountAndHorizon(t *testing.T) {
 
 func TestWindowEndSkipsSameDayRetrySlot(t *testing.T) {
 	checkIn := spec(t, "0 7,8 * * 1-5")
-	// Running at Tue 07:00: the 08:00 slot is today's retry, not the close.
 	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
 	end := WindowEnd(checkIn, now, now.AddDate(0, 0, 14))
 	want := time.Date(2026, 7, 29, 7, 0, 0, 0, time.UTC)
@@ -224,7 +205,6 @@ func TestWindowEndSkipsSameDayRetrySlot(t *testing.T) {
 
 func TestWindowEndCrossesWeekend(t *testing.T) {
 	checkIn := spec(t, "0 7,8 * * 1-5")
-	// Friday morning: the next fire-day is Monday.
 	now := time.Date(2026, 7, 31, 8, 30, 0, 0, time.UTC)
 	end := WindowEnd(checkIn, now, now.AddDate(0, 0, 14))
 	want := time.Date(2026, 8, 3, 7, 0, 0, 0, time.UTC)

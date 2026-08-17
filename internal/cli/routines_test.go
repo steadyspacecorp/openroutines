@@ -15,9 +15,6 @@ func TestRoutinesTestCommandIsRemoved(t *testing.T) {
 	}
 }
 
-// A manual run in the production container spawns the same sandboxed model
-// process a supervised one does, so a key layout boot would refuse has to be
-// refused here too.
 func TestManualRunRefusesAKeyFileTheSandboxWouldGrant(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
@@ -76,8 +73,6 @@ func TestParseRoutineRunArgs(t *testing.T) {
 	}
 }
 
-// Fixture resolution: one flat file for the common case, a directory with
-// default.md once a routine has scenarios, and misses that name the fix.
 func TestResolveRehearsal(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

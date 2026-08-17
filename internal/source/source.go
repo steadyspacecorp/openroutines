@@ -1,4 +1,3 @@
-// Acquires a contained, revision-pinned tree from Git.
 package source
 
 import (
@@ -19,14 +18,12 @@ const (
 	gitDrainDeadline = 5 * time.Second
 )
 
-// Identifies the repository content returned by Fetch.
 type Provenance struct {
 	Repository string
 	Path       string
 	Revision   string
 }
 
-// Clones a source reference and returns its contained subpath at revision.
 func Fetch(sourceRef, subPath, revision string) (root string, provenance Provenance, cleanup func(), err error) {
 	cleanup = func() {}
 	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)

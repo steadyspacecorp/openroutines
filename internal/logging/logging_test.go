@@ -12,9 +12,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// The output is logfmt: every part of a record is a key=value pair.
-// Nothing is interpolated into the message, so a line can be filtered by
-// field rather than matched by shape.
 func TestOutputIsLogfmt(t *testing.T) {
 	var buf bytes.Buffer
 	Writer = &buf
@@ -35,9 +32,6 @@ func TestOutputIsLogfmt(t *testing.T) {
 	}
 }
 
-// Timestamps carry the agent's offset: its schedule is a wall-clock promise
-// in that zone, so reading a log line against a cron expression should not
-// need arithmetic.
 func TestTimestampUsesTheConfiguredZone(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -60,8 +54,6 @@ func TestTimestampUsesTheConfiguredZone(t *testing.T) {
 	}
 }
 
-// Below the configured level nothing is written at all -- the handler is
-// the only thing that decides.
 func TestLevelGate(t *testing.T) {
 	var buf bytes.Buffer
 	Writer = &buf
@@ -78,8 +70,6 @@ func TestLevelGate(t *testing.T) {
 	}
 }
 
-// A secret in the scrub registry never reaches the output, whichever call
-// site logs it -- redaction is the installed writer's, not the caller's.
 func TestRegisteredSecretsAreRedacted(t *testing.T) {
 	var buf bytes.Buffer
 	Writer = &buf
@@ -95,9 +85,6 @@ func TestRegisteredSecretsAreRedacted(t *testing.T) {
 	}
 }
 
-// Trigger polls register bearer material mid-flight while run goroutines
-// log concurrently; mutating a plain map under those readers would be a
-// fatal runtime error, not just a race.
 func TestScrubRegistrationRacesLogging(t *testing.T) {
 	Writer = &bytes.Buffer{}
 	scrub.Register(map[string]string{"master key": "seed-value"})
@@ -117,10 +104,6 @@ func TestScrubRegistrationRacesLogging(t *testing.T) {
 	}
 }
 
-// The level resolves: the environment override, else a default split by
-// where the process runs -- info in the container, warn locally. An
-// unrecognized override falls back to the default -- IgnoredLevel names
-// it; a typo must not change behavior beyond that.
 func TestConfigureLevel(t *testing.T) {
 	t.Cleanup(func() { Level.Set(slog.LevelInfo) })
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")

@@ -5,13 +5,9 @@ import (
 	"slices"
 )
 
-// An OS package (`apt install bubblewrap`) rather than a linked library: a
-// subprocess boundary is a much cheaper coupling for the supervisor's
-// dependency tree than an in-process one.
 const bwrap = "bwrap"
 const unshare = "unshare"
 
-// How /proc reaches a sandbox, as bwrap arguments.
 type procMount []string
 
 // A private procfs hides peer attempts, and needs the fresh pid namespace the
@@ -66,14 +62,9 @@ func (b bubblewrap) Capabilities() Capabilities {
 	}
 }
 
-// Command wraps argv in the sandbox a describes. The model process lands in a
-// fresh pid namespace as pid 2 -- pid 1 is a trivial bwrap init that reaps
-// orphans -- so killing this process collapses the namespace and takes every
-// descendant with it, including any that escaped into its own session.
+// The pid-namespace init reaps descendants; killing the leader therefore
+// collapses the namespace, including descendants that escaped their session.
 func (b bubblewrap) Command(workspace string, argv ...string) (*exec.Cmd, error) {
-	// Validated here, but the argv below uses the names as given: bwrap
-	// resolves a bind's source itself, and the destination has to keep the
-	// name the run was told to use, which is the unresolved one.
 	if err := validateWorkspace(workspace); err != nil {
 		return nil, err
 	}
@@ -102,7 +93,7 @@ func (b bubblewrap) Command(workspace string, argv ...string) (*exec.Cmd, error)
 	args = append(args, b.proc...)
 	args = append(args,
 		"--dev", "/dev", // a fresh minimal devtmpfs: /dev/shm is this attempt's alone
-		"--tmpfs", "/tmp", // the workspace binds over this, so it must come first
+		"--tmpfs", "/tmp", // the workspace bind overlays this, so it must come first
 		"--bind", workspace, workspace,
 	)
 	args = append(args, "--chdir", workspace, "--")

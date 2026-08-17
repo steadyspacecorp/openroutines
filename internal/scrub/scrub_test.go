@@ -25,8 +25,6 @@ func TestRedactsSecretsAcrossWrites(t *testing.T) {
 	}
 }
 
-// Newline-free output must not grow the buffer without bound: past the cap
-// it flushes through redaction in chunks.
 func TestBufferCapOnNewlineFreeOutput(t *testing.T) {
 	var out bytes.Buffer
 	w := NewWriter(&out)
@@ -42,8 +40,6 @@ func TestBufferCapOnNewlineFreeOutput(t *testing.T) {
 	}
 }
 
-// Ephemeral entries under one name coexist, and releasing one leaves the
-// others redacting -- the concurrent-runs contract.
 func TestEphemeralRegistrationsCoexistAndRelease(t *testing.T) {
 	release1 := RegisterEphemeral("bearer (desk)", "eph-value-one")
 	release2 := RegisterEphemeral("bearer (desk)", "eph-value-two")

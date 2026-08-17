@@ -60,7 +60,6 @@ func exportedPath(t *testing.T, dir, sessionID string) string {
 	return matches[0]
 }
 
-// Usage sums assistant messages only; absence is nil, never zero.
 func TestCaptureUsage(t *testing.T) {
 	if got := captureVia(t, stubOpencode(t, `[]`, nil)).Usage; got != nil {
 		t.Fatalf("no sessions should be nil, got %+v", got)
@@ -81,9 +80,6 @@ func TestCaptureUsage(t *testing.T) {
 	}
 }
 
-// How the session ended is read from the same record usage comes from.
-// A claim is only made on positive evidence: an errored message, or a
-// session whose runtime reported finish reasons and never finished a turn.
 func TestCaptureSessionFailure(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -124,10 +120,6 @@ func TestCaptureSessionFailure(t *testing.T) {
 	}
 }
 
-// The failure claim quotes a model-writable record, and it outlives the
-// mint registration that would otherwise redact it downstream (events, the
-// run record, the manual echo) -- so it must leave the lift already
-// redacted, while the registration is still live.
 func TestCaptureSessionFailureIsRedacted(t *testing.T) {
 	release := scrub.RegisterEphemeral("github_app bearer (gh)", "tok-sensitive-123")
 	defer release()
@@ -138,8 +130,6 @@ func TestCaptureSessionFailureIsRedacted(t *testing.T) {
 	}
 }
 
-// A broken capture surface degrades to an empty record -- no usage, no
-// outcome claim -- never an error: bookkeeping must not fail a run.
 func TestCaptureFailsOpen(t *testing.T) {
 	oc := stubOpencode(t, `[{"id":"ses_x"}]`, map[string]string{"ses_x": `{"messages":"unreadable"}`})
 	s := captureVia(t, oc)
@@ -152,9 +142,6 @@ func TestCaptureFailsOpen(t *testing.T) {
 	}
 }
 
-// The capture must sum every session the attempt left, not only the most
-// recent: the fresh home normally holds exactly one, but nothing enforces
-// that, and a partial sum is a silently wrong usage record.
 func TestCaptureSumsEverySession(t *testing.T) {
 	oc := stubOpencode(t, `[{"id":"ses_a"},{"id":"ses_b"}]`, map[string]string{
 		"ses_a": `{"messages":[{"info":{"role":"assistant","tokens":{"input":100,"output":20,"reasoning":6,"cache":{"read":9,"write":4}},"cost":0.01}}]}`,
@@ -172,11 +159,6 @@ func TestCaptureSumsEverySession(t *testing.T) {
 	}
 }
 
-// The outcome is judged from the most significant session alone: the first
-// listed, which `session list` orders most-recently-updated first, is the
-// session that acted last. A clean ending in some older session must not
-// vouch for the one that actually held the run -- while usage still sums
-// them all.
 func TestCaptureJudgesTheMostRecentSession(t *testing.T) {
 	oc := stubOpencode(t, `[{"id":"ses_live"},{"id":"ses_side"}]`, map[string]string{
 		"ses_live": `{"messages":[{"info":{"role":"assistant","tokens":{"input":100,"output":20,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.01,"finish":"tool-calls"}}]}`,
@@ -193,9 +175,6 @@ func TestCaptureJudgesTheMostRecentSession(t *testing.T) {
 	}
 }
 
-// Wraps a stub so its first `count` answers to `args`
-// come back cut in half with a clean exit -- the shape of opencode's lossy
-// stdout (see completeJSON).
 func truncatingOpencode(oc opencodeExec, count int, args ...string) opencodeExec {
 	return func(got ...string) ([]byte, error) {
 		raw, err := oc(got...)
@@ -207,8 +186,6 @@ func truncatingOpencode(oc opencodeExec, count int, args ...string) opencodeExec
 	}
 }
 
-// A truncated document with a clean exit is opencode's lossy stdout, not
-// an answer: one fresh invocation is expected to return the whole thing.
 func TestFetchRetriesTruncatedJSON(t *testing.T) {
 	for name, args := range map[string][]string{
 		"list":   {"session", "list", "--format", "json"},
@@ -234,8 +211,6 @@ func TestFetchGivesUpOnPersistentTruncation(t *testing.T) {
 	}
 }
 
-// Answers `session list` with the given ids and `export <id>`
-// from the exports map; a missing id is an export failure.
 func stubOpencode(t *testing.T, list string, exports map[string]string) opencodeExec {
 	t.Helper()
 	return func(args ...string) ([]byte, error) {
@@ -291,8 +266,6 @@ func TestExportSavesEverySession(t *testing.T) {
 	}
 }
 
-// Exported sessions are verbatim, unscrubbed model history, so what lands
-// is as sensitive as the credentials the routine could see: owner-only.
 func TestExportWritesOwnerOnly(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	t.Setenv(EnvSessionDir, root)
@@ -335,8 +308,6 @@ func TestExportUsesSessionIDBase(t *testing.T) {
 	}
 }
 
-// Retries share a run id but leave distinct sessions. Flat operator storage
-// retains both histories rather than erasing the first attempt's evidence.
 func TestExportPreservesPreviousAttemptsSessions(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(EnvSessionDir, root)

@@ -17,8 +17,6 @@ import (
 	"strings"
 )
 
-// Generate returns the avatar for name as an SVG document and a 512px PNG.
-// The same name always yields the same bytes.
 func Generate(name string) (svg, png []byte, err error) {
 	shapes, fills := scene(name)
 	png, err = rasterize(shapes, fills, 512)
@@ -32,7 +30,6 @@ type xform struct{ s, tx, ty float64 }
 
 var identity = xform{1, 0, 0}
 
-// compose returns the transform equivalent to applying a, then b.
 func compose(a, b xform) xform {
 	return xform{b.s * a.s, b.s*a.tx + b.tx, b.s*a.ty + b.ty}
 }
@@ -102,7 +99,6 @@ func (s ellipse) mapped(t xform) shape {
 	return ellipse{t.s*s.cx + t.tx, t.s*s.cy + t.ty, t.s * s.rx, t.s * s.ry}
 }
 
-// halfDisc is a semicircle: the half of a disc above (or below) its center line.
 type halfDisc struct {
 	cx, cy, r float64
 	down      bool
@@ -167,12 +163,8 @@ func (p poly) mapped(t xform) shape {
 type head struct {
 	name   string
 	shapes []shape
-	// nudge shifts the head toward the shoulders so every silhouette lands
-	// the same visual distance above the shoulder crest.
-	nudge float64
-	// eye adjusts eye placement in head space for heads whose face sits off
-	// the default center.
-	eye xform
+	nudge  float64
+	eye    xform
 }
 
 var heads = []head{
@@ -237,8 +229,6 @@ var eyeStyles = []eyes{
 		rect{30, 45, 12, 6, 0},
 		rect{54, 45, 12, 6, 0},
 	}},
-	// caret and slash are pre-computed stroke outlines (chevron w5 miter,
-	// slash w6 butt); polygons keep the rasterizer free of stroke math.
 	{name: "caret", shapes: []shape{
 		poly{[][2]float64{{27.12, 50.35}, {36, 40.2}, {44.88, 50.35}, {41.12, 53.65}, {36, 47.8}, {30.88, 53.65}}},
 		poly{[][2]float64{{51.12, 50.35}, {60, 40.2}, {68.88, 50.35}, {65.12, 53.65}, {60, 47.8}, {54.88, 53.65}}},
@@ -257,8 +247,6 @@ type hue struct {
 	light, dark palette
 }
 
-// Weights skew the fleet toward the cool end of the palette -- the brand's
-// ultramarine most of all -- without ever excluding the warm hues.
 var hues = []hue{
 	{"ultramarine", 5,
 		palette{"#d8e0ff", "#4738f2", "#2f11b6"},

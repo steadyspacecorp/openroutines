@@ -10,17 +10,12 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// Supervisor-written entries are committed and pushed, so a secret quoted in
-// a git or provider error is a durable, published record -- redaction belongs
-// at the append seam, not at whichever call site remembered it.
 func TestSupervisorEntriesRedactSecrets(t *testing.T) {
 	const masterKey = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"    // gitleaks:allow -- synthetic fixture
 	const deployKeyLine = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAt" // gitleaks:allow -- synthetic fixture
 	t.Setenv("OPENROUTINES_MASTER_KEY", masterKey)
 	dir := deliveryFixture(t)
-	// Materializing a secret is what registers it: loading the key and
-	// reading the deploy key are the only ways their values enter the
-	// process, so they are the only ways the values can leak.
+
 	if _, err := creds.LoadKey(dir); err != nil {
 		t.Fatal(err)
 	}

@@ -39,22 +39,14 @@ const (
 	hashBodyCap   = 4 << 20
 )
 
-// The subdirectory of the supervisor-owned state/ directory
-// holding per-routine trigger state.
 const StateDirName = "triggers"
 
 var credentialReferencePattern = regexp.MustCompile(`\$[A-Z][A-Z0-9_]*`)
 
-// CredentialReference returns the run-environment spelling used to substitute
-// a credential into a poll URL.
 func CredentialReference(name string) string {
 	return "$" + strings.ToUpper(name)
 }
 
-// One routine's durable trigger record: the last comparison value
-// and the conditional-request validators that produced it. Poll timing is
-// deliberately absent -- persisting it would dirty the knowledge worktree on
-// every poll.
 type State struct {
 	Routine      string `json:"routine"`
 	Value        string `json:"value"`
@@ -66,7 +58,6 @@ func statePath(stateDir, name string) string {
 	return filepath.Join(stateDir, StateDirName, name+".json")
 }
 
-// Reads a routine's trigger state; nil (no error) when none exists yet.
 func Load(stateDir, name string) (*State, error) {
 	raw, err := os.ReadFile(statePath(stateDir, name))
 	if err != nil {
@@ -97,10 +88,9 @@ type Spec struct {
 	Poll       string `yaml:"poll"`
 	Credential string `yaml:"credential,omitempty"`
 	Select     string `yaml:"select,omitempty"`
-	Interval   string `yaml:"interval,omitempty"` // poll cadence; default 5m, floor one tick
+	Interval   string `yaml:"interval,omitempty"`
 }
 
-// Uses DefaultInterval when frontmatter omits the interval.
 func (t Spec) IntervalDuration() (time.Duration, error) {
 	if t.Interval == "" {
 		return DefaultInterval, nil
@@ -108,8 +98,6 @@ func (t Spec) IntervalDuration() (time.Duration, error) {
 	return time.ParseDuration(t.Interval)
 }
 
-// Checks the declaration shape; policy warnings (https, interval
-// below the tick) belong to `openroutines check`.
 func (t Spec) Validate() error {
 	if t.Poll == "" {
 		return errors.New("trigger: missing poll URL")
@@ -150,8 +138,6 @@ var Client = &http.Client{
 	},
 }
 
-// One poll's outcome. Changed reports whether the observed value
-// differs from prior; Next is the state to persist if the caller fires.
 type Result struct {
 	Changed bool
 	Next    State
@@ -219,8 +205,6 @@ func Poll(client *http.Client, spec Spec, credential string, name string, prior 
 	return Result{Changed: prior != nil && value != prior.Value, Next: next}, nil
 }
 
-// Reduces a response body to the comparison value: the JSON-pointed
-// scalar when select is set, otherwise a digest of the raw bytes.
 func observe(body io.Reader, selector string) (string, error) {
 	if selector == "" {
 		h := sha256.New()
@@ -266,8 +250,6 @@ func observe(body io.Reader, selector string) (string, error) {
 	}
 }
 
-// Strips the poll URL from transport errors: query strings can
-// carry tokens, and poll errors are logged and committed to knowledge.
 func redactURL(err error) error {
 	var u *url.Error
 	if errors.As(err, &u) {
@@ -276,8 +258,6 @@ func redactURL(err error) error {
 	return err
 }
 
-// Checks RFC 6901 syntax: non-empty, leading /, and no
-// dangling ~ escapes.
 func validatePointer(p string) error {
 	if !strings.HasPrefix(p, "/") {
 		return fmt.Errorf("pointer %q must start with /", p)
@@ -292,7 +272,6 @@ func validatePointer(p string) error {
 	return nil
 }
 
-// Walks an unmarshalled JSON document by RFC 6901 pointer.
 func resolvePointer(doc any, pointer string) (any, bool) {
 	cur := doc
 	for _, tok := range strings.Split(pointer[1:], "/") {

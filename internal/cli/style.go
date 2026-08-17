@@ -2,9 +2,6 @@ package cli
 
 import "os"
 
-// Color is never load-bearing -- it decorates marks that already carry the
-// information (active, inactive, ✓, ✗), so NO_COLOR or a pipe loses nothing
-// but emphasis (design decision "CLI color: stdlib ANSI, never load-bearing").
 var styled = func() bool {
 	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return false
@@ -25,6 +22,4 @@ func dim(s string) string   { return paint("2", s) }
 func green(s string) string { return paint("32", s) }
 func red(s string) string   { return paint("31", s) }
 
-// The one yellow thing in the output; precomputing it keeps the palette
-// honest about that.
 var warnMark = paint("33", "!")

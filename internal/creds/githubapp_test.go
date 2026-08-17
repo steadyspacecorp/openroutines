@@ -27,9 +27,6 @@ func testKeyPEM(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 }
 
-// Serves the three-call mint flow plus revocation. installations
-// is mutable so tests can present zero, one, or two installations;
-// failBotLookup makes the post-mint identity call fail.
 type githubStub struct {
 	installations []map[string]any
 	revocations   int
@@ -63,9 +60,6 @@ func (g *githubStub) server(t *testing.T) *httptest.Server {
 		case r.URL.Path == "/installation/token" && r.Method == "DELETE":
 			g.revocations++
 			if g.failRevoke {
-				// The error message quotes the presented bearer, the way a
-				// hostile or echoing endpoint might: what reaches the log
-				// must arrive redacted, not depend on GitHub's manners.
 				w.WriteHeader(500)
 				bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 				_, _ = w.Write([]byte(`{"message":"cannot revoke ` + bearer + `"}`))
@@ -91,8 +85,6 @@ func TestDeriveGitHubApp(t *testing.T) {
 	srv := stub.server(t)
 	defer srv.Close()
 
-	// The one-line escaped key form must work: it is the recommended storage
-	// format (exact-value log scrubbing).
 	escaped := strings.ReplaceAll(testKeyPEM(t), "\n", `\n`)
 	d, err := deriveGitHubApp("gh", Spec{Type: "github_app", AppID: "456"}, escaped, srv.URL)
 	if err != nil {
@@ -125,9 +117,6 @@ func TestDeriveGitHubApp(t *testing.T) {
 	}
 }
 
-// A revocation that fails leaves the installation token live until it
-// expires, so the operator needs the warning even though the run itself
-// proceeds unaffected.
 func TestDeriveGitHubAppLogsFailedRevocation(t *testing.T) {
 	stub := &githubStub{installations: oneInstallation(), failRevoke: true}
 	srv := stub.server(t)
@@ -177,10 +166,6 @@ func TestDeriveGitHubAppRevokesOnPartialFailure(t *testing.T) {
 	}
 }
 
-// The token is live -- and loggable -- from the moment GitHub returns it,
-// so it registers with the scrub registry right there, not only when
-// Derive returns: a failed revocation's warning during the mint window
-// must not publish it.
 func TestDeriveGitHubAppRedactsTokenInMintWindow(t *testing.T) {
 	stub := &githubStub{installations: oneInstallation(), failBotLookup: true, failRevoke: true}
 	srv := stub.server(t)
@@ -217,9 +202,6 @@ func TestSpecProblems(t *testing.T) {
 	}
 }
 
-// ValidateStored judges a stored github_app value offline: both stored
-// forms parse, and a truncated first line -- the artifact `credentials set`
-// used to store silently (#69) -- is rejected. Other types stay opaque.
 func TestValidateStoredGitHubAppKey(t *testing.T) {
 	spec := Spec{Type: "github_app", AppID: "1"}
 	pemKey := testKeyPEM(t)

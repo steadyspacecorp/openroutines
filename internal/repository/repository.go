@@ -1,5 +1,3 @@
-// Package repository owns the runtime Git repository: boot initialization,
-// authentication, hermetic Git execution, and the Git-backed supervisor lease.
 package repository
 
 import (
@@ -31,10 +29,6 @@ func initialize(dir string) error {
 	return err
 }
 
-// Prepare configures Git for a supervisor process. In deployed mode unmarked
-// provider metadata is discarded, while metadata from a previous runtime is
-// reused so a restart cannot destroy local knowledge. Local checkouts remain
-// unchanged.
 func (repo *Repository) Prepare(reference string, deployed bool) error {
 	if !deployed {
 		if !repo.Remote() {

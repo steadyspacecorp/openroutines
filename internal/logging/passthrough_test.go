@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// A line passes through verbatim with the attributes appended -- logfmt is
-// a bag of key=value pairs, so the appended pairs are as filterable as the
-// original ones.
 func TestPassthroughDecoratesEachLine(t *testing.T) {
 	var out bytes.Buffer
 	Writer = &out
@@ -22,8 +19,6 @@ func TestPassthroughDecoratesEachLine(t *testing.T) {
 	}
 }
 
-// An attribute value that would break the line's key=value grammar is
-// quoted exactly as the process logger's own handler quotes it.
 func TestPassthroughQuotesLikeTheHandler(t *testing.T) {
 	var out bytes.Buffer
 	Writer = &out
@@ -36,9 +31,6 @@ func TestPassthroughQuotesLikeTheHandler(t *testing.T) {
 	}
 }
 
-// Pipe reads split lines arbitrarily; a line must not pass through until it
-// is whole, and a final unterminated line must still land on Flush. Blank
-// lines are not records and land nowhere.
 func TestPassthroughBuffersPartialLines(t *testing.T) {
 	var out bytes.Buffer
 	Writer = &out

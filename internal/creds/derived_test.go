@@ -10,9 +10,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// Two run slots minting the same credential hold distinct bearers at once;
-// minting the second must not stop redacting the first, and releasing one
-// run's material must not stop redacting the other's.
 func TestOverlappingMintsOfOneCredentialAllRedact(t *testing.T) {
 	mints := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -45,9 +42,6 @@ func TestOverlappingMintsOfOneCredentialAllRedact(t *testing.T) {
 	}
 }
 
-// InjectionDescription must state what a run actually receives -- a typed
-// credential's stored value is never injected, so describing it as if it
-// were raw sends operators to write an env var that is always empty (#66).
 func TestInjectionDescription(t *testing.T) {
 	for _, c := range []struct {
 		name string

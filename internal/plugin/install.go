@@ -14,9 +14,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/skill"
 )
 
-// A validated install: the bundle, the agent it targets, and the
-// provenance to record. Apply is reachable only through PrepareInstall, so
-// nothing can be copied past a failed check.
 type Install struct {
 	Plugin *Plugin
 
@@ -24,9 +21,6 @@ type Install struct {
 	source   Source
 }
 
-// Validates everything an install depends on: the provenance
-// to record, the whole payload at bundleDir, and the agent's namespace.
-// Install refuses to replace anything -- an existing path is the user's.
 func PrepareInstall(agentDir, bundleDir string, source Source) (*Install, error) {
 	if err := source.validate(); err != nil {
 		return nil, err
@@ -54,9 +48,6 @@ func PrepareInstall(agentDir, bundleDir string, source Source) (*Install, error)
 	return &Install{Plugin: p, agentDir: agentDir, source: source}, nil
 }
 
-// Reports the bundle's routine and skill names already taken in
-// the agent namespace. Content under ownDir is the bundle's own installed
-// copy, not a collision; ownDir is empty for a fresh install.
 func (p *Plugin) collisions(routines []*routine.Routine, skills []*skill.Skill, ownDir string) []string {
 	own := func(path string) bool {
 		if ownDir == "" {
@@ -91,9 +82,6 @@ func (p *Plugin) collisions(routines []*routine.Routine, skills []*skill.Skill, 
 	return taken
 }
 
-// Copies the bundle into the agent: routines and skills always; ledger
-// stubs only when the knowledge worktree already exists (the supervisor
-// creates it on first run), otherwise they're returned as pending.
 func (i *Install) Apply() (installed, pendingStubs []string, err error) {
 	p := i.Plugin
 	destRoot := filepath.Join(i.agentDir, ".openroutines", "plugins", p.Manifest.Name)
@@ -142,7 +130,7 @@ func (i *Install) Apply() (installed, pendingStubs []string, err error) {
 		}
 		dest := filepath.Join(wt, strings.TrimPrefix(stub, "knowledge"+string(filepath.Separator)))
 		if _, err := os.Stat(dest); err == nil {
-			pendingStubs = append(pendingStubs, stub) // never clobber live knowledge
+			pendingStubs = append(pendingStubs, stub)
 			continue
 		}
 		if err := copyFile(filepath.Join(p.Dir, stub), dest); err != nil {
@@ -178,8 +166,6 @@ func writeFileExclusive(dest string, raw []byte) error {
 	return f.Close()
 }
 
-// Re-enforces the payload boundary during the copy itself, since
-// validation and copy can be separated in time for a local dev source.
 func copyTreeExclusive(src, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err

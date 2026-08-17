@@ -1,6 +1,3 @@
-// Implements the Rails-style encrypted credentials store:
-// one AES-256-GCM encrypted YAML file committed to the repo, one master key
-// kept out of it.
 package creds
 
 import (
@@ -22,7 +19,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// Store layout and key-delivery environment variables.
 const (
 	KeyFileName      = "master.key"
 	FileName         = ".openroutines/credentials.yml.enc"
@@ -33,17 +29,10 @@ const (
 
 var errNoMasterKey = errors.New("no master key")
 
-// Constrains credential names: lowercase snake_case, so the
-// env-var mapping (slack_webhook -> SLACK_WEBHOOK) is always well-formed.
 var NamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// Never a valid credential name prefix: OPENROUTINES_*
-// env vars are framework metadata, never secrets.
 const ReservedPrefix = "openroutines"
 
-// Reports whether a name would shadow an env var the
-// framework constructs for a run (TZ, PATH, HOME, TMPDIR, XDG_*) or the
-// dynamic-linker LD_* family -- e.g. `ld_preload` becoming LD_PRELOAD.
 func ReservedEnvName(name string) bool {
 	switch name {
 	case "tz", "path", "home", "tmpdir":
@@ -55,17 +44,15 @@ func ReservedEnvName(name string) bool {
 func generateKey() []byte {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
-		panic(err) // crypto/rand failure is not recoverable
+		panic(err)
 	}
 	return buf
 }
 
-// Mints a 32-byte master key, hex-encoded.
 func GenerateKey() string {
 	return hex.EncodeToString(generateKey())
 }
 
-// Creates a conventional master key and empty encrypted store for a fresh agent.
 func Initialize(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, FileName)); err == nil {
 		return fmt.Errorf("%s already exists", FileName)
@@ -88,7 +75,6 @@ func Initialize(dir string) error {
 	return Write(dir, key, map[string]string{})
 }
 
-// Loads the selected key and encrypted store without creating either.
 func Load(dir string) ([]byte, map[string]string, error) {
 	_, err := os.Stat(filepath.Join(dir, FileName))
 	if os.IsNotExist(err) {
@@ -117,8 +103,6 @@ func unavailableKey(err error) error {
 	return fmt.Errorf("%s: %w", message, err)
 }
 
-// MasterKeyFilePath reports the selected key file, or nothing when a direct
-// value wins or the conventional file does not exist.
 func MasterKeyFilePath(dir string) string {
 	if strings.TrimSpace(os.Getenv(EnvMasterKey)) != "" {
 		return ""
@@ -133,8 +117,6 @@ func MasterKeyFilePath(dir string) string {
 	return path
 }
 
-// Resolves the master key from a direct value, a configured file, or the
-// conventional master.key file in the agent root.
 func LoadKey(dir string) ([]byte, error) {
 	keyHex := strings.TrimSpace(os.Getenv(EnvMasterKey))
 	if keyHex == "" {
@@ -210,8 +192,6 @@ func open(key []byte, encoded string) ([]byte, error) {
 	return plaintext, nil
 }
 
-// Decrypts and parses the credentials file. A missing file is an
-// empty store, not an error.
 func Read(dir string, key []byte) (map[string]string, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, FileName))
 	if err != nil {
@@ -238,7 +218,6 @@ func Read(dir string, key []byte) (map[string]string, error) {
 	return out, nil
 }
 
-// Encrypts and writes the credentials map.
 func Write(dir string, key []byte, values map[string]string) error {
 	plaintext, err := yaml.Marshal(values)
 	if err != nil {
@@ -255,9 +234,6 @@ func Write(dir string, key []byte, values map[string]string) error {
 	return os.WriteFile(path, []byte(encoded+"\n"), 0o644)
 }
 
-// Returns the reserved credential name for a model
-// provider, e.g. "anthropic" -> "anthropic_api_key". These are
-// auto-injected per the routine's declared model provider.
 func ProviderKeyName(provider string) string {
 	return provider + "_api_key"
 }
