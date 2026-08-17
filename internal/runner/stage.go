@@ -347,6 +347,10 @@ func (p *PreparedAttempt) Run(ctx context.Context) (result *AttemptResult, retur
 		provider := strings.SplitN(model, "/", 2)[0]
 		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
 		result.Hint = authHint(p.agentDir, model, injected)
+	} else if result.Outcome == Crashed && isModelNotFound(capture.Failure) {
+		provider := strings.SplitN(model, "/", 2)[0]
+		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
+		result.Hint = modelNotFoundHint(model, injected, secrets.credentialErr)
 	}
 	ok = true
 	return result, workspace, nil

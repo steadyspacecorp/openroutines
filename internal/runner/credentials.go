@@ -35,12 +35,29 @@ func authHint(dir, model string, injected bool) string {
 	return fmt.Sprintf("provider authentication failed -- %s rejected the request and no %s credential is stored (openroutines credentials set %s)", endpoint, keyName, keyName)
 }
 
+func modelNotFoundHint(model string, injected bool, credentialErr error) string {
+	provider := strings.SplitN(model, "/", 2)[0]
+	keyName := creds.ProviderKeyName(provider)
+	if credentialErr != nil {
+		return fmt.Sprintf("model %s could not be resolved; credentials could not be loaded: %v (run openroutines check)", model, credentialErr)
+	}
+	if !injected {
+		return fmt.Sprintf("model %s could not be resolved; no %s was available to the run (run openroutines check)", model, keyName)
+	}
+	return fmt.Sprintf("model %s could not be resolved even though %s was available -- verify the model name and provider configuration", model, keyName)
+}
+
+func isModelNotFound(failure string) bool {
+	return strings.Contains(failure, "ProviderModelNotFoundError")
+}
+
 // A run's resolved secret material: the environment to inject,
 // and cleanup for derived credentials. Redaction registers where values
 // materialize, not here.
 type runSecrets struct {
-	env     map[string]string
-	cleanup []func()
+	env           map[string]string
+	cleanup       []func()
+	credentialErr error
 }
 
 func (s *runSecrets) setEnv(name, value string) error {
@@ -74,17 +91,14 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 		}
 	}()
 
-	key, keyErr := creds.LoadKey(dir)
-	if keyErr != nil {
+	_, store, credentialErr := creds.Load(dir)
+	if credentialErr != nil {
 		if len(r.Frontmatter.Credentials) > 0 {
-			return nil, fmt.Errorf("routine declares credentials but %w", keyErr)
+			return nil, fmt.Errorf("routine declares credentials but %w", credentialErr)
 		}
-		// No store: opencode may still have its own auth for the provider.
+		// OpenCode may still have its own authentication for the provider.
+		out.credentialErr = credentialErr
 		return out, nil
-	}
-	store, err := creds.Read(dir, key)
-	if err != nil {
-		return nil, err
 	}
 	for _, name := range r.Frontmatter.Credentials {
 		v, present := store[name]

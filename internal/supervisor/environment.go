@@ -36,6 +36,18 @@ func ValidateKeyFileLocations(dir string) error {
 	return nil
 }
 
+func validateCredentialStore(dir string) error {
+	_, _, err := creds.Load(dir)
+	if err == nil {
+		return nil
+	}
+	if mode.Current() == mode.DeployedContainer {
+		return fmt.Errorf("credentials are not usable in this deployed container: %w", err)
+	}
+	slog.Warn("credentials are not usable; routines may lack provider authentication", "error", err)
+	return nil
+}
+
 // Settles at boot rather than mid-run what will stand between a model process
 // and everything it was not given. Only production spawns model processes
 // directly; elsewhere the run container is the boundary, or a contributor has

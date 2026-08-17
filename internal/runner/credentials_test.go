@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"github.com/steadyspacecorp/openroutines/internal/config"
 	"github.com/steadyspacecorp/openroutines/internal/creds"
@@ -55,6 +56,17 @@ func TestResolveCredentialsScope(t *testing.T) {
 	r.Frontmatter.Credentials = []string{"missing_cred"}
 	if _, err := resolveCredentials(dir, agent, r, "anthropic/claude-sonnet-5"); err == nil {
 		t.Fatal("declaring an absent credential must fail the run, not proceed without it")
+	}
+}
+
+func TestResolveCredentialsPreservesUnavailableStoreForDiagnostics(t *testing.T) {
+	r := &routine.Routine{Name: "x"}
+	secrets, err := resolveCredentials(t.TempDir(), &config.Agent{}, r, "anthropic/claude-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secrets.credentialErr == nil || !strings.Contains(secrets.credentialErr.Error(), creds.FileName+" is missing") {
+		t.Fatalf("credential error = %v", secrets.credentialErr)
 	}
 }
 
@@ -176,5 +188,41 @@ func TestAuthFailurePatternMatchesBareStatusText(t *testing.T) {
 	}
 	if authFailurePattern.MatchString("the reviewer felt unauthorized to approve") {
 		t.Fatal("bare 'unauthorized' outside an error line should not classify as auth failure")
+	}
+}
+
+func TestModelNotFoundHintDistinguishesMissingCredential(t *testing.T) {
+	hint := modelNotFoundHint("anthropic/claude-x", false, nil)
+	for _, want := range []string{"no anthropic_api_key was available to the run", "run openroutines check"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("missing-credential hint lacks %q: %s", want, hint)
+		}
+	}
+	if strings.Contains(hint, "credentials set") {
+		t.Fatalf("runtime hint duplicated check's remediation: %s", hint)
+	}
+	hint = modelNotFoundHint("anthropic/not-a-model", true, nil)
+	if !strings.Contains(hint, "verify the model name and provider configuration") || strings.Contains(hint, "no anthropic_api_key") {
+		t.Fatalf("unknown-model hint misclassified the failure: %s", hint)
+	}
+}
+
+func TestModelNotFoundHintIncludesCredentialLoadFailure(t *testing.T) {
+	hint := modelNotFoundHint("anthropic/claude-x", false, errors.New("locked credential store"))
+	for _, want := range []string{"credentials could not be loaded: locked credential store", "run openroutines check"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("credential-load hint lacks %q: %s", want, hint)
+		}
+	}
+}
+
+func TestModelNotFoundClassificationIsSpecific(t *testing.T) {
+	if !isModelNotFound("ProviderModelNotFoundError: anthropic/claude-x") {
+		t.Fatal("ProviderModelNotFoundError was not classified")
+	}
+	for _, failure := range []string{"unknown model response shape", "model not found in cache"} {
+		if isModelNotFound(failure) {
+			t.Fatalf("unrelated failure was classified as a provider model error: %q", failure)
+		}
 	}
 }

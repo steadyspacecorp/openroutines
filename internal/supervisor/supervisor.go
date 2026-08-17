@@ -109,6 +109,9 @@ func New(dir string) (*Supervisor, error) {
 	if err := ValidateKeyFileLocations(dir); err != nil {
 		return nil, err
 	}
+	if err := validateCredentialStore(dir); err != nil {
+		return nil, err
+	}
 	repo := repository.Open(dir)
 	if err := repo.Prepare(agent.Repo, mode.Current() == mode.DeployedContainer); err != nil {
 		return nil, fmt.Errorf("repository: %w", err)

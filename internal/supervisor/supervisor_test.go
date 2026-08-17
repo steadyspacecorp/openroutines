@@ -1493,6 +1493,62 @@ func TestBootAcceptsEnvDeliveredKeysWithoutLogging(t *testing.T) {
 	}
 }
 
+func TestDeployedBootRequiresDecryptableCredentials(t *testing.T) {
+	dir := fixture(t, "ok")
+	key := []byte(strings.Repeat("a", 32))
+	if err := creds.Write(dir, key, map[string]string{"fake_api_key": "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(creds.EnvMasterKey, strings.Repeat("b", 64))
+	t.Setenv(creds.EnvMasterKeyFile, "")
+
+	_, err := New(dir)
+	if err == nil || !strings.Contains(err.Error(), "cannot decrypt credentials") {
+		t.Fatalf("deployed credential validation error = %v", err)
+	}
+}
+
+func TestDeployedBootRequiresAMasterKey(t *testing.T) {
+	dir := fixture(t, "ok")
+	if err := creds.Write(dir, []byte(strings.Repeat("a", 32)), map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(creds.EnvMasterKeyFile, "")
+
+	_, err := New(dir)
+	if err == nil || !strings.Contains(err.Error(), creds.FileName+" exists") || !strings.Contains(err.Error(), "restore "+creds.KeyFileName) {
+		t.Fatalf("deployed credential validation error = %v", err)
+	}
+}
+
+func TestDeployedBootRequiresCredentialStore(t *testing.T) {
+	dir := fixture(t, "ok")
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
+	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(creds.EnvMasterKeyFile, "")
+
+	_, err := New(dir)
+	if err == nil || !strings.Contains(err.Error(), creds.FileName+" is missing") {
+		t.Fatalf("deployed credential validation error = %v", err)
+	}
+}
+
+func TestLocalBootWarnsButDoesNotRequireCredentials(t *testing.T) {
+	dir := fixture(t, "ok")
+	t.Setenv("OPENROUTINES_IN_CONTAINER", "")
+	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(creds.EnvMasterKeyFile, "")
+	logs := logtest.Capture(t)
+
+	if _, err := New(dir); err != nil {
+		t.Fatal(err)
+	}
+	logs.Expect("WARN", "routines may lack provider authentication")
+}
+
 // A host where no rung works would leave an operator with no agent at all, so
 // there is a way out -- visible in the log every boot, because it is the one
 // shape where a routine can reach another routine's credentials.
