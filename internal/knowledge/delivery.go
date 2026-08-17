@@ -1,11 +1,5 @@
 package knowledge
 
-// Delivery: the knowledge branch is a change feed. Every knowledge-writing run
-// already leaves a commit; a reporting routine (frontmatter `reports: true`)
-// reads the commits since its own cursor as an injected changes.md, and the
-// cursor advances only when the routine explicitly consumes the whole change
-// set. See design decision "Delivery: the knowledge branch is the change feed".
-
 import (
 	"encoding/json"
 	"errors"
@@ -18,17 +12,12 @@ import (
 	"time"
 )
 
-// Records how far one consumer has processed knowledge history. Cursors
-// are supervisor-owned bookkeeping (under state/, never staged into a run)
-// and travel with the knowledge branch like the rest of scheduling state.
 type Cursor struct {
-	ConsumedThrough string    `json:"consumed_through"` // knowledge commit SHA
+	ConsumedThrough string    `json:"consumed_through"`
 	ByRun           string    `json:"by_run"`
 	At              time.Time `json:"at"`
 }
 
-// The cursor's branch-relative path -- what diagnostics name,
-// because repair means editing this file on the knowledge branch.
 func CursorFile(consumer string) string {
 	return path.Join(stateDirName, "cursors", consumer+".json")
 }
@@ -37,7 +26,6 @@ func (store *Store) cursorPath(consumer string) string {
 	return filepath.Join(store.Worktree(), CursorFile(consumer))
 }
 
-// Returns nil when the consumer has no cursor yet (first run).
 func (store *Store) LoadCursor(consumer string) (*Cursor, error) {
 	raw, err := os.ReadFile(store.cursorPath(consumer))
 	if os.IsNotExist(err) {
@@ -50,6 +38,7 @@ func (store *Store) LoadCursor(consumer string) (*Cursor, error) {
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("cursor %s: %w", consumer, err)
 	}
+
 	// The cursor value becomes a git rev-range argv element, and cursor
 	// files live on the knowledge branch -- an untrusted, human-writable
 	// channel. Only a commit SHA is acceptable.
@@ -61,8 +50,6 @@ func (store *Store) LoadCursor(consumer string) (*Cursor, error) {
 
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
-// Writes the cursor into the worktree; the caller's next Commit
-// carries it, so consumption is recorded in the run's completion commit.
 func (store *Store) SaveCursor(consumer string, c Cursor) error {
 	p := store.cursorPath(consumer)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -75,7 +62,6 @@ func (store *Store) SaveCursor(consumer string, c Cursor) error {
 	return os.WriteFile(p, raw, 0o644)
 }
 
-// Lists every consumer with a cursor, for `openroutines status`.
 func (store *Store) Cursors() (map[string]Cursor, error) {
 	dir := filepath.Join(store.StateDir(), "cursors")
 	entries, err := os.ReadDir(dir)
@@ -98,42 +84,27 @@ func (store *Store) Cursors() (map[string]Cursor, error) {
 	return out, nil
 }
 
-// Returns the knowledge branch's current commit: the fixed `through`
-// boundary a change set is prepared against.
 func (store *Store) Head() (string, error) {
 	return store.worktree.Run("rev-parse", "HEAD")
 }
 
-// One knowledge commit's model-facing changes.
 type CommitChange struct {
 	SHA     string
-	Date    string // committer date, YYYY-MM-DD
+	Date    string
 	Subject string
 	Files   []FileDelta
 }
 
-// One file's added and removed lines within a commit.
 type FileDelta struct {
 	Path    string
 	Added   []string
 	Removed []string
 }
 
-// Paths a consumer never sees: framework bookkeeping
-// (scheduling state, cursors, run records) and routine-private ledgers.
 var deliveryExcludes = []string{":(exclude)state", ":(exclude)runs.jsonl", ":(exclude)ledgers"}
 
-// Reports a cursor that no longer names a commit on the
-// knowledge branch -- a repaired history, a hand-edited cursor file. The range
-// cannot be walked until a person fixes the cursor, so callers should treat
-// it as a failure to diagnose rather than one to retry.
 var ErrCursorUnreachable = errors.New("consumer cursor is not on the knowledge branch")
 
-// Checks that the cursor commit exists and the boundary descends
-// from it -- a commit left behind by a repaired history is still in the
-// object store, and walking from it would deliver a change set nobody made.
-// Only git's own "no" (exit 1) counts; anything else is git failing to
-// answer, which must not abandon a run.
 func (store *Store) reachable(from, through string) error {
 	full, exists, err := store.worktree.ResolveCommit(from)
 	if err != nil {
@@ -152,10 +123,6 @@ func (store *Store) reachable(from, through string) error {
 	return nil
 }
 
-// Walks every commit in (from, through], returning per-commit line
-// additions and removals. Commit-by-commit, never a net endpoint diff: an
-// event added and later pruned by retention must still reach a consumer that
-// hasn't seen it.
 func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 	if from == "" || through == "" {
 		return nil, fmt.Errorf("delivery changes: empty commit range")
@@ -163,15 +130,15 @@ func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 	if err := store.reachable(from, through); err != nil {
 		return nil, err
 	}
-	// The %x00/%x1f sentinels are emitted by git itself -- argv cannot carry
-	// a literal NUL. Retention trims are dropped: delivering their removals
-	// would re-present consumed history to every consumer daily.
+
 	args := append([]string{
 		"log", "--reverse", "--date=format:%Y-%m-%d",
 		"--format=%x00%H%x1f%ad%x1f%s", "-p", "-U0", "--no-color",
 		"--invert-grep", "--grep=^" + trimTrailer + "$",
 		from + ".." + through, "--", ".",
 	}, deliveryExcludes...)
+	// NUL and unit-separator sentinels are emitted by git because argv cannot
+	// carry a literal NUL; trim commits are excluded so consumed history is not replayed.
 	out, err := store.worktree.Run(args...)
 	if err != nil {
 		return nil, err
@@ -206,19 +173,19 @@ func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 		case strings.HasPrefix(line, "diff --git"):
 			flushFile()
 		case strings.HasPrefix(line, "--- a/"):
-			// old path: names deleted files, which have no "+++ b/" side
+
 			if file == nil {
 				file = &FileDelta{Path: strings.TrimPrefix(line, "--- a/")}
 			}
 		case strings.HasPrefix(line, "+++ b/"):
-			// new path wins when both sides exist (renames, edits, new files)
+
 			if file == nil {
 				file = &FileDelta{Path: strings.TrimPrefix(line, "+++ b/")}
 			} else {
 				file.Path = strings.TrimPrefix(line, "+++ b/")
 			}
 		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"), strings.HasPrefix(line, "@@"):
-			// remaining structural lines: /dev/null sides, hunk headers
+
 		case file != nil && strings.HasPrefix(line, "+"):
 			file.Added = append(file.Added, line[1:])
 		case file != nil && strings.HasPrefix(line, "-"):
@@ -230,14 +197,11 @@ func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 }
 
 const (
-	// Injected as a generated snapshot into a reporting routine's workspace.
 	ChangesFileName = "changes.md"
-	// Created by the routine to consume the whole change set.
+
 	ConsumeMarker = "CONSUMED"
 )
 
-// Formats the pending change set as the markdown a reporting
-// run reads. Pure data: consume instructions live in the generated definition.
 func RenderChanges(consumer, from, through string, changes []CommitChange) string {
 	var b strings.Builder
 	b.WriteString("# Pending knowledge changes\n\n")

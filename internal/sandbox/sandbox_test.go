@@ -112,9 +112,6 @@ func TestSandboxProbeTimesOut(t *testing.T) {
 	}
 }
 
-// TestMain answers the landlock rung's re-exec the way the production binary
-// does: that rung confines an attempt by re-entering whatever binary spawned
-// it, which under `go test` is this one.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == ShimCommand {
 		if err := ExecConfined(os.Args[2:]); err != nil {
@@ -125,12 +122,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// Runs f against every rung that can really build a sandbox here, as a subtest
-// named for the rung. A property is asserted against each rung that claims it
-// and, just as hard, denied against the ones that do not -- a rung quietly
-// getting credit for a property it lacks is the failure this file exists to
-// prevent. Hosts that can build nothing skip, so CI sets
-// OPENROUTINES_REQUIRE_SANDBOX=1 to make a green run mean something.
 func eachRung(t *testing.T, f func(t *testing.T, b Backend)) {
 	t.Helper()
 	var available []Backend
@@ -154,9 +145,6 @@ func eachRung(t *testing.T, f func(t *testing.T, b Backend)) {
 	}
 }
 
-// A path the run was not given is unreachable on every rung; what differs is
-// how. Both answers are asserted, because the difference between an absent path
-// and a denied one is exactly what the operator is told at boot.
 func TestTheSandboxKeepsAPeerAttemptsFilesOutOfReach(t *testing.T) {
 	eachRung(t, func(t *testing.T, b Backend) {
 		peer := filepath.Join(t.TempDir(), "peer-secret")
@@ -228,17 +216,12 @@ exit 1
 	})
 }
 
-// Peer visibility varies most across the ladder, so both answers are pinned. A
-// rung that does not hide a peer must still keep everything of value out of
-// reach -- if that flips, falling back stops being safe and this test says so.
 func TestWhatTheRunCanLearnAboutAPeerProcess(t *testing.T) {
 	eachRung(t, func(t *testing.T, b Backend) {
 		peerSecret := filepath.Join(t.TempDir(), "peer-only")
 		if err := os.WriteFile(peerSecret, []byte("peer's staged memory"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		// A peer attempt outliving this call, with its own credential in its
-		// environment and its own file on disk.
 		peer := exec.Command("sleep", "30")
 		peer.Env = []string{"PATH=/usr/bin:/bin", "PEER_TOKEN=ghp_pretend_credential"} // gitleaks:allow -- a fake token this test tries and fails to read back
 		if err := peer.Start(); err != nil {
@@ -254,9 +237,6 @@ func TestWhatTheRunCanLearnAboutAPeerProcess(t *testing.T) {
 			}
 			return
 		}
-		// Same uid, same container, peer plainly listed -- and still nothing of
-		// value: reading another process is a PTRACE_MODE_READ check, which this
-		// rung fails across whichever boundary it does have.
 		for _, probe := range []struct{ what, path string }{
 			{"environment", "/proc/" + pid + "/environ"},
 			{"memory", "/proc/" + pid + "/mem"},
@@ -279,9 +259,6 @@ func TestWhatTheRunCanLearnAboutAPeerProcess(t *testing.T) {
 	})
 }
 
-// Signaling a peer is a denial of service rather than a disclosure, which is
-// why it needs pinning: it is the one boundary a rung can lack and still be
-// safe to fall back to, so the answer must be told rather than assumed.
 func TestWhetherARunCanSignalAProcessOutsideIt(t *testing.T) {
 	eachRung(t, func(t *testing.T, b Backend) {
 		peer := exec.Command("sleep", "30")
@@ -290,8 +267,6 @@ func TestWhetherARunCanSignalAProcessOutsideIt(t *testing.T) {
 		}
 		defer func() { _ = peer.Process.Kill(); _ = peer.Wait() }()
 
-		// Signal 0 asks the kernel the permission question without delivering
-		// anything, which is the question this test is about.
 		out, err := run(t, b, t.TempDir(), "sh", "-c", "kill -0 "+strconv.Itoa(peer.Process.Pid))
 		if b.Capabilities().UnsignalablePeers {
 			if err == nil {
@@ -305,10 +280,6 @@ func TestWhetherARunCanSignalAProcessOutsideIt(t *testing.T) {
 	})
 }
 
-// A descendant that detaches into its own session outlives a process-group
-// kill, so something has to catch it: the kernel on a rung with a pid
-// namespace, the runner's own sweep otherwise. That sweep keys on CollapsesTree,
-// so the claim is pinned in both directions.
 func TestWhetherKillingTheSandboxKillsAnEscapedDescendant(t *testing.T) {
 	eachRung(t, func(t *testing.T, b Backend) {
 		workspace := t.TempDir()
@@ -328,10 +299,6 @@ func TestWhetherKillingTheSandboxKillsAnEscapedDescendant(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		// The group kill below cannot reach the escapee -- that is the point --
-		// so the cleanup reaps it by the pid it recorded. Not on a collapsing
-		// rung, where that pid is namespace-local and the kernel's reaping is
-		// the thing under test.
 		t.Cleanup(func() {
 			if b.Capabilities().CollapsesTree {
 				return
@@ -361,20 +328,12 @@ func TestWhetherKillingTheSandboxKillsAnEscapedDescendant(t *testing.T) {
 		if !grew {
 			t.Skip("nothing outlived the sandbox, so this run proves nothing about a rung that does not claim collapse")
 		}
-		// An escapee here is expected: the runner sweeps the process group for
-		// exactly this case, and the cleanup above reaps this test's own.
 	})
 }
 
-// /etc is where container platforms mount secret files, and a run shares the
-// supervisor's uid, so anything reachable there is readable whatever its mode.
-// Asserted from the sandbox's own view, so a new entry on the host does not
-// silently become a new entry in every run.
 func TestTheSandboxGrantsOnlyTheNamedPartsOfEtc(t *testing.T) {
 	eachRung(t, func(t *testing.T, b Backend) {
 		if !b.Capabilities().UnnameablePaths {
-			// Walking /etc only answers where an ungranted entry is absent; where
-			// it is merely denied the listing still shows it, so ask file by file.
 			for _, path := range []string{"/etc/shadow", "/etc/secrets", "/etc/ssl/private"} {
 				if out, err := run(t, b, t.TempDir(), "cat", path); err == nil {
 					t.Errorf("%s was readable inside the sandbox: %s", path, out)
@@ -382,8 +341,6 @@ func TestTheSandboxGrantsOnlyTheNamedPartsOfEtc(t *testing.T) {
 			}
 			return
 		}
-		// Two levels deep, so an entry granted for its useful siblings cannot
-		// smuggle a directory in with it -- /etc/ssl/private being the case.
 		out, err := run(t, b, t.TempDir(), "find", "/etc", "-mindepth", "1", "-maxdepth", "2")
 		if err != nil {
 			t.Fatalf("walking /etc failed: %v: %s", err, out)
@@ -391,8 +348,6 @@ func TestTheSandboxGrantsOnlyTheNamedPartsOfEtc(t *testing.T) {
 		for _, path := range strings.Fields(out) {
 			named := false
 			for _, entry := range osConfig {
-				// Inside something the list names, or a directory that exists
-				// only to hold something it names.
 				if within(path, entry) || within(entry, path) {
 					named = true
 					break
@@ -410,15 +365,15 @@ func TestASupervisorKeyUnderAGrantedPathIsReportedAsExposed(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"/etc/secrets/master.key", false}, // where a platform mounts one
+		{"/etc/secrets/master.key", false},
 		{"/run/secrets/master.key", false},
 		{"/home/agent/.ssh/deploy", false},
-		{"/etc/ssl/private/master.key", false}, // /etc/ssl is not granted whole
-		{"/etc/ssl/certs/master.key", true},    // the granted entry under it is
-		{"/etc/ld.so.conf.d/master.key", true}, // and another
-		{"/usr/local/share/master.key", true},  //
-		{"/usr/../usr/local/master.key", true}, // cleaned before comparing
-		{"/etc/../usr/local/master.key", true}, // and not fooled by the prefix
+		{"/etc/ssl/private/master.key", false},
+		{"/etc/ssl/certs/master.key", true},
+		{"/etc/ld.so.conf.d/master.key", true},
+		{"/usr/local/share/master.key", true},
+		{"/usr/../usr/local/master.key", true},
+		{"/etc/../usr/local/master.key", true},
 	} {
 		if got := Exposes(tc.path); got != tc.want {
 			t.Errorf("Exposes(%q) = %v, want %v", tc.path, got, tc.want)
@@ -426,9 +381,6 @@ func TestASupervisorKeyUnderAGrantedPathIsReportedAsExposed(t *testing.T) {
 	}
 }
 
-// A backend grants what a path resolves to, so that is what exposure is about:
-// a key reached through a symlink into a granted tree is readable inside the
-// sandbox however ungranted its own name looks.
 func TestExposureFollowsSymlinksAndRelativePaths(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "into-the-os")
@@ -490,9 +442,6 @@ func TestPTYDirectoryGrantAllowsDeviceIoctls(t *testing.T) {
 	}
 }
 
-// The hatch is answered inside this package rather than at each caller, so
-// nothing it reports can disagree with it: a rung that was never applied must
-// not be credited, and Command must not hand back an unconfined command.
 func TestDisablingTheSandboxClaimsNothingAndBuildsNothing(t *testing.T) {
 	t.Setenv(EnvDisable, "1")
 

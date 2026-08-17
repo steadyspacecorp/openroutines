@@ -10,26 +10,18 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// Declares how a stored credential is materialized into a run
-// (design decision "Credentials have types"). A credential with no Spec is raw --
-// injected verbatim under its uppercase name. A typed credential is
-// transformed by the trusted runner at spawn; the routine receives the
-// derived surface, never the stored root secret.
+// A typed credential is transformed by the trusted runner at spawn; the run
+// receives only the derived surface, never the stored root secret. A missing
+// Spec remains raw and is injected verbatim under its uppercase name.
 type Spec struct {
 	Type  string `yaml:"type"`
-	AppID string `yaml:"app_id,omitempty"` // github_app
+	AppID string `yaml:"app_id,omitempty"`
 
-	TokenURL string `yaml:"token_url,omitempty"` // oauth2_client
-	ClientID string `yaml:"client_id,omitempty"` // oauth2_client
-	InjectAs string `yaml:"inject_as,omitempty"` // oauth2_client
+	TokenURL string `yaml:"token_url,omitempty"`
+	ClientID string `yaml:"client_id,omitempty"`
+	InjectAs string `yaml:"inject_as,omitempty"`
 }
 
-// Short-lived material minted from a stored root secret: the
-// environment to inject into a run, the bearer value (when the type
-// produces one), and cleanup that disposes of anything revocable. Derive
-// registers the bearer with the scrub registry and Cleanup releases that
-// registration -- neither providers nor callers handle redaction directly.
-// Cleanup is best-effort and safe to call once after the material's use.
 type Derived struct {
 	Env     map[string]string
 	Bearer  string
@@ -38,19 +30,12 @@ type Derived struct {
 
 var appIDPattern = regexp.MustCompile(`^[0-9]+$`)
 
-// The derived credential types the framework implements.
-// Every validator that names the set consults this list -- two hardcoded
-// copies drifted once already (the plugin validator missed oauth2_client).
 var DerivedTypes = []string{"github_app", "oauth2_client"}
 
 func KnownType(t string) bool {
 	return slices.Contains(DerivedTypes, t)
 }
 
-// Returns human-readable validation failures for one
-// credential metadata entry, empty when valid. Fields another type owns are rejected,
-// not ignored -- silently dead configuration is what strict decoding exists
-// to prevent.
 func SpecProblems(name string, s Spec) []string {
 	var out []string
 	problem := func(format string, a ...any) {
@@ -90,11 +75,6 @@ func SpecProblems(name string, s Spec) []string {
 	return out
 }
 
-// Explains what a run actually receives when it
-// declares this credential -- the credential's own uppercase name for a raw credential, or the
-// derived surface for a typed one. CLI output must not assume every
-// credential is raw (issue #66): a github_app or oauth2_client entry
-// never puts its stored value in the run environment.
 func InjectionDescription(name string, s Spec) string {
 	switch s.Type {
 	case "github_app":
@@ -106,11 +86,6 @@ func InjectionDescription(name string, s Spec) string {
 	}
 }
 
-// Reports whether a stored value can serve its declared
-// type, judged from the value alone -- no network. A github_app value must
-// parse as an RSA private key: a truncated paste otherwise decrypts cleanly,
-// passes every name check, and first fails in a production run trying to
-// sign with it. Other types' values are opaque bytes with nothing to judge.
 func ValidateStored(s Spec, stored string) error {
 	if s.Type == "github_app" {
 		_, err := parseAppKey(stored)
@@ -119,11 +94,8 @@ func ValidateStored(s Spec, stored string) error {
 	return nil
 }
 
-// Materializes one typed credential. Providers are built into the
-// framework -- agent repositories cannot supply derivation code, which would
-// otherwise be a privileged plugin boundary on the trusted side. The minted
-// bearer registers with the scrub registry here, the one door every
-// provider's material leaves through, so no provider can forget to.
+// Providers are framework-owned so agent repositories cannot supply derivation
+// code on the trusted side; every bearer leaves through the scrub registry.
 func Derive(name string, s Spec, stored string) (*Derived, error) {
 	var d *Derived
 	var err error

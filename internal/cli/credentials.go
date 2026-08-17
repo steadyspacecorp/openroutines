@@ -14,9 +14,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-// PEM armor markers: a pasted key is read line by line at the hidden prompt
-// until its END marker, and a key that begins but never ends is refused
-// rather than stored truncated.
 const (
 	pemBegin = "-----BEGIN"
 	pemEnd   = "-----END"
@@ -134,8 +131,7 @@ func credentialsSet(args []string) int {
 			return fail(rerr)
 		}
 		value = string(raw)
-		// A pasted PEM arrives one line at a time at the hidden prompt; the
-		// first read returns only the BEGIN line, so keep reading until END.
+		// Terminal reads return one line at a time, so collect a pasted PEM until its END marker.
 		for strings.HasPrefix(value, pemBegin) && !strings.Contains(value, pemEnd) {
 			more, rerr := term.ReadPassword(int(os.Stdin.Fd()))
 			if rerr != nil {
@@ -144,8 +140,7 @@ func credentialsSet(args []string) int {
 			value += "\n" + string(more)
 		}
 	} else {
-		// Piped: the whole stream is the value, so `... set app_key <
-		// key.pem` stores the file rather than its first line.
+		// Piped input must be read whole; taking only the first line truncates PEM files.
 		raw, rerr := io.ReadAll(os.Stdin)
 		if rerr != nil {
 			return fail(rerr)
@@ -159,10 +154,9 @@ func credentialsSet(args []string) int {
 	if strings.HasPrefix(value, pemBegin) && !strings.Contains(value, pemEnd) {
 		return fail(fmt.Errorf("the value is the beginning of a PEM key without its end -- pipe the whole file: openroutines credentials set %s < key.pem", name))
 	}
-	// Stored values are one line: exact-string log scrubbing cannot match a
-	// value that spans lines. Typed consumers decode the escaping on use.
 	multiline := strings.Contains(value, "\n")
 	if multiline {
+		// The store is line-oriented; escaping newlines keeps exact-value log scrubbing possible.
 		value = strings.ReplaceAll(value, "\n", `\n`)
 	}
 

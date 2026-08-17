@@ -41,11 +41,6 @@ func checkOutput(t *testing.T, dir string) string {
 	return string(out)
 }
 
-// A run may not outlast the agent's max_timeout ceiling. The runner enforces
-// that; check is where an operator learns their setting will be cut down,
-// before a routine is quietly killed at the ceiling in production.
-// A binary that doesn't match the agent's pin reads the repo through the
-// wrong schema; check names that first, before the schema-shaped noise.
 func TestCheckNamesBinaryPinMismatchFirst(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
@@ -64,7 +59,6 @@ func TestCheckNamesBinaryPinMismatchFirst(t *testing.T) {
 		t.Fatalf("the mismatch must come first:\n%s", out)
 	}
 
-	// A source build is exempt: development runs against pinned agents.
 	version.Version = "v0.0.0-dev"
 	if out := checkOutput(t, dir); strings.Contains(out, "but the agent pins") {
 		t.Fatalf("a dev binary must not report a pin mismatch:\n%s", out)
@@ -131,8 +125,6 @@ func TestCheckAcceptsConfiguredGitHubRepoWithoutPrintingCredentials(t *testing.T
 	}
 }
 
-// An inactive routine is valid but will never run: it gets a circle, not
-// a check mark, so a parked reporter can't read as one that will fire.
 func TestCheckMarksInactiveRoutinesWithACircle(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
@@ -151,8 +143,6 @@ func TestCheckMarksInactiveRoutinesWithACircle(t *testing.T) {
 	}
 }
 
-// A rehearsal fixture bound to no routine is drift -- the routine was
-// renamed or removed out from under it.
 func TestCheckWarnsOnOrphanedRehearsalFixtures(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
@@ -192,8 +182,6 @@ func TestCheckWarnsOnTimeoutsAboveTheCeiling(t *testing.T) {
 	}
 }
 
-// The scaffolded opencode.json carries the baseline permission policy; an
-// agent repo that lost it still runs, so check is where the loss surfaces.
 func TestCheckWarnsOnMissingOpencodeJSON(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(checkAgentYAML), 0o644)
@@ -259,8 +247,6 @@ func TestCheckAllowsTypedTriggerCredential(t *testing.T) {
 		t.Fatalf("typed trigger credential should pass routine validation:\n%s", out)
 	}
 
-	// The same agent with a truncated key in the store must fail check:
-	// before #69 this passed and first surfaced as a failed production run.
 	if err := creds.Write(dir, key, map[string]string{"gh_key": "-----BEGIN PRIVATE KEY-----", "fake_api_key": "provider-key"}); err != nil {
 		t.Fatal(err)
 	}

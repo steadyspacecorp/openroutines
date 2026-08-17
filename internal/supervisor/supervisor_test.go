@@ -21,13 +21,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
 
-// A stand-in for the real binary: it reads fake-mode from
-// its own directory (the workspace is allow-list built and carries no test
-// scaffolding) to decide whether to succeed (writing knowledge) or fail. The
-// probe mode clones the knowledge branch from origin at the first spawn --
-// exactly what a replacement container would materialize if that attempt
-// killed the supervisor. Only the first: the snapshot has to be the moment
-// one attempt started, not the moment the last one did.
 const fakeOpencode = `#!/bin/sh
 d=$(dirname "$0")
 mode=$(cat "$d/fake-mode" 2>/dev/null || echo ok)
@@ -106,8 +99,6 @@ func fixture(t *testing.T, mode string) string {
 	return fixtureIn(t, mode, "UTC", "every-minute", "* * * * *")
 }
 
-// Builds an agent repo (no origin: local mode) in the given
-// timezone with one scheduled routine, and puts a fake opencode on PATH.
 func fixtureIn(t *testing.T, mode, tz, name, spec string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -127,7 +118,7 @@ func fixtureIn(t *testing.T, mode, tz, name, spec string) string {
 	os.WriteFile(filepath.Join(binDir, "opencode"), []byte(fakeOpencode), 0o755)
 	os.WriteFile(filepath.Join(binDir, "fake-mode"), []byte(mode+"\n"), 0o644)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("OPENROUTINES_NATIVE", "1") // tests use the fake opencode, not the container
+	t.Setenv("OPENROUTINES_NATIVE", "1")
 	return dir
 }
 
@@ -143,13 +134,6 @@ func newSupervisor(t *testing.T, dir string) *Supervisor {
 	return s
 }
 
-// Takes the lease at origin under another instance's name and then
-// keeps heartbeating it, CAS-looping against the holder's own renewals. The
-// heartbeat is the point: a lease written once expires a TTL later, and an
-// expired foreign lease is one the holder may correctly reclaim -- which put
-// every assertion downstream of it on a TTL-length clock. Holding the lease
-// for as long as the test needs it removes that deadline. The returned stop
-// joins the heartbeat goroutine.
 func usurpLease(t *testing.T, s *Supervisor) (stop func()) {
 	t.Helper()
 	take := func() error {
@@ -180,7 +164,7 @@ func usurpLease(t *testing.T, s *Supervisor) (stop func()) {
 			case <-quit:
 				return
 			case <-time.After(s.lease.ttl / 4):
-				_ = take() // a renewal the holder wins is re-taken next tick
+				_ = take()
 			}
 		}
 	}()
@@ -199,8 +183,6 @@ func loadState(t *testing.T, s *Supervisor) *schedule.State {
 	return st
 }
 
-// Writes concurrency into a fixture's config, the way an
-// operator would: parallelism is opt-in, and these tests are the opt-in path.
 func optInConcurrency(t *testing.T, dir string, n int) {
 	t.Helper()
 	path := filepath.Join(dir, "openroutines.yml")
@@ -213,9 +195,6 @@ func optInConcurrency(t *testing.T, dir string, n int) {
 	}
 }
 
-// Runs one scheduling pass and waits for every attempt it launched
-// to settle -- the synchronous shape the scheduling tests want, and exactly
-// what a serial Tick used to do.
 func (s *Supervisor) tickWait(ctx context.Context, now time.Time) {
 	s.Tick(ctx, now)
 	s.pool.runs.Wait()
@@ -239,8 +218,6 @@ func fakeBinDir() string {
 	return strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 }
 
-// Gives the agent a bare origin and tells the fake opencode where
-// it is, so a probe run can clone it mid-attempt. Returns the bare repo path.
 func withOrigin(t *testing.T, dir string) string {
 	t.Helper()
 	bare := filepath.Join(t.TempDir(), "origin.git")
@@ -268,9 +245,6 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 	return out
 }
 
-// The scheduling state a replacement container would read
-// for a routine after materializing knowledge from origin, as of the moment the
-// first probe attempt's model process started.
 func replacementState(t *testing.T, name string) *schedule.State {
 	t.Helper()
 	st, err := schedule.Load(filepath.Join(fakeBinDir(), "replacement", "state"), name)
@@ -280,10 +254,6 @@ func replacementState(t *testing.T, name string) *schedule.State {
 	return st
 }
 
-// An unattended run must ask opencode for JSON events: the default
-// progress rendering arrives on stderr, where it would masquerade as
-// passed-through log lines. (A manual run keeps the rendering -- that is
-// the one place run output reaches a person.)
 func TestSupervisedRunAsksForJSONEvents(t *testing.T) {
 	dir := fixture(t, "ok")
 	s := newSupervisor(t, dir)
@@ -305,7 +275,6 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	// First sight: registers, does not run.
 	s.tickWait(ctx, t0)
 	st := loadState(t, s)
 	if st == nil || st.Pending != nil {
@@ -315,7 +284,6 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 		t.Fatalf("nothing should have run yet, ledger: %q", ledger)
 	}
 
-	// One minute later: one occurrence due -> runs, imports, advances.
 	s.tickWait(ctx, t0.Add(61*time.Second))
 	st = loadState(t, s)
 	if st.Pending != nil {
@@ -333,7 +301,6 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 		t.Fatalf("run record missing: %q", records)
 	}
 
-	// The attempt's session was exported into the designated session dir.
 	stored, err := filepath.Glob(filepath.Join(sessionDir, "*_every-minute_run_*_ses_fake.json"))
 	if err != nil || len(stored) != 1 {
 		t.Fatalf("expected one exported session, got %v (%v)", stored, err)
@@ -343,17 +310,13 @@ func TestRegisterThenRunAdvancesWatermark(t *testing.T) {
 	}
 }
 
-// A session that died mid-turn -- the agent loop stopped on a rejected tool
-// call -- exits 0 with nothing written. Recorded as completed, that advances
-// the watermark and clears pending, which is the "silently skipped" outcome
-// the scheduler exists to prevent, with a green run record on top of it.
 func TestSessionThatEndedMidTurnIsNotCompleted(t *testing.T) {
 	dir := fixture(t, "stalled")
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	records := readFile(t, filepath.Join(dir, "knowledge", "runs.jsonl"))
@@ -378,10 +341,6 @@ func TestSessionThatEndedMidTurnIsNotCompleted(t *testing.T) {
 	}
 }
 
-// A typo in one routine's frontmatter is that routine's problem alone: the
-// tick schedules around it and the healthy routine's run assembles a
-// workspace without it, rather than failing every attempt at workspace
-// assembly and abandoning runs agent-wide.
 func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 	dir := fixture(t, "ok")
 	os.WriteFile(filepath.Join(dir, "routines", "typo.md"), []byte(
@@ -390,7 +349,7 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	st := loadState(t, s)
@@ -406,9 +365,6 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 		t.Fatalf("run record missing: %q", records)
 	}
 
-	// Scheduling around the broken routine must not mean saying nothing about
-	// it: a routine that stopped running is news, and a log line is not where
-	// an unattended agent reports.
 	events := readFile(t, filepath.Join(dir, "knowledge", "events.md"))
 	if !strings.Contains(events, "routine typo does not load") {
 		t.Errorf("the broken routine should be recorded as an event: %q", events)
@@ -428,8 +384,6 @@ func TestBrokenRoutineDoesNotFailHealthyRuns(t *testing.T) {
 	}
 }
 
-// An agent-owned routine wins before plugin parsing, so a broken same-named
-// plugin routine cannot stop the winning routine from being scheduled.
 func TestAgentOwnedRoutineIsScheduledOverBrokenPluginRoutine(t *testing.T) {
 	dir := fixture(t, "ok")
 	os.MkdirAll(filepath.Join(dir, ".openroutines", "plugins", "demo", "routines"), 0o755)
@@ -454,30 +408,20 @@ func TestAgentOwnedRoutineIsScheduledOverBrokenPluginRoutine(t *testing.T) {
 	}
 }
 
-// A schedule is a wall-clock promise: a 06:00 routine on a New York agent
-// fires at 06:00 on both sides of a DST transition. The watermark it scans
-// from has round-tripped through the state file by then, so this only holds
-// if the supervisor evaluates cron in the agent's timezone rather than in
-// whatever zone the persisted timestamp came back carrying.
 func TestScheduleHoldsAgentWallClockAcrossDST(t *testing.T) {
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip("no tz database")
 	}
-	// The release container sets no TZ; pin time.Local to match it, so the
-	// watermark rehydrates into a fabricated fixed-offset zone here too
-	// instead of whatever zone the developer's machine happens to be in.
 	defer func(l *time.Location) { time.Local = l }(time.Local)
 	time.Local = time.UTC
 
-	// "fail" keeps the pending run on disk after dispatch, where its
-	// scheduled_for can be read back.
 	dir := fixtureIn(t, "fail", "America/New_York", "daily", "0 6 * * *")
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 
-	s.tickWait(ctx, time.Date(2026, 10, 31, 12, 0, 0, 0, ny)) // register, EDT
-	s.tickWait(ctx, time.Date(2026, 11, 2, 12, 0, 0, 0, ny))  // after fall-back, EST
+	s.tickWait(ctx, time.Date(2026, 10, 31, 12, 0, 0, 0, ny))
+	s.tickWait(ctx, time.Date(2026, 11, 2, 12, 0, 0, 0, ny))
 
 	st, err := schedule.Load(s.stateDir(), "daily")
 	if err != nil {
@@ -494,25 +438,19 @@ func TestScheduleHoldsAgentWallClockAcrossDST(t *testing.T) {
 	}
 }
 
-// A model process that exits cleanly can leave a descendant behind, and that
-// descendant goes on writing to staging while the supervisor validates and
-// imports it. Every attempt therefore ends with its process group, not only
-// the ones that time out or are canceled.
 func TestDetachedDescendantDoesNotSurviveACleanRun(t *testing.T) {
 	dir := fixture(t, "detach")
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	var pid int
 	if _, err := fmt.Sscan(readFile(t, filepath.Join(fakeBinDir(), "detached.pid")), &pid); err != nil || pid == 0 {
 		t.Fatalf("the fake run did not report a detached child: %v", err)
 	}
-	// The signal is sent before the run settles; the wait is for the kernel
-	// to reap what it killed, which a zombie pid still answers.
 	for range 40 {
 		if syscall.Kill(pid, 0) != nil {
 			return
@@ -529,8 +467,7 @@ func TestCatchupCollapsesMissedFirings(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register
-	// Ten minutes of downtime: ten missed firings must collapse into ONE run.
+	s.tickWait(ctx, t0)
 	s.tickWait(ctx, t0.Add(10*time.Minute))
 	ledger := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md"))
 	if got := strings.Count(ledger, "ran run_"); got != 1 {
@@ -542,10 +479,6 @@ func TestCatchupCollapsesMissedFirings(t *testing.T) {
 	}
 }
 
-// A failed attempt must never fail invisibly: opencode's stderr is its
-// diagnostic log, and every line of it passes through to the process log
-// stream decorated with the attempt's identity -- with or without session
-// storage.
 func TestFailedAttemptDiagnosticsPassThrough(t *testing.T) {
 	failOnce := func(t *testing.T) *logtest.Log {
 		t.Helper()
@@ -553,7 +486,7 @@ func TestFailedAttemptDiagnosticsPassThrough(t *testing.T) {
 		logs := logtest.Capture(t)
 		ctx := context.Background()
 		t0 := time.Now().Truncate(time.Minute)
-		s.tickWait(ctx, t0) // register
+		s.tickWait(ctx, t0)
 		s.tickWait(ctx, t0.Add(time.Minute))
 		return logs
 	}
@@ -580,16 +513,15 @@ func TestRetrySameRunIDThenAbandon(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 	now := t0.Add(time.Minute)
-	s.tickWait(ctx, now) // attempt 1 fails
+	s.tickWait(ctx, now)
 	st := loadState(t, s)
 	if st.Pending == nil || st.Pending.Attempts != 1 {
 		t.Fatalf("expected pending with 1 attempt, got %+v", st.Pending)
 	}
 	runID := st.Pending.RunID
 
-	// Drive retries through backoff until abandonment.
 	for range MaxAttempts - 1 {
 		st = loadState(t, s)
 		if st.Pending == nil {
@@ -626,8 +558,7 @@ func TestBackoffHoldsBetweenAttempts(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 
 	s.tickWait(ctx, t0)
-	s.tickWait(ctx, t0.Add(time.Minute)) // attempt 1
-	// Immediately after, a tick must NOT retry (backoff).
+	s.tickWait(ctx, t0.Add(time.Minute))
 	s.tickWait(ctx, t0.Add(time.Minute).Add(10*time.Second))
 	st := loadState(t, s)
 	if st.Pending.Attempts != 1 {
@@ -639,7 +570,7 @@ func driveToAbandonment(t *testing.T, s *Supervisor, from time.Time) time.Time {
 	t.Helper()
 	ctx := context.Background()
 	now := from.Add(time.Minute)
-	s.tickWait(ctx, now) // mint pending + attempt 1
+	s.tickWait(ctx, now)
 	for {
 		st := loadState(t, s)
 		if st.Pending == nil {
@@ -655,7 +586,7 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 
 	now := t0
 	for range 3 {
@@ -665,7 +596,6 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	if st.ConsecutiveAbandons != 3 || !st.CoolingDown(now.Add(time.Minute)) {
 		t.Fatalf("breaker should be tripped after 3 abandonments: %+v", st)
 	}
-	// While cooling down: ticks mint no new pending runs.
 	s.tickWait(ctx, now.Add(2*time.Minute))
 	if st = loadState(t, s); st.Pending != nil {
 		t.Fatalf("no runs should start during cool-down: %+v", st.Pending)
@@ -675,7 +605,6 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 		t.Fatalf("breaker event missing: %q", events)
 	}
 
-	// After the cool-down, the model recovers: one success resets everything.
 	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(binDir, "fake-mode"), []byte("ok\n"), 0o644)
 	after := st.CooldownUntil.Add(time.Minute)
@@ -689,9 +618,6 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 	}
 }
 
-// A reporting routine gets an injected change set, consumes it via the
-// marker, and its cursor advances -- the next change set starts where the
-// last one ended.
 func TestConsumerCursorAdvances(t *testing.T) {
 	dir := fixture(t, "consume")
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
@@ -700,8 +626,8 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0)                     // register
-	s.tickWait(ctx, t0.Add(61*time.Second)) // run 1: first-run changes, consume
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(61*time.Second))
 	changes := readFile(t, filepath.Join(dir, "knowledge", "changes-copy.md"))
 	if !strings.Contains(changes, "first run") || !strings.Contains(changes, "No pending changes") {
 		t.Fatalf("first change set should be empty-at-current-state: %q", changes)
@@ -711,7 +637,7 @@ func TestConsumerCursorAdvances(t *testing.T) {
 		t.Fatalf("cursor should exist after consume: %+v, %v", c1, err)
 	}
 
-	s.tickWait(ctx, t0.Add(121*time.Second)) // run 2: feed carries run 1's commit
+	s.tickWait(ctx, t0.Add(121*time.Second))
 	changes = readFile(t, filepath.Join(dir, "knowledge", "changes-copy.md"))
 	if !strings.Contains(changes, "Run every-minute") {
 		t.Fatalf("second change set should carry run 1's completion commit: %q", changes)
@@ -722,11 +648,6 @@ func TestConsumerCursorAdvances(t *testing.T) {
 	}
 }
 
-// A reporting routine's cursor pointing off the knowledge branch fails at
-// change-set assembly, before the model starts, and fails the same way every
-// time. Spending the whole retry budget on it buys nothing but delay and
-// noise: the run is abandoned on its first attempt, with a task naming the
-// file to repair.
 func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
 	dir := fixture(t, "consume")
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
@@ -735,7 +656,7 @@ func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 	if err := knowledge.NewStore(dir).SaveCursor("every-minute", knowledge.Cursor{
 		ConsumedThrough: "0123456789abcdef0123456789abcdef01234567",
 		ByRun:           "run_gone",
@@ -757,9 +678,6 @@ func TestUnreachableCursorAbandonsOnTheFirstAttempt(t *testing.T) {
 	}
 }
 
-// A rewritten origin must halt dispatch -- and stay halted on every later
-// tick. Runs taken while blocked would act on intent that exists only in this
-// container: lost on replacement, duplicated on recovery.
 func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	dir := fixture(t, "ok")
 	base := t.TempDir()
@@ -778,20 +696,18 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0)                     // register
-	s.tickWait(ctx, t0.Add(61*time.Second)) // one run completes, knowledge pushed
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(61*time.Second))
 	ledger := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md"))
 	if got := strings.Count(ledger, "ran run_"); got != 1 {
 		t.Fatalf("expected 1 run before the rewrite, got %d: %q", got, ledger)
 	}
 
-	// Rewrite the knowledge branch on origin out from under the supervisor.
 	c := filepath.Join(base, "c")
 	run(base, "git", "clone", "-q", "-b", "knowledge", bare, c)
 	run(c, "git", "-c", "user.name=x", "-c", "user.email=x@x", "commit", "--amend", "-q", "--no-edit", "-m", "rewritten")
 	run(c, "git", "push", "-q", "--force", "origin", "knowledge")
 
-	// Every subsequent tick refuses to dispatch.
 	for i := 0; i < 3; i++ {
 		s.tickWait(ctx, t0.Add(time.Duration(2+i)*time.Minute))
 	}
@@ -804,11 +720,6 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	}
 }
 
-// The datastore is the alerting channel, so the failures that break it are
-// the ones where a blocker has to work hardest: the knowledge branch is exactly
-// what a blocked sync refuses to write, and a task committed only locally dies
-// with the container. The blocker goes to a supervisor-owned ref instead, and
-// moves onto the branch once a human repairs the history.
 func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	dir := fixture(t, "ok")
 	bare := withOrigin(t, dir)
@@ -816,10 +727,9 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0)                     // register
-	s.tickWait(ctx, t0.Add(61*time.Second)) // one run completes, knowledge pushed
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
-	// Rewrite the knowledge branch on origin out from under the supervisor.
 	discarded := gitOut(t, bare, "rev-parse", "refs/heads/knowledge")
 	c := filepath.Join(t.TempDir(), "clone")
 	runCmd(t, "", "git", "clone", "-q", "-b", "knowledge", bare, c)
@@ -838,10 +748,6 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	if got := gitOut(t, bare, "rev-parse", "refs/heads/knowledge"); got != rewritten {
 		t.Fatalf("a blocked supervisor must not write the knowledge branch: %s -> %s", rewritten, got)
 	}
-	// A rewrite is how a human repairs knowledge, up to and including removing
-	// something that should never have been there. The supervisor still holds
-	// the pre-rewrite lineage locally, so what it strands has to be a snapshot:
-	// publishing its own tip would put the discarded history back on origin.
 	if n := gitOut(t, bare, "rev-list", "--count", "refs/openroutines/blocked"); n != "1" {
 		t.Fatalf("the stranded ref should be a parentless snapshot, got %s commits", n)
 	}
@@ -849,8 +755,6 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 		t.Fatalf("stranding must not republish the history the rewrite discarded (%.8s)", discarded)
 	}
 
-	// The documented repair: a human accepts the new history by moving the
-	// accepted ref. Sync recovers, and the stranded blocker lands on the branch.
 	runCmd(t, bare, "git", "update-ref", "refs/openroutines/accepted", rewritten)
 	s.tickWait(ctx, t0.Add(3*time.Minute))
 	if s.blockers.syncBlocked {
@@ -865,9 +769,6 @@ func TestBlockerReachesOriginWhileSyncIsBlocked(t *testing.T) {
 	}
 }
 
-// A stranded snapshot is the only copy of some earlier container's blocker, and
-// a healthy successor has no idea what is in it. Clearing the ref is for the
-// instance that put its own state there -- nobody else's.
 func TestStrandedRefFromAnotherContainerSurvives(t *testing.T) {
 	dir := fixture(t, "ok")
 	bare := withOrigin(t, dir)
@@ -875,22 +776,17 @@ func TestStrandedRefFromAnotherContainerSurvives(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register, knowledge branch on origin
+	s.tickWait(ctx, t0)
 	earlier := gitOut(t, bare, "rev-parse", "refs/heads/knowledge")
 	runCmd(t, bare, "git", "update-ref", "refs/openroutines/blocked", earlier)
 
-	s.tickWait(ctx, t0.Add(61*time.Second)) // a run completes and pushes knowledge
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	if got := gitOut(t, bare, "rev-parse", "refs/openroutines/blocked"); got != earlier {
 		t.Fatalf("a successor's push must leave someone else's stranded ref alone: %.8s -> %s", earlier, got)
 	}
 }
 
-// An unreachable origin breaks the alerting channel from the other side, and
-// it fails early enough in the tick -- the lease heartbeat -- that nothing
-// downstream of it runs. The condition still has to leave a record a person
-// can find, which means recording it locally while it lasts and publishing it
-// when origin comes back.
 func TestUnreachableOriginRecordsADurableBlocker(t *testing.T) {
 	dir := fixture(t, "ok")
 	bare := withOrigin(t, dir)
@@ -898,7 +794,7 @@ func TestUnreachableOriginRecordsADurableBlocker(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register, origin healthy
+	s.tickWait(ctx, t0)
 
 	gone := bare + ".gone"
 	if err := os.Rename(bare, gone); err != nil {
@@ -924,11 +820,6 @@ func TestUnreachableOriginRecordsADurableBlocker(t *testing.T) {
 	}
 }
 
-// Two instances, one origin, three due routines against two run slots. Runs
-// execute in parallel while the pool has room, a full pool skips to the next
-// tick instead of queueing, and through all of it only the lease holder may
-// dispatch -- a second instance booting into the window (a rolling deploy's
-// overlap) reads a live lease and launches nothing.
 func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	dir := fixture(t, "slow")
 	base := t.TempDir()
@@ -943,8 +834,6 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	}
 	run(base, "git", "init", "-q", "-b", "main", "--bare", bare)
 
-	// Three routines due in the same tick against the default two slots: two
-	// launch at once, the third waits for a later tick.
 	writeRoutines := func(dir string) {
 		for _, name := range []string{"every-minute", "second", "third"} {
 			os.WriteFile(filepath.Join(dir, "routines", name+".md"), []byte(
@@ -959,7 +848,7 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	holder.lease.ttl = 6 * time.Second
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	holder.tickWait(ctx, t0) // register
+	holder.tickWait(ctx, t0)
 
 	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	started := filepath.Join(binDir, "started")
@@ -979,7 +868,7 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 		defer close(done)
 		holder.tickWait(ctx, t0.Add(61*time.Second))
 	}()
-	waitForRuns(2) // both slots filled; intents are pushed, so the second instance can adopt from origin
+	waitForRuns(2)
 
 	other := t.TempDir()
 	os.MkdirAll(filepath.Join(other, "routines"), 0o755)
@@ -996,29 +885,21 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	if err := second.acquireLease(acquireCtx); err == nil {
 		t.Fatal("second instance took a live lease while the first had runs in flight")
 	}
-	// The second instance's knowledge is the holder's, adopted from origin, so
-	// the ledger cannot say who ran what: count launches instead. Only the
-	// lease holder may dispatch.
 	second.tickWait(ctx, t0.Add(61*time.Second))
 	if got := strings.Count(readFile(t, started), "run_"); got != 2 {
 		t.Fatalf("second instance dispatched behind the lease holder: %d runs launched, want 2", got)
 	}
 
-	<-done // the first wave settled; the third routine's pending run waited, unlaunched
+	<-done
 	if got := strings.Count(readFile(t, started), "run_"); got != 2 {
 		t.Fatalf("a full pool must skip to the next tick, not queue: %d runs launched, want 2", got)
 	}
-	// Same tick minute again: nothing new mints, only the waiting pending run
-	// dispatches into the now-free pool.
 	holder.tickWait(ctx, t0.Add(61*time.Second))
 	if got := strings.Count(readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md")), "ran run_"); got != 3 {
 		t.Fatalf("lease holder should have run all 3 routines across two ticks, got %d", got)
 	}
 }
 
-// Two due routines with two slots run at the same time, not back to back --
-// and their settlements into the same shared knowledge file compose instead of
-// the later import clobbering the earlier one's lines.
 func TestRunsExecuteInParallel(t *testing.T) {
 	dir := fixture(t, "slow")
 	if err := os.WriteFile(filepath.Join(dir, "routines", "second.md"), []byte(
@@ -1029,12 +910,11 @@ func TestRunsExecuteInParallel(t *testing.T) {
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 
 	start := time.Now()
 	s.tickWait(ctx, t0.Add(61*time.Second))
 	if elapsed := time.Since(start); elapsed >= 5500*time.Millisecond {
-		// Each run sleeps 3s: serial is 6s+, parallel is one sleep plus overhead.
 		t.Fatalf("two 3s runs took %s -- they did not overlap", elapsed)
 	}
 	if got := strings.Count(readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md")), "ran run_"); got != 2 {
@@ -1042,10 +922,6 @@ func TestRunsExecuteInParallel(t *testing.T) {
 	}
 }
 
-// One run can now outlast the lease TTL: keepLeaseAlive renews on a
-// quarter-TTL cadence while the attempt executes, so run length and TTL are
-// decoupled -- what lets max_timeout be hours while takeover latency stays
-// minutes (design decision "The lease is renewed per run, not per tick").
 func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 	dir := fixture(t, "slow")
 	base := t.TempDir()
@@ -1054,13 +930,10 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 	runCmd(t, dir, "git", "remote", "add", "origin", bare)
 
 	holder := newSupervisor(t, dir)
-	// The run sleeps 3s against a 1.5s TTL: a lease renewed only at dispatch
-	// is 2.2s stale at the assertion below (expired, 0.7s to spare) while the
-	// in-run heartbeat keeps it younger than ~0.5s (live, 1s to spare).
 	holder.lease.ttl = 1500 * time.Millisecond
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	holder.tickWait(ctx, t0) // register
+	holder.tickWait(ctx, t0)
 
 	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	started := filepath.Join(binDir, "started")
@@ -1074,7 +947,7 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 			t.Fatal("the run never started")
 		}
 	}
-	time.Sleep(2200 * time.Millisecond) // deep in the run, past what the dispatch heartbeat could cover
+	time.Sleep(2200 * time.Millisecond)
 
 	other := t.TempDir()
 	os.MkdirAll(filepath.Join(other, "routines"), 0o755)
@@ -1116,21 +989,14 @@ func TestUnsettledRunIsNotReportedAsCompleted(t *testing.T) {
 	}
 }
 
-// A lease lost between staging and start hands the reserved attempt back:
-// no model process ran, so the budget must not move -- a reservation that
-// never becomes a run is given back, exactly as the
-// settlement-side twin of this branch already does.
 func TestLeaseLostAfterStagingHandsTheAttemptBack(t *testing.T) {
 	dir := fixture(t, "ok")
 	withOrigin(t, dir)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	s.tickWait(ctx, t0) // register; plan's heartbeat writes the lease
+	s.tickWait(ctx, t0)
 
-	// Drain the pool so the next tick mints the pending record but cannot
-	// dispatch it: the reservation has to happen below, under a lease that
-	// is already lost -- a window plan's own heartbeat cannot see.
 	<-s.pool.slots
 	s.tickWait(ctx, t0.Add(61*time.Second))
 	st := loadState(t, s)
@@ -1155,14 +1021,7 @@ func TestLeaseLostAfterStagingHandsTheAttemptBack(t *testing.T) {
 	}
 }
 
-// A lease that is provably gone mid-run cancels the run: the attempt is
-// handed back and whoever holds the lease retries it. An instance that
-// cannot prove it is the only writer must not let a model process keep
-// acting under identities a replacement is about to re-run.
 func TestLostLeaseCancelsTheRun(t *testing.T) {
-	// The run blocks until it is killed rather than running for a fixed span:
-	// cancellation is what has to end this attempt, so the run must not have
-	// a finish line of its own to reach first.
 	dir := fixture(t, "blocked")
 	base := t.TempDir()
 	bare := filepath.Join(base, "origin.git")
@@ -1174,7 +1033,7 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 	logs := logtest.Capture(t)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	holder.tickWait(ctx, t0) // register
+	holder.tickWait(ctx, t0)
 
 	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	started := filepath.Join(binDir, "started")
@@ -1189,17 +1048,11 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 		}
 	}
 
-	// The next heartbeat finds a live foreign lease and must cancel the run.
 	usurped := time.Now()
 	stopUsurper := usurpLease(t, holder)
 	defer stopUsurper()
 	<-done
 
-	// Cancellation has to stop the model process, not just mark the attempt:
-	// a run left to expire on its own timeout would hand the attempt back
-	// too, having spent the 30s still acting under identities the lease
-	// holder is about to re-run. Real cancellation lands in well under a
-	// second.
 	if took := time.Since(usurped); took > 15*time.Second {
 		t.Fatalf("the run was left to reach its own timeout (%s), not canceled", took.Round(time.Second))
 	}
@@ -1214,8 +1067,6 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 	if got := readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md")); strings.Contains(got, "ran run_") {
 		t.Fatalf("a canceled run's staged knowledge must not be imported: %q", got)
 	}
-	// Concurrent attempts lose the lease together and interleave on one
-	// stdout: the cancellation line must say whose attempt it ended.
 	canceled := false
 	for _, line := range strings.Split(logs.String(), "\n") {
 		if !strings.Contains(line, "lease lost mid-run") {
@@ -1231,11 +1082,6 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 	}
 }
 
-// The attempt that spawns a model process must be committed and pushed before
-// it starts. Production recovery is container replacement: an attempt that
-// takes the container down with it (OOM, host loss, eviction) never settles,
-// and a replacement that materializes knowledge from origin and reads attempts: 0
-// dispatches again -- forever, since the retry budget never drains.
 func TestAttemptIsDurableBeforeTheModelStarts(t *testing.T) {
 	dir := fixture(t, "probe")
 	withOrigin(t, dir)
@@ -1243,8 +1089,8 @@ func TestAttemptIsDurableBeforeTheModelStarts(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0)                     // register
-	s.tickWait(ctx, t0.Add(61*time.Second)) // mint the run, attempt 1
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
 	seen := replacementState(t, "every-minute")
 	if seen == nil || seen.Pending == nil {
@@ -1255,31 +1101,20 @@ func TestAttemptIsDurableBeforeTheModelStarts(t *testing.T) {
 	}
 }
 
-// The reservation belongs to the attempt, not to the tick that scheduled it:
-// a container lost mid-attempt must cost a retry only for the run that was
-// actually running. Otherwise one routine that reliably kills its container
-// drains the budget of everything else that happened to be due alongside it
-// -- and catch-up after downtime makes every routine due at once.
 func TestOnlyTheRunningAttemptIsReserved(t *testing.T) {
 	dir := fixture(t, "probe")
 	if err := os.WriteFile(filepath.Join(dir, "routines", "second.md"), []byte(
 		"---\nschedule: \"* * * * *\"\n---\nDo the other fake thing.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Serial (the unset default): with room for both, both reservations
-	// would be genuinely concurrent and genuinely owed. The property under
-	// test is that the reservation belongs to the executor -- a routine
-	// waiting for a slot has spent nothing.
 	withOrigin(t, dir)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0)                     // register both
-	s.tickWait(ctx, t0.Add(61*time.Second)) // mint both, dispatch serially
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(61*time.Second))
 
-	// The snapshot is the first routine's spawn: both runs exist durably, but
-	// only the one that started has spent an attempt.
 	reserved := 0
 	for _, name := range []string{"every-minute", "second"} {
 		seen := replacementState(t, name)
@@ -1293,17 +1128,13 @@ func TestOnlyTheRunningAttemptIsReserved(t *testing.T) {
 	}
 }
 
-// Attempts that never settle still spend the retry budget, and a spent budget
-// is abandoned where the tick notices it: settlement is the usual place, but a
-// run that kills its container never reaches settlement.
 func TestSpentAttemptsAbandonWithoutSettlement(t *testing.T) {
 	dir := fixture(t, "ok")
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register
-	// What a run that killed the supervisor MaxAttempts times leaves behind.
+	s.tickWait(ctx, t0)
 	scheduled := t0.Add(time.Minute)
 	st := loadState(t, s)
 	st.Pending = &schedule.Pending{
@@ -1331,11 +1162,6 @@ func TestSpentAttemptsAbandonWithoutSettlement(t *testing.T) {
 	}
 }
 
-// A tick that wrote pending state and then failed to commit it leaves the
-// record on disk and nowhere else -- and the next tick, seeing a pending run,
-// mints nothing and would dispatch under an identity that exists only here.
-// Persist-before-act cannot rest on control flow: whatever the worktree
-// carries is committed and pushed before anything runs.
 func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
 	dir := fixture(t, "probe")
 	withOrigin(t, dir)
@@ -1343,9 +1169,8 @@ func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 
-	// The aftermath of a failed intent commit: pending state on disk only.
 	st := loadState(t, s)
 	st.Pending = &schedule.Pending{RunID: "run_orphaned", ScheduledFor: t0, CoveredThrough: t0, CreatedAt: t0}
 	if err := st.Save(s.stateDir()); err != nil {
@@ -1355,7 +1180,7 @@ func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
 		t.Fatal("precondition: the pending record should be uncommitted")
 	}
 
-	s.tickWait(ctx, t0.Add(time.Minute)) // dispatches the orphaned pending run
+	s.tickWait(ctx, t0.Add(time.Minute))
 
 	seen := replacementState(t, "every-minute")
 	if seen == nil || seen.Pending == nil || seen.Pending.RunID != "run_orphaned" {
@@ -1363,17 +1188,13 @@ func TestUncommittedIntentIsPushedBeforeDispatch(t *testing.T) {
 	}
 }
 
-// A supervisor that cannot record what it is about to do must not do it --
-// and has to say so where a person will look. A stale index lock is what a
-// killed git leaves behind; on logs alone the agent would just quietly stop
-// running anything.
 func TestFailedIntentCommitHoldsRunsAndRecordsATask(t *testing.T) {
 	dir := fixture(t, "ok")
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 
 	cmd := exec.Command("git", "rev-parse", "--absolute-git-dir")
 	cmd.Dir = filepath.Join(dir, "knowledge")
@@ -1396,9 +1217,6 @@ func TestFailedIntentCommitHoldsRunsAndRecordsATask(t *testing.T) {
 	}
 }
 
-// A blocker that persists across many ticks announces its onset once, like
-// every sibling "persisting condition" mechanism in this file -- not once
-// per minute for the whole outage.
 func TestBlockedLogsOnceAcrossTicks(t *testing.T) {
 	dir := fixture(t, "ok")
 	bare := withOrigin(t, dir)
@@ -1406,7 +1224,7 @@ func TestBlockedLogsOnceAcrossTicks(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register, origin healthy
+	s.tickWait(ctx, t0)
 
 	gone := bare + ".gone"
 	if err := os.Rename(bare, gone); err != nil {
@@ -1424,11 +1242,6 @@ func TestBlockedLogsOnceAcrossTicks(t *testing.T) {
 	}
 }
 
-// A supervised run's record carries the usage the runner captured from the
-// attempt home's session storage, plus the resolved model.
-// Killing the process group does not reach a grandchild that left it, and
-// that grandchild still holds the run's output pipe. The kill path must stop
-// draining the pipe on a deadline instead of parking the supervisor forever.
 func TestOrphanHoldingTheOutputPipeDoesNotParkTheTick(t *testing.T) {
 	dir := fixture(t, "orphan")
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(
@@ -1436,7 +1249,7 @@ func TestOrphanHoldingTheOutputPipeDoesNotParkTheTick(t *testing.T) {
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
-	s.tickWait(ctx, t0) // register
+	s.tickWait(ctx, t0)
 
 	returned := make(chan struct{})
 	go func() {
@@ -1549,9 +1362,6 @@ func TestLocalBootWarnsButDoesNotRequireCredentials(t *testing.T) {
 	logs.Expect("WARN", "routines may lack provider authentication")
 }
 
-// A host where no rung works would leave an operator with no agent at all, so
-// there is a way out -- visible in the log every boot, because it is the one
-// shape where a routine can reach another routine's credentials.
 func TestBootRunsUnconfinedWhenTheOperatorDisablesTheSandbox(t *testing.T) {
 	logs := logtest.Capture(t)
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
@@ -1562,19 +1372,12 @@ func TestBootRunsUnconfinedWhenTheOperatorDisablesTheSandbox(t *testing.T) {
 	}
 	logs.Expect("WARN", sandbox.EnvDisable)
 
-	// And the checks that exist to protect the grant list stop applying, rather
-	// than refusing a deployment over the smaller version of a tradeoff its
-	// operator already made.
 	t.Setenv(creds.EnvMasterKeyFile, "/usr/local/etc/master.key")
 	if err := ValidateKeyFileLocations(t.TempDir()); err != nil {
 		t.Errorf("with no sandbox there is no grant list to sit outside of: %v", err)
 	}
 }
 
-// File delivery keeps a key out of every environment but moves the question to
-// where the file sits: a run shares the supervisor's uid, so a key under a
-// granted path is readable at any mode. Fatal rather than a warning -- unlike
-// env delivery it is reachable by the very thing the sandbox contains.
 func TestBootRefusesAKeyFileRoutinesCanRead(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "1")
@@ -1607,15 +1410,11 @@ func TestBootRefusesAKeyFileRoutinesCanRead(t *testing.T) {
 		t.Errorf("unexpected refusal:\n got: %s\nwant: %s", err, want)
 	}
 
-	// /etc is granted by named entry, so a secrets directory a host mounts
-	// under it is not one of them.
 	t.Setenv(repository.EnvDeployKeyFile, "/etc/secrets/deploy")
 	if err := ValidateKeyFileLocations(dir); err != nil {
 		t.Errorf("a platform secrets directory under /etc is a supported location: %v", err)
 	}
 
-	// Outside production the same misconfiguration is not an error: local
-	// runs are confined by their own container, which grants none of this.
 	t.Setenv("OPENROUTINES_IN_CONTAINER", "")
 	if err := ValidateKeyFileLocations(dir); err != nil {
 		t.Errorf("outside production there is no sandbox grant list to violate: %v", err)

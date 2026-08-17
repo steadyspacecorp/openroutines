@@ -12,14 +12,8 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-// Matches provider authentication errors in the session
-// record's failure text, so a bad key reads as configuration instead of an
-// opaque crash. The `error:` forms cover bare status text passed through
-// verbatim ("... ended on an error: Unauthorized").
 var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key|error:\s*unauthorized|invalid bearer token`)
 
-// Adds what the provider's own message does not say: the resolved
-// provider, the declared endpoint, and whether a credential was injected.
 func authHint(dir, model string, injected bool) string {
 	provider := strings.SplitN(model, "/", 2)[0]
 	keyName := creds.ProviderKeyName(provider)
@@ -51,9 +45,6 @@ func isModelNotFound(failure string) bool {
 	return strings.Contains(failure, "ProviderModelNotFoundError")
 }
 
-// A run's resolved secret material: the environment to inject,
-// and cleanup for derived credentials. Redaction registers where values
-// materialize, not here.
 type runSecrets struct {
 	env           map[string]string
 	cleanup       []func()
@@ -68,7 +59,6 @@ func (s *runSecrets) setEnv(name, value string) error {
 	return nil
 }
 
-// Disposes of derived material -- best-effort, once, at attempt end.
 func (s *runSecrets) release() {
 	for _, f := range s.cleanup {
 		f()
@@ -76,11 +66,6 @@ func (s *runSecrets) release() {
 	s.cleanup = nil
 }
 
-// Builds the routine's secret set: declared credentials
-// plus the provider key for its model. Raw credentials inject verbatim under
-// their uppercase name; typed ones inject their derived surface -- the stored
-// root secret never enters the run. A failed resolve releases whatever it
-// already derived.
 func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (_ *runSecrets, err error) {
 	provider := strings.SplitN(model, "/", 2)[0]
 	providerKey := creds.ProviderKeyName(provider)
@@ -96,7 +81,6 @@ func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, mod
 		if len(r.Frontmatter.Credentials) > 0 {
 			return nil, fmt.Errorf("routine declares credentials but %w", credentialErr)
 		}
-		// OpenCode may still have its own authentication for the provider.
 		out.credentialErr = credentialErr
 		return out, nil
 	}

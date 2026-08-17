@@ -21,11 +21,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// The github_app derived type: the stored value is a GitHub App private key,
-// and the run receives a one-hour installation token in its place. The
-// token is minted unscoped, inheriting the installation's full repository
-// selection and permissions -- access bounds are per-agent, set on GitHub's
-// installation page, not narrowed per routine.
 const (
 	githubAPIBase    = "https://api.github.com"
 	githubAPIVersion = "2026-03-10"
@@ -105,7 +100,6 @@ func deriveGitHubApp(name string, s Spec, stored, apiBase string) (*Derived, err
 	}
 	botEmail := fmt.Sprintf("%d+%s@users.noreply.github.com", bot.ID, botName)
 
-	// Derive registers the returned bearer as the canonical entry.
 	release()
 	return &Derived{
 		Env: map[string]string{
@@ -122,9 +116,6 @@ func deriveGitHubApp(name string, s Spec, stored, apiBase string) (*Derived, err
 	}, nil
 }
 
-// Decodes the stored App private key. The stored value may carry real PEM
-// newlines or escaped \n sequences (the one-line form keeps the encrypted
-// value scrubbable as an exact string).
 func parseAppKey(stored string) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode([]byte(strings.ReplaceAll(stored, `\n`, "\n")))
 	if block == nil {
@@ -143,7 +134,6 @@ func parseAppKey(stored string) (*rsa.PrivateKey, error) {
 	return nil, fmt.Errorf("github_app: cannot parse the stored private key")
 }
 
-// Signs the 9-minute RS256 App JWT.
 func githubAppJWT(appID, stored string) (string, error) {
 	key, err := parseAppKey(stored)
 	if err != nil {

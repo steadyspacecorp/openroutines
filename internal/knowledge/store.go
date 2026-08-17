@@ -1,6 +1,3 @@
-// Manages the agent's knowledge: a git worktree of the orphan
-// `knowledge` branch, plus the staging pipeline that keeps model-directed
-// processes away from git entirely.
 package knowledge
 
 import (
@@ -17,25 +14,17 @@ import (
 const (
 	Dir        = "knowledge"
 	Branch     = "knowledge"
-	maxFile    = 5 << 20 // per-file size cap in staged knowledge
-	maxEntries = 2000    // total staged file cap
+	maxFile    = 5 << 20
+	maxEntries = 2000
 )
 
-// The supervisor-owned directory inside the worktree holding
-// per-routine bookkeeping: scheduling state at its root, trigger baselines
-// and consumer cursors in subdirectories.
 const stateDirName = "state"
 
-// One agent repository's knowledge. The handle binds the repository
-// root; every operation that reads or maintains the knowledge branch, its
-// worktree, and the supervisor-owned state inside it goes through here.
 type Store struct {
 	repo     *repository.Repository
 	worktree *repository.Worktree
 }
 
-// Binds the agent repository at repoDir. No I/O: the worktree may not be
-// materialized yet (Status reports that; Ensure fixes it).
 func NewStore(repoDir string) *Store {
 	return NewStoreForRepository(repository.Open(repoDir))
 }
@@ -47,11 +36,6 @@ func NewStoreForRepository(repo *repository.Repository) *Store {
 	}
 }
 
-// The framework-blessed shared knowledge files, seeded on init.
-// Each opens with a fenced example of its format: the file teaches its own
-// shape at the point of use, and the retention trimmer preserves everything
-// that isn't a record. Agents may reshape the headers in their own knowledge
-// branch -- seeding is create-if-missing and never overwrites.
 var primitives = map[string]string{
 	"events.md": "# Events\n\nWhat happened: append-only outcomes and observations, full facts, no polish.\n" +
 		"Includes explicit NO-OPs -- a run that found nothing to change still happened.\n\n" +
@@ -75,8 +59,6 @@ var primitives = map[string]string{
 		"- YYYY-MM-DD <routine>: <the fact, and where it came from>\n```\n",
 }
 
-// Paths never travel into staging and are never touched by
-// import: routines cannot read or rewrite scheduling state or run records.
 var supervisorOwned = map[string]bool{
 	stateDirName: true,
 	"runs.jsonl": true,
@@ -84,14 +66,8 @@ var supervisorOwned = map[string]bool{
 
 func (store *Store) Worktree() string { return store.worktree.Dir() }
 
-// Returns the supervisor-owned state directory inside the worktree.
-// Per-routine state lives at <StateDir>/<name>.json (scheduling) and
-// <StateDir>/<subdir>/<name>.json (trigger baselines, consumer cursors).
 func (store *Store) StateDir() string { return filepath.Join(store.Worktree(), stateDirName) }
 
-// Materializes knowledge/ as a worktree of the knowledge branch,
-// creating the orphan branch and seeding the primitives on first use.
-// Self-heals: safe to call every run.
 func (store *Store) Ensure() error {
 	wt := store.Worktree()
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
@@ -106,21 +82,20 @@ func (store *Store) Ensure() error {
 		}
 		slog.Warn("knowledge: moved an unattached worktree aside", "path", orphaned)
 	}
-	// The image's .git may register a worktree whose directory was excluded
-	// from the image; prune or the add below fails on first boot.
+
 	_, _ = store.repo.Run("worktree", "prune")
 	if _, err := store.repo.Run("show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
-		// No local branch: adopt origin's rather than minting a new root
-		// that splices into the lineage.
+
 		if store.repo.Remote() {
 			if _, exists, lerr := store.repo.RemoteRef("refs/heads/" + Branch); lerr == nil && exists {
 				if _, ferr := store.repo.Run("fetch", "--quiet", "origin", "+refs/heads/"+Branch+":refs/heads/"+Branch); ferr != nil {
 					return fmt.Errorf("adopting knowledge branch from origin: %w", ferr)
 				}
-				// Adoption is where a restart could launder a rewritten
-				// history: refuse a tip that does not descend from the
-				// accepted baseline, which survives container replacement.
+
 				if accepted := store.AcceptedTip(); accepted != "" {
+					// Adoption is where a restart could launder a rewritten
+					// history: refuse a tip that does not descend from the
+					// accepted baseline, which survives container replacement.
 					tip, terr := store.repo.Run("rev-parse", "refs/heads/"+Branch)
 					if terr == nil && tip != accepted {
 						descends, aerr := store.repo.IsAncestor(accepted, tip)
@@ -141,8 +116,7 @@ func (store *Store) Ensure() error {
 		}
 	}
 	if _, err := store.repo.Run("show-ref", "--verify", "--quiet", "refs/heads/"+Branch); err != nil {
-		// First use: orphan branch from an empty tree via plumbing
-		// (worktree add --orphan needs git >= 2.42).
+
 		tree, err := store.repo.RunStdin("", "mktree")
 		if err != nil {
 			return fmt.Errorf("creating knowledge branch: %w", err)
@@ -159,7 +133,7 @@ func (store *Store) Ensure() error {
 	if _, err := store.repo.Run("worktree", "add", wt, Branch); err != nil {
 		return err
 	}
-	// Seed the primitives and the ledgers directory if absent.
+
 	for name, content := range primitives {
 		p := filepath.Join(wt, name)
 		if _, err := os.Stat(p); os.IsNotExist(err) {
@@ -198,13 +172,12 @@ func danglingWorktreeLink(path string) bool {
 	return os.IsNotExist(err)
 }
 
-// Records the current worktree state on the knowledge branch.
 func (store *Store) Commit(message string) (string, error) {
 	if _, err := store.worktree.Run("add", "-A"); err != nil {
 		return "", err
 	}
 	if changed, _ := store.worktree.Run("status", "--porcelain"); changed == "" {
-		return "", nil // nothing to commit
+		return "", nil
 	}
 	if _, err := store.worktree.Run("commit", "--quiet", "-m", message); err != nil {
 		return "", err
@@ -212,9 +185,6 @@ func (store *Store) Commit(message string) (string, error) {
 	return store.worktree.Run("rev-parse", "--short", "HEAD")
 }
 
-// Commits only the named paths: a maintenance commit must not
-// carry work that merely happened to be dirty when it fired. Missing paths
-// are skipped.
 func (store *Store) commitPaths(message string, paths ...string) (string, error) {
 	wt := store.Worktree()
 	var present []string
@@ -226,13 +196,12 @@ func (store *Store) commitPaths(message string, paths ...string) (string, error)
 	if len(present) == 0 {
 		return "", nil
 	}
-	// A pathspec commit only covers tracked paths -- add first so a new file
-	// isn't a pathspec that matches nothing.
+
 	if _, err := store.worktree.Run(append([]string{"add", "--"}, present...)...); err != nil {
 		return "", err
 	}
 	if changed, _ := store.worktree.Run(append([]string{"status", "--porcelain", "--"}, present...)...); changed == "" {
-		return "", nil // nothing to commit
+		return "", nil
 	}
 	if _, err := store.worktree.Run(append([]string{"commit", "--quiet", "-m", message, "--"}, present...)...); err != nil {
 		return "", err
@@ -240,10 +209,6 @@ func (store *Store) commitPaths(message string, paths ...string) (string, error)
 	return store.worktree.Run("rev-parse", "--short", "HEAD")
 }
 
-// Deletes every per-routine state file for name: the
-// scheduling state plus the entry in every state subdirectory. Filenames are
-// compared, never globbed, so name cannot alter the matching. Returns the
-// removed paths relative to the repository root; the caller commits.
 func (store *Store) RemoveRoutineState(name string) ([]string, error) {
 	stateDir := store.StateDir()
 	entries, err := os.ReadDir(stateDir)
@@ -278,21 +243,16 @@ func (store *Store) RemoveRoutineState(name string) ([]string, error) {
 	return removed, nil
 }
 
-// Reports the knowledge worktree's state for `openroutines
-// status` -- root `git status` never shows knowledge churn, so this must.
 type WorktreeStatus struct {
 	Durable         bool
 	Materialized    bool
-	RemoteKnowledge bool   // origin/knowledge ref exists locally: the agent has history even if this checkout hasn't adopted it
-	Uncommitted     int    // files with uncommitted changes (human curation in progress)
-	LastCommit      string // subject of the latest knowledge commit
-	Unpushed        int    // commits origin hasn't seen yet
-	Behind          int    // commits on origin this worktree has not taken
+	RemoteKnowledge bool
+	Uncommitted     int
+	LastCommit      string
+	Unpushed        int
+	Behind          int
 }
 
-// Inspects the knowledge worktree; only RemoteKnowledge is set when not
-// yet materialized -- it distinguishes a fresh clone of a running agent
-// (adopt with sync) from an agent that has never run.
 func (store *Store) Status() WorktreeStatus {
 	st := WorktreeStatus{Durable: store.repo.Remote()}
 	if _, err := store.repo.Run("rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+Branch); err == nil {
@@ -312,8 +272,7 @@ func (store *Store) Status() WorktreeStatus {
 	if out, err := store.worktree.Run("rev-list", "--count", "refs/remotes/origin/"+Branch+"..HEAD"); err == nil {
 		_, _ = fmt.Sscanf(out, "%d", &st.Unpushed)
 	}
-	// As of the last fetch: the remote-tracking ref is local, so this stays
-	// offline.
+
 	if out, err := store.worktree.Run("rev-list", "--count", "HEAD..refs/remotes/origin/"+Branch); err == nil {
 		_, _ = fmt.Sscanf(out, "%d", &st.Behind)
 	}

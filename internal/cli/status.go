@@ -55,8 +55,6 @@ func printAgentStatus(dir string, agent *config.Agent) *time.Location {
 	fmt.Printf("agent      %s\n", orUnset(agent.Name))
 	fmt.Printf("owner      %s <%s>\n", orUnset(agent.Owner.Name), orUnset(agent.Owner.Email))
 
-	// The supervisor refuses to start on an unloadable timezone; status carries
-	// on in UTC but labels the fallback rather than printing impossible fire times.
 	location, err := time.LoadLocation(agent.Timezone)
 	timezoneNote := ""
 	if err != nil {
@@ -102,8 +100,6 @@ func printRoutineStatus(dir string, location *time.Location) {
 		next := ""
 		if routine.Frontmatter.IsActive() {
 			activity = "active"
-			// A routine in cool-down doesn't fire at its next occurrence, so
-			// print the cool-down instead of a time that will not happen.
 			if state != nil && state.CoolingDown(now) {
 				next = " -- cooling down"
 			} else if spec, err := schedule.Parse(routine.Frontmatter.Schedule, location); err == nil {
@@ -183,8 +179,6 @@ func printConsumerStatus(store *knowledge.Store) {
 		if head != "" && !strings.HasPrefix(head, cursor.ConsumedThrough) && head != cursor.ConsumedThrough {
 			changes, err := store.Changes(cursor.ConsumedThrough, head)
 			switch {
-			// Silence here would read as caught up; a stuck consumer's runs are
-			// abandoned on sight until a person repairs the file.
 			case errors.Is(err, knowledge.ErrCursorUnreachable):
 				lag = fmt.Sprintf(" -- ! not on the knowledge branch, delivery is stuck: repair or delete %s", knowledge.CursorFile(name))
 			case err == nil && len(changes) > 0:
@@ -206,11 +200,6 @@ func printConfigurationNeeds(agent *config.Agent) {
 	}
 }
 
-// Renders the supervisor's durable scheduling record for one routine: what
-// it still owes, and what is holding it. Without them a routine mid-retry or
-// sitting out a circuit-breaker cool-down reads exactly like a healthy one.
-// Nil state means the supervisor has never seen the routine -- which every
-// local checkout looks like -- so it prints nothing.
 func scheduleStateLines(st *schedule.State, r *routine.Routine, now time.Time, loc *time.Location, settled map[string]bool) []string {
 	if st == nil {
 		return nil
@@ -228,18 +217,12 @@ func scheduleStateLines(st *schedule.State, r *routine.Routine, now time.Time, l
 	return append(lines, "watermark "+stamp(st.Watermark, now, loc))
 }
 
-// Says what becomes of a pending run. The case order matters: a routine the
-// tick skips is held whatever its budget says, and an attempt still running
-// would otherwise look like one that failed.
 func pendingDisposition(p *schedule.Pending, r *routine.Routine, now time.Time, loc *time.Location, settled map[string]bool) string {
 	switch {
 	case !supervisor.Schedulable(r):
 		return "held -- the supervisor skips this routine, so no attempt is coming"
 	case p.Attempts > 0 && settled != nil && !settled[attemptKey(p.RunID, p.Attempts)]:
-		// Reserved but not yet settled. The state file alone can't tell this
-		// from a failed attempt backing off -- reserve writes the count and a
-		// non-final failure leaves it untouched -- so the run record, written
-		// only on settlement, is the tell.
+		// Reservation and backoff share state; only the settlement log proves an attempt finished.
 		return fmt.Sprintf("attempt %d started %s, still in flight", p.Attempts, stamp(p.LastAttemptAt, now, loc))
 	case p.Attempts >= supervisor.MaxAttempts:
 		return "budget spent -- the next tick abandons it"
@@ -254,9 +237,6 @@ func attemptKey(runID string, attempt int) string {
 	return fmt.Sprintf("%s#%d", runID, attempt)
 }
 
-// Collects the attempts runs.jsonl has a record for; a record is appended at
-// settlement, so a reserved attempt missing from it is still running. Nil
-// when there's no log at all -- absence must not read as "in flight".
 func settledAttempts(dir string) map[string]bool {
 	raw, err := os.ReadFile(filepath.Join(knowledge.NewStore(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
@@ -272,9 +252,6 @@ func settledAttempts(dir string) map[string]bool {
 	return settled
 }
 
-// Formats a scheduling time at the coarsest precision that stays
-// unambiguous: weekday and clock inside a week, calendar date beyond it, the
-// year once it differs -- "Mon 21:12" nine days stale would misread as two.
 func stamp(t time.Time, now time.Time, loc *time.Location) string {
 	t = t.In(loc)
 	switch d := t.Sub(now); {
@@ -287,8 +264,6 @@ func stamp(t time.Time, now time.Time, loc *time.Location) string {
 	}
 }
 
-// Shows the one-line total; the breakdown lives in `openroutines usage`.
-// Silent when no record carries usage.
 func printTokenUsage(dir string) {
 	t := totalUsage(aggregateUsage(dir))
 	if t.RunsReported == 0 {

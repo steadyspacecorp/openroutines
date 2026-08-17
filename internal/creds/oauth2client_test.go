@@ -9,8 +9,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// The grant is a form-encoded POST carrying the stored secret; the run
-// receives only the minted bearer, under the declared inject_as name.
 func TestDeriveOAuth2Client(t *testing.T) {
 	var gotContentType, gotGrant, gotID, gotSecret string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +40,7 @@ func TestDeriveOAuth2Client(t *testing.T) {
 	if got := scrub.Redacted("minted-bearer-123"); strings.Contains(got, "minted-bearer-123") {
 		t.Fatalf("minting must register the bearer for redaction, got %q", got)
 	}
-	d.Cleanup() // no revocation for this type; must still be safe to call
+	d.Cleanup()
 }
 
 func TestDeriveOAuth2ClientErrors(t *testing.T) {
@@ -66,8 +64,6 @@ func TestDeriveOAuth2ClientErrors(t *testing.T) {
 	}
 }
 
-// Validation: the type requires its three fields, rejects another type's,
-// and inject_as must be a safe env name.
 func TestOAuth2ClientSpecProblems(t *testing.T) {
 	valid := Spec{Type: "oauth2_client", TokenURL: "https://auth.example.com/oauth2/token", ClientID: "c", InjectAs: "desk_token"}
 	if p := SpecProblems("s", valid); len(p) != 0 {

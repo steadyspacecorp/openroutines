@@ -102,8 +102,6 @@ func TestKnowledgeSummaryRefusesAKeyFileTheSandboxWouldGrant(t *testing.T) {
 	}
 }
 
-// The briefing renderer recognizes a section heading however the model
-// dresses it, and leaves piped output byte-for-byte alone.
 func TestBriefingStyling(t *testing.T) {
 	was := styled
 	defer func() { styled = was }()

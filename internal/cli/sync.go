@@ -6,13 +6,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 )
 
-// Reconciles the knowledge worktree with origin from a person's checkout.
-// `git pull` on main moves origin/knowledge without touching the worktree,
-// leaving status, usage, and the ledgers reading old knowledge.
-//
-// Deliberately not run by status or usage: this fetches, may rebase, and
-// force-pushes the accepted-tip baseline to origin. A command that reports
-// state must not do any of that.
 const syncUsage = "usage: openroutines sync [--push]"
 
 func cmdSync(args []string) int {
@@ -42,7 +35,7 @@ func cmdSync(args []string) int {
 		fmt.Printf("materialized knowledge/ from the %s branch\n", knowledge.Branch)
 	}
 
-	behind := store.Status().Behind // counted before the sync, while still true
+	behind := store.Status().Behind
 
 	rep := store.Sync()
 	switch {
@@ -61,7 +54,7 @@ func cmdSync(args []string) int {
 		return 0
 	case rep.Unreachable:
 		return fail(fmt.Errorf("origin unreachable: %s", rep.Detail))
-	case rep.Rewritten: // the refusal text already explains the repair
+	case rep.Rewritten:
 		reportStranded(store)
 		return fail(fmt.Errorf("%s", rep.Detail))
 	case rep.Conflict:
@@ -108,10 +101,6 @@ func cmdSync(args []string) int {
 	return 0
 }
 
-// Names the knowledge a supervisor could not put on the branch while its
-// sync was blocked -- typically carrying the blocker task that explains the
-// refusal, since the block that stops sync also stops the runs that would
-// otherwise report it.
 func reportStranded(store *knowledge.Store) {
 	snap := store.Blocked()
 	if snap.Tip == "" {

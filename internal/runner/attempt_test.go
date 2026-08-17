@@ -43,9 +43,6 @@ func TestCleanupRemovesWorkspaceWhoseModesTheRunChanged(t *testing.T) {
 	}
 }
 
-// The ceiling is the agent's own max_timeout, applied where attempts read
-// the timeout -- not left to a `check` the operator may never run. The
-// declared value stays readable for `check` to warn about.
 func TestTimeoutIsCappedAtTheAgentCeiling(t *testing.T) {
 	agent := &config.Agent{Name: "a", Instructions: "d"}
 	agent.Defaults.Timeout = "90m"

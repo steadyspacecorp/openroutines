@@ -41,8 +41,6 @@ func TestLoadOpenCode(t *testing.T) {
 		t.Fatalf("expected sorted server names, got %v", got)
 	}
 
-	// Unparseable is an error, never a silently empty view: no MCP rules
-	// would be generated, and opencode itself could not load the file.
 	writeOpenCode(t, dir, `{`)
 	oc, err = LoadOpenCode(dir)
 	if err == nil || !strings.Contains(err.Error(), OpenCodeFileName) {
@@ -53,9 +51,6 @@ func TestLoadOpenCode(t *testing.T) {
 	}
 }
 
-// Drift flags framework concerns that crept into the harness's file: model
-// choice belongs in openroutines.yml and frontmatter, and a defined provider
-// no model references usually means a typo on one side.
 func TestOpenCodeDrift(t *testing.T) {
 	dir := t.TempDir()
 	writeOpenCode(t, dir, `{
@@ -87,8 +82,6 @@ func TestOpenCodeDrift(t *testing.T) {
 	}
 }
 
-// AddMCPServer inserts exactly one consented entry, creates the block when
-// absent, and never overwrites -- an existing entry is the person's.
 func TestAddMCPServer(t *testing.T) {
 	dir := t.TempDir()
 
@@ -130,8 +123,6 @@ func TestAddMCPServer(t *testing.T) {
 	}
 }
 
-// The snippet shown at the consent prompt is the entry AddMCPServer lands --
-// what you read is what you get.
 func TestMCPSnippetMatchesWhatLands(t *testing.T) {
 	snippet := MCPSnippet("steady", "https://example.test/mcp", "steady_token")
 	for _, want := range []string{`"steady":`, `"type":"remote"`, `"url":"https://example.test/mcp"`, `"Authorization":"Bearer {env:STEADY_TOKEN}"`} {

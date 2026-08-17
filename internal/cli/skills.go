@@ -77,8 +77,6 @@ func skillsNew(args []string) int {
 	if len(args) == 0 {
 		return fail(fmt.Errorf("%s", skillsNewUsage))
 	}
-	// A skill name can't contain / : or @ -- so an argument that does is a
-	// source to vendor from, not a name to scaffold.
 	if strings.ContainsAny(args[0], "/:@") {
 		return skillsAdd(args)
 	}
@@ -143,8 +141,7 @@ func skillsRemove(args []string) int {
 		return fail(fmt.Errorf("usage: openroutines skills remove <name>"))
 	}
 	name := positional[0]
-	// Grammar first, then containment -- this path ends in os.RemoveAll,
-	// and an unvalidated name like "../.." would resolve outside skills/.
+	// This name reaches RemoveAll, so validate it before joining it to skills/.
 	if !skill.NamePattern.MatchString(name) {
 		return fail(fmt.Errorf("skill name %q is not a valid Agent Skills name", name))
 	}

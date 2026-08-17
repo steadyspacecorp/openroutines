@@ -48,9 +48,6 @@ func TestNewInitializesCredentialsWithAFreshConventionalKey(t *testing.T) {
 	}
 }
 
-// Claude Code reads CLAUDE.md, not AGENTS.md, so the scaffold links one to
-// the other -- a symlink, not a copy, so template updates to AGENTS.md can
-// never leave a stale CLAUDE.md behind.
 func TestNewLinksClaudeMdToAgentsMd(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent")
 	if code := cmdNew([]string{dir}); code != 0 {

@@ -2,7 +2,6 @@ package knowledge
 
 import "strings"
 
-// A checklist record outside a fenced example in tasks.md.
 type TaskEntry struct {
 	Text string
 	ID   string
@@ -10,7 +9,6 @@ type TaskEntry struct {
 	line int
 }
 
-// Returns the actionable checklist records in tasks.md.
 func ParseTaskEntries(text string) []TaskEntry {
 	var entries []TaskEntry
 	inFence := false

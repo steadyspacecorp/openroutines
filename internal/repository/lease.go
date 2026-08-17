@@ -8,14 +8,12 @@ import (
 
 const leaseRef = "refs/openroutines/lease"
 
-// Lease is the current holder's heartbeat and its compare-and-swap token.
 type Lease struct {
 	Holder string
 	At     time.Time
 	SHA    string
 }
 
-// ReadLease fetches the current repository writer lease from origin.
 func (repo *Repository) ReadLease() (*Lease, error) {
 	if !repo.Remote() {
 		return nil, nil
@@ -45,8 +43,6 @@ func (repo *Repository) ReadLease() (*Lease, error) {
 	return &Lease{Holder: fields[0], At: at, SHA: sha}, nil
 }
 
-// WriteLease atomically publishes a heartbeat if the expected lease still
-// names origin's current value. An empty expected SHA requires no live lease.
 func (repo *Repository) WriteLease(instanceID string, now time.Time, expectedSHA string) (string, error) {
 	if !repo.Remote() {
 		return "", nil
@@ -63,7 +59,6 @@ func (repo *Repository) WriteLease(instanceID string, now time.Time, expectedSHA
 	return blob, nil
 }
 
-// ReleaseLease removes ownedSHA only while it remains origin's current lease.
 func (repo *Repository) ReleaseLease(ownedSHA string) {
 	if ownedSHA == "" || !repo.Remote() {
 		return

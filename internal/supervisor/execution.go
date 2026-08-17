@@ -13,10 +13,7 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/schedule"
 )
 
-// Runs one attempt of a pending logical run and settles the outcome.
 func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedule.State, now time.Time) (cleanupErr error) {
-	// Attempts interleave on one stdout, so the identity travels with the
-	// logger.
 	log := r.Log().With("run_id", st.Pending.RunID)
 
 	agent, err := config.Load(s.Dir)
@@ -91,7 +88,6 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 	detail := ""
 	fatal := false
 	if err != nil {
-		// The runner classifies; the supervisor only asks.
 		fatal = errors.Is(err, runner.ErrFatal)
 		log.Error("attempt failed to start", "error", err)
 		result = &runner.AttemptResult{Outcome: runner.Crashed, ExitCode: -1}
@@ -179,11 +175,10 @@ func reportSettlement(ctx context.Context, settlement *runner.Settlement, result
 		} else {
 			log.Warn("canceled -- lease lost mid-run; whoever holds the lease retries it")
 		}
-		return false // shutdown's final commit carries the record, and a lease loser must not push
+		return false
 	case settlement.Outcome == runner.Completed:
 		log.Info("run completed", "duration", result.Duration)
 	case abandoned:
-		// abandon() already said so.
 	default:
 		log.Error("attempt failed -- will retry", "detail", settlement.Detail)
 	}

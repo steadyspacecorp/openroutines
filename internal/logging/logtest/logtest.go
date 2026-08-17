@@ -1,8 +1,3 @@
-// Captures the process log for tests. Capture redirects
-// the log stream -- slog records and the opencode passthrough alike --
-// into a test-scoped buffer, and the Log it returns makes "the expected
-// thing was logged" a single assertion. Tests never touch the logging
-// package's knobs themselves.
 package logtest
 
 import (
@@ -14,8 +9,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/logging"
 )
 
-// Redirects the process log into a fresh Log until the test ends,
-// then restores the real destination.
 func Capture(t *testing.T) *Log {
 	t.Helper()
 	l := &Log{t: t}
@@ -25,8 +18,6 @@ func Capture(t *testing.T) *Log {
 	return l
 }
 
-// The captured stream. The lock is what makes assertions safe
-// while a run's goroutines are still logging.
 type Log struct {
 	t   *testing.T
 	mu  sync.Mutex
@@ -39,16 +30,12 @@ func (l *Log) Write(p []byte) (int, error) {
 	return l.buf.Write(p)
 }
 
-// Returns everything logged so far, for the assertions Expect and
-// Reject don't cover -- counting occurrences, walking lines.
 func (l *Log) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.String()
 }
 
-// Discards what was captured so far, so a test asserting in phases
-// reads each phase alone.
 func (l *Log) Reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()

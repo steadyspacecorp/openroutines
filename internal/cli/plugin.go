@@ -42,9 +42,6 @@ func cmdPlugin(args []string) int {
 
 const pluginAddUsage = "usage: openroutines plugin add <git-url | owner/repo | local-dir> [--path sub/dir] [--yes]"
 
-// Installs a plugin: fetch, validate, show the manifest and grant summary,
-// confirm, copy. Everything it asks for is stated before anything lands --
-// review is the only gate (design decision "Plugins").
 func pluginAdd(args []string) int {
 	rest, flags, help, err := parseFlags(args, map[string]flagSpec{
 		"--path": {value: true},
@@ -106,9 +103,6 @@ func pluginAdd(args []string) int {
 	}
 	fmt.Println()
 
-	// Declared MCP servers: one consent per endpoint, showing the exact
-	// bytes. --yes covers the install but never an endpoint definition; a
-	// non-interactive run only prints the snippet.
 	mcpHandled := map[string]bool{}
 	if interactive && !yes && len(p.Manifest.MCP) > 0 {
 		oc, err := config.LoadOpenCode(".")
@@ -125,7 +119,7 @@ func pluginAdd(args []string) int {
 			m := p.Manifest.MCP[name]
 			fmt.Printf("Define mcp server %q in opencode.json? This connects runs that grant it to an external endpoint.\n  %s\n", name, config.MCPSnippet(name, m.URL, m.Credential))
 			if !confirm(reader, os.Stdout, "  ") {
-				continue // stays a printed next step
+				continue
 			}
 			if err := config.AddMCPServer(".", name, m.URL, m.Credential); err != nil {
 				return fail(err)
@@ -153,8 +147,6 @@ func pluginAdd(args []string) int {
 		stepf("set the %s variable in openroutines.yml  # %s", name, firstLine(p.Manifest.Variables[name].Description))
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.Manifest.MCP)) {
-		// A plugin declares the server but never authors harness config;
-		// only a person puts the endpoint into opencode.json.
 		if mcpHandled[name] {
 			continue
 		}

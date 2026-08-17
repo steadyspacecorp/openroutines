@@ -18,7 +18,6 @@ func (store *Store) scrubbed(line string) string {
 	return flatten(scrub.Redacted(line))
 }
 
-// Records a supervisor-written event.
 func (store *Store) AppendEvent(line string) error {
 	p := filepath.Join(store.Worktree(), "events.md")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -30,7 +29,6 @@ func (store *Store) AppendEvent(line string) error {
 	return err
 }
 
-// Records a supervisor-created task in the Human-owned section.
 func (store *Store) AppendHumanTask(taskID, description string) error {
 	p := filepath.Join(store.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
@@ -86,7 +84,6 @@ func (store *Store) AppendHumanTask(taskID, description string) error {
 	return os.WriteFile(p, []byte(strings.Join(out, "\n")), 0o644)
 }
 
-// Completes open tasks whose id starts with idPrefix.
 func (store *Store) ResolveHumanTasks(idPrefix, resolution string) (bool, error) {
 	p := filepath.Join(store.Worktree(), "tasks.md")
 	raw, err := os.ReadFile(p)
@@ -120,7 +117,6 @@ func (store *Store) ResolveHumanTasks(idPrefix, resolution string) (bool, error)
 	return true, os.WriteFile(p, []byte(strings.Join(lines, "\n")), 0o644)
 }
 
-// Appends a redacted JSONL run record.
 func (store *Store) AppendRunRecord(record string) error {
 	p := filepath.Join(store.Worktree(), "runs.jsonl")
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)

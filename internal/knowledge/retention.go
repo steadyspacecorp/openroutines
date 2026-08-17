@@ -11,34 +11,17 @@ import (
 	"time"
 )
 
-// The record streams the retention window applies to.
-// tasks.md is a living list (age doesn't make a task done) and ledgers are
-// routine-owned -- both exempt. Pruning removes a line from the working view
-// only; the commit that introduced it stays in history, which is what the
-// delivery feed reads (see delivery.go).
 var trimmedStreams = []string{"events.md", "context.md"}
 
-// The run log, trimmed by its own timestamps rather than the
-// record streams' blame times, and never part of the delivery feed.
 const runRecordsFile = "runs.jsonl"
 
-// Marks a commit as a retention trim, and is the whole mechanism
-// keeping trims out of the delivery feed (see Changes). Nothing else on the
-// knowledge branch writes it: commit messages are the supervisor's own.
 const trimTrailer = "Openroutines-Retention-Trim: true"
 
-// Commits what Trim rewrote, carrying the trailer that keeps it
-// out of the delivery feed. Scoped to the files Trim touches: anything else
-// dirty would ride along into the one commit no consumer ever reads.
 func (store *Store) CommitTrim(keep time.Duration) (string, error) {
 	message := fmt.Sprintf("Trim knowledge to retention window (%s)\n\n%s\n", keep, trimTrailer)
 	return store.commitPaths(message, append([]string{runRecordsFile}, trimmedStreams...)...)
 }
 
-// Drops record entries older than the window. Age is the line's git
-// commit time via blame -- no timestamp format imposed on routines. Only
-// list items ("- ") outside fences are records; everything else survives, as
-// do uncommitted lines. Returns whether anything changed; the caller commits.
 func (store *Store) Trim(keep time.Duration, now time.Time) (bool, error) {
 	wt := store.Worktree()
 	cutoff := now.Add(-keep)
@@ -87,7 +70,6 @@ func (store *Store) Trim(keep time.Duration, now time.Time) (bool, error) {
 		}
 	}
 
-	// Run records carry their own timestamps: no blame needed.
 	if trimmed, err := trimRunRecords(filepath.Join(wt, runRecordsFile), cutoff); err != nil {
 		return changed, err
 	} else if trimmed {
@@ -96,8 +78,6 @@ func (store *Store) Trim(keep time.Duration, now time.Time) (bool, error) {
 	return changed, nil
 }
 
-// Maps 1-based line numbers to their commit times.
-// Uncommitted lines are absent from the map (and therefore kept).
 func (store *Store) blameLineTimes(file string) (map[int]time.Time, error) {
 	out, err := store.worktree.Run("blame", "--line-porcelain", "--", file)
 	if err != nil {
@@ -112,10 +92,10 @@ func (store *Store) blameLineTimes(file string) (map[int]time.Time, error) {
 		t := sc.Text()
 		switch {
 		case strings.HasPrefix(t, "\t"):
-			// content line: header block for this line is complete
+
 			line = 0
 		case line == 0 && len(t) > 40 && t[40] == ' ':
-			// "<sha> <orig-line> <final-line> ..." header
+
 			fields := strings.Fields(t)
 			if len(fields) >= 3 {
 				if n, err := strconv.Atoi(fields[2]); err == nil {

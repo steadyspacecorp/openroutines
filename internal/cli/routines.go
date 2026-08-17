@@ -163,10 +163,6 @@ func parseRoutineRunArgs(args []string) (name, scenario string, writeKnowledge, 
 	return "", "", false, false, false, fmt.Errorf("%s", routinesRunUsage)
 }
 
-// Maps a routine and optional scenario to its fixture file:
-// rehearsals/<name>.md for a single fixture, or rehearsals/<name>/<scenario>.md
-// (default.md when unnamed) once a routine has more than one. No fixtures at
-// all selects the live rehearsal rather than erroring.
 func resolveRehearsal(name, scenario string) (string, error) {
 	flat := filepath.Join("rehearsals", name+".md")
 	dir := filepath.Join("rehearsals", name)
@@ -227,8 +223,6 @@ func routinesNew(args []string) int {
 	if err == nil {
 		return fail(fmt.Errorf("routine %q already exists at %s", name, existing.Path))
 	}
-	// A file that fails to load still claims its name; only "not found" clears
-	// the way to create over it.
 	if !errors.Is(err, routine.ErrNotFound) {
 		return fail(fmt.Errorf("cannot create %q: %w", name, err))
 	}
@@ -243,11 +237,6 @@ func routinesNew(args []string) int {
 	return 0
 }
 
-// Resolves the file a named routine lives in, for the two commands that act
-// on the file rather than on what it declares. A routine that fails to load
-// is exactly the one you'd want to edit or remove, so fall back to the file
-// its load error names -- unless the name is claimed by two files, where
-// picking one would be a guess.
 func routineFile(name string) (string, error) {
 	r, err := routine.Find(".", name)
 	if err == nil {
@@ -260,9 +249,6 @@ func routineFile(name string) (string, error) {
 	return "", err
 }
 
-// Validates a CLI routine argument against the name grammar. Names become
-// paths (routines/<name>.md, lock files, ledgers), so this runs before any
-// path construction.
 func routineName(arg string) (string, error) {
 	name := strings.TrimSuffix(arg, ".md")
 	if !routine.NamePattern.MatchString(name) {
@@ -307,7 +293,6 @@ func routinesEdit(args []string) int {
 	if err := cmd.Run(); err != nil {
 		return fail(err)
 	}
-	// A routine you just edited should still be valid.
 	if _, err := routine.Parse(path); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %s: %v\n", path, err)
 		return 1
@@ -371,9 +356,6 @@ func routinesRemove(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("Removed %s\n", path)
-	// Best effort: also clear scheduling state, trigger baseline, and consumer
-	// cursor from the knowledge branch, so a later routine with the same name
-	// doesn't inherit orphaned state. The ledger stays -- that's knowledge.
 	removed, _ := knowledge.NewStore(".").RemoveRoutineState(name)
 	for _, p := range removed {
 		fmt.Printf("Removed %s (commit inside knowledge/ to record it)\n", p)
@@ -397,8 +379,6 @@ func routinesList() int {
 	return 0
 }
 
-// Names every authority a routine declares -- skills, credentials, MCP
-// servers, and web access are all grants.
 func grantSummary(r *routine.Routine) []string {
 	var grants []string
 	if n := len(r.Frontmatter.Skills); n > 0 {

@@ -11,10 +11,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/creds"
 )
 
-// An unknown flag must fail the command outright, never run it as if the
-// flag had been accepted -- this is the difference between a typo that
-// errors and one that silently does nothing (or, for configure, silently
-// writes state).
 func TestUnknownFlagIsRejected(t *testing.T) {
 	dir := statusAgent(t, nil)
 	for _, tc := range []struct {
@@ -33,9 +29,6 @@ func TestUnknownFlagIsRejected(t *testing.T) {
 	}
 }
 
-// --help must short-circuit before the command does anything, wherever it
-// appears in the arguments -- `check --help` shows usage, it does not run
-// the check.
 func TestHelpFlagShowsUsageWithoutRunning(t *testing.T) {
 	dir := statusAgent(t, nil)
 	t.Chdir(dir)
@@ -49,9 +42,6 @@ func TestHelpFlagShowsUsageWithoutRunning(t *testing.T) {
 	}
 }
 
-// configure must refuse to run against a non-interactive stdin unless
-// --yes is given explicitly -- accepting EOF-as-default silently wrote
-// configuration against an unfamiliar flag like --help (issue #67).
 func TestConfigureRefusesNonInteractiveWithoutYes(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(statusAgentYAML), 0o644); err != nil {
@@ -71,7 +61,7 @@ func TestConfigureRefusesNonInteractiveWithoutYes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Close() // EOF immediately, and not a terminal
+	w.Close()
 	os.Stdin = r
 	defer func() { os.Stdin = stdin }()
 

@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// Every parseable record counts as a run; token sums and RunsReported
-// cover only records that carry tokens (absence is not zero). Model and
-// effort are the most recent record's.
 func TestAggregateUsage(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "knowledge"), 0o755); err != nil {
@@ -24,8 +21,6 @@ not json
 		t.Fatal(err)
 	}
 	rows := aggregateUsage(dir)
-	// "old" ran without reporting tokens and still counts as a run; the
-	// unparseable line is not a record at all.
 	if len(rows) != 3 || rows[0].Routine != "a" || rows[1].Routine != "b" || rows[2].Routine != "old" {
 		t.Fatalf("rows wrong: %+v", rows)
 	}
@@ -49,9 +44,6 @@ not json
 	}
 }
 
-// Runs whose runtime reported no usage still count as runs -- the table
-// shows them with blank token cells rather than pretending they did not
-// happen, which in practice sent someone hunting for missing runs.
 func TestAggregateUsageCountsRecordsWithoutTokens(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "knowledge"), 0o755); err != nil {

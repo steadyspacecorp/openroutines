@@ -11,11 +11,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/logging"
 )
 
-// Running any repo-scoped command from outside an agent repository must
-// fail with an obvious "not an agent repository" error before the command
-// gets a chance to run -- not surface as whatever the command happens to
-// read first, e.g. credentials reporting "no master key" when the wrong
-// working directory was the actual problem (#64).
 func TestRunRequiresAgentRepoBeforeCommandLogic(t *testing.T) {
 	t.Chdir(t.TempDir())
 
@@ -44,10 +39,6 @@ func TestRunRequiresAgentRepoBeforeCommandLogic(t *testing.T) {
 	}
 }
 
-// The dispatch, not the command, configures the process logger: after any
-// repo-bound command, slog's default is gated at the level the environment
-// asked for -- a new subcommand gets configured logging without ever
-// hearing of the logging package.
 func TestRunConfiguresLoggingFromEnvironment(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if code := Run([]string{"new", "agent"}); code != 0 {

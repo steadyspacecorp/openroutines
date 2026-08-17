@@ -27,8 +27,6 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
-// A mutable poll target: set() changes the served value,
-// which is what a trigger observes.
 type triggerServer struct {
 	*httptest.Server
 	mu    sync.Mutex
@@ -81,19 +79,17 @@ func TestTriggerBaselineThenFiresOnChange(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0) // register only
+	s.tickWait(ctx, t0)
 	s.tickWait(ctx, t0.Add(1*time.Minute))
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("baseline observation must not fire, got %d runs", got)
 	}
 
-	// Unchanged value: quiet.
 	s.tickWait(ctx, t0.Add(2*time.Minute))
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("unchanged value must not fire, got %d runs", got)
 	}
 
-	// Changed value: exactly one run, and the observed value is now stored.
 	srv.set("v2")
 	s.tickWait(ctx, t0.Add(3*time.Minute))
 	if got := runCount(t, dir); got != 1 {
@@ -105,9 +101,6 @@ func TestTriggerBaselineThenFiresOnChange(t *testing.T) {
 	}
 }
 
-// One interval governs polls and fires alike: a change that lands between
-// polls is caught on the next one -- delayed by at most the interval, never
-// lost -- and consecutive changes produce a steady one-run-per-interval beat.
 func TestTriggerIntervalPacesFires(t *testing.T) {
 	srv := newTriggerServer()
 	defer srv.Close()
@@ -117,24 +110,21 @@ func TestTriggerIntervalPacesFires(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0)                    // register
-	s.tickWait(ctx, t0.Add(1*time.Minute)) // baseline (poll 1)
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(1*time.Minute))
 	srv.set("v2")
 
-	// Inside the interval: no polls, no fires.
 	s.tickWait(ctx, t0.Add(2*time.Minute))
 	s.tickWait(ctx, t0.Add(3*time.Minute))
 	if srv.pollCount() != 1 || runCount(t, dir) != 0 {
 		t.Fatalf("interval violated: %d polls, %d runs", srv.pollCount(), runCount(t, dir))
 	}
 
-	// Interval elapsed: the change is caught and fires.
 	s.tickWait(ctx, t0.Add(4*time.Minute).Add(time.Second))
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("expected the delayed change to fire, got %d runs", got)
 	}
 
-	// A further change waits out the next interval, then fires again.
 	srv.set("v3")
 	s.tickWait(ctx, t0.Add(5*time.Minute))
 	if got := runCount(t, dir); got != 1 {
@@ -155,13 +145,13 @@ func TestTriggerIntervalThrottlesPolls(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0)                    // register
-	s.tickWait(ctx, t0.Add(1*time.Minute)) // poll 1 (baseline)
-	s.tickWait(ctx, t0.Add(2*time.Minute)) // within interval: no poll
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(1*time.Minute))
+	s.tickWait(ctx, t0.Add(2*time.Minute))
 	if srv.pollCount() != 1 {
 		t.Fatalf("interval violated: %d polls", srv.pollCount())
 	}
-	s.tickWait(ctx, t0.Add(3*time.Minute).Add(time.Second)) // interval elapsed: poll 2
+	s.tickWait(ctx, t0.Add(3*time.Minute).Add(time.Second))
 	if srv.pollCount() != 2 {
 		t.Fatalf("expected second poll after interval: %d", srv.pollCount())
 	}
@@ -186,9 +176,6 @@ func TestTriggerPollErrorsDoNotFire(t *testing.T) {
 	}
 }
 
-// A routine with both a schedule and a trigger: when the cron firing mints
-// the run, the trigger baseline refreshes so the same news does not fire a
-// second, redundant run right after.
 func TestScheduledRunRefreshesTriggerBaseline(t *testing.T) {
 	srv := newTriggerServer()
 	defer srv.Close()
@@ -197,24 +184,21 @@ func TestScheduledRunRefreshesTriggerBaseline(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "routines", "every-minute.md"), []byte(fm), 0o644)
 	s := newSupervisor(t, dir)
 	ctx := context.Background()
-	t0 := time.Now().Truncate(10 * time.Minute) // align to a */5 boundary
+	t0 := time.Now().Truncate(10 * time.Minute)
 
-	s.tickWait(ctx, t0.Add(30*time.Second)) // register between firings
-	s.tickWait(ctx, t0.Add(1*time.Minute))  // trigger baseline (no cron due)
-	srv.set("v2")                           // news arrives...
-	s.tickWait(ctx, t0.Add(5*time.Minute))  // ...cron firing runs, baseline refreshes to v2
+	s.tickWait(ctx, t0.Add(30*time.Second))
+	s.tickWait(ctx, t0.Add(1*time.Minute))
+	srv.set("v2")
+	s.tickWait(ctx, t0.Add(5*time.Minute))
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("expected the scheduled run, got %d", got)
 	}
-	s.tickWait(ctx, t0.Add(6*time.Minute)) // trigger sees v2 == stored v2: quiet
+	s.tickWait(ctx, t0.Add(6*time.Minute))
 	if got := runCount(t, dir); got != 1 {
 		t.Fatalf("refreshed baseline should prevent a redundant trigger run, got %d", got)
 	}
 }
 
-// A typed trigger credential is derived for each poll and cleaned up
-// immediately afterward. The stored App key never reaches the trigger
-// endpoint; only the short-lived installation token does.
 func TestTriggerDerivesTypedCredential(t *testing.T) {
 	dir := fixture(t, "ok")
 	typedYAML := agentYAML("UTC") + "credentials:\n  gh_key:\n    type: github_app\n    app_id: \"1\"\n"
@@ -285,27 +269,20 @@ func TestTriggerDerivesTypedCredential(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Truncate(time.Minute)
 
-	s.tickWait(ctx, t0)                    // register
-	s.tickWait(ctx, t0.Add(1*time.Minute)) // baseline
-	s.tickWait(ctx, t0.Add(2*time.Minute)) // unchanged observation
+	s.tickWait(ctx, t0)
+	s.tickWait(ctx, t0.Add(1*time.Minute))
+	s.tickWait(ctx, t0.Add(2*time.Minute))
 	if polls != 2 || mints != 2 || revocations != 2 {
 		t.Fatalf("poll lifecycle = %d polls, %d mints, %d revocations; want 2 each", polls, mints, revocations)
 	}
 	if got := runCount(t, dir); got != 0 {
 		t.Fatalf("unchanged polls must not fire, got %d runs", got)
 	}
-	// Revoked and released: a trigger derives every interval, so its
-	// material must leave the registry with cleanup rather than accumulate.
-	// Redaction while the material is live is pinned where the mint happens
-	// (creds).
 	if got := scrub.Redacted("derived-installation-token"); got != "derived-installation-token" {
 		t.Fatalf("released bearer must leave the scrub registry, got %q", got)
 	}
 }
 
-// A trigger credential the routine's own credentials list does not grant is
-// refused before it is materialized -- the rule `check` errors on, enforced
-// again at runtime.
 func TestTriggerRefusesUnlistedCredential(t *testing.T) {
 	srv := newTriggerServer()
 	defer srv.Close()

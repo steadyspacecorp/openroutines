@@ -49,9 +49,6 @@ func TestFetchOriginSnapshotDoesNotAdoptLocalKnowledge(t *testing.T) {
 	}
 }
 
-// The export must leave the agent repository exactly as it found it: the
-// checkout that writes the snapshot's files also writes the index it finds,
-// which without a scratch index stages the whole branch there.
 func TestFetchOriginSnapshotLeavesRepositoryStateUntouched(t *testing.T) {
 	a, b := twoClones(t)
 	writeKnowledge(t, a, "events.md", "remote fact\n")

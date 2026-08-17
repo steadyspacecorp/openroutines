@@ -16,13 +16,8 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/run"
 )
 
-// Mirrors the tokens object run records carry.
 type usageTokens = run.Tokens
 
-// One routine's aggregate over the records the retention window keeps. Runs
-// counts every recorded run; the token sums and RunsReported cover only runs
-// whose runtime reported usage. Model and effort are the most recently
-// recorded values, not a per-run breakdown.
 type usageRow struct {
 	Routine      string      `json:"routine"`
 	Runs         int         `json:"runs"`
@@ -33,8 +28,6 @@ type usageRow struct {
 	Effort       string      `json:"effort,omitempty"`
 }
 
-// cost_reported is opencode's own cost estimate -- informational, since
-// prices drift; tokens with model and effort are the durable record.
 const usageUsage = "usage: openroutines usage [--json]"
 
 func cmdUsage(args []string) int {
@@ -68,8 +61,6 @@ func cmdUsage(args []string) int {
 	}
 
 	if len(rows) == 0 {
-		// A fresh clone of a running agent also reads as "no runs", but the
-		// records exist on origin and won't materialize locally on their own.
 		if st := knowledge.NewStore(".").Status(); !st.Materialized && st.RemoteKnowledge {
 			fmt.Println("knowledge is not materialized in this checkout -- run openroutines sync to adopt the agent's records from origin")
 		} else {
@@ -88,8 +79,6 @@ func cmdUsage(args []string) int {
 	return 0
 }
 
-// Names the window usage aggregates over, so the header reads "last 30 days"
-// instead of the retention term of art.
 func retentionLabel(dir string) string {
 	retention := config.DefaultRetention
 	if agent, err := config.Load(dir); err == nil {
@@ -107,18 +96,12 @@ func retentionLabel(dir string) string {
 	return fmt.Sprintf("last %s, since %s", span, time.Now().Add(-retention).Format("January 2, 2006"))
 }
 
-// Names the gap between what this checkout has and what origin holds, so a
-// stale worktree doesn't read as a quiet zero.
 func printKnowledgeLag(dir string) {
 	if st := knowledge.NewStore(dir).Status(); st.Behind > 0 {
 		fmt.Printf("\n%s these numbers read local knowledge/, %d commit(s) behind origin/%s as of your last fetch -- run openroutines sync to count the latest runs\n", warnMark, st.Behind, knowledge.Branch)
 	}
 }
 
-// Folds runs.jsonl into per-routine rows, sorted by name. Every parseable
-// record counts as a run; the token sums and RunsReported cover only records
-// that carry a tokens object -- older releases, native dev runs, and
-// unreported usage count as runs without contributing sums.
 func aggregateUsage(dir string) []usageRow {
 	raw, err := os.ReadFile(filepath.Join(knowledge.NewStore(dir).Worktree(), "runs.jsonl"))
 	if err != nil {
@@ -168,11 +151,6 @@ func totalUsage(rows []usageRow) usageRow {
 	return t
 }
 
-// Renders the rows and the total as aligned columns, numbers right-aligned
-// under a dim header. A routine whose runs never reported usage keeps blank
-// token cells rather than misreading as zero. Columns no row has --
-// reasoning, cache traffic, cost, model -- are dropped whole rather than
-// printed empty.
 func printUsageTable(rows []usageRow, total usageRow) {
 	all := append(slices.Clone(rows), total)
 	var hasReasoning, hasCache, hasCost, hasModel bool
@@ -251,7 +229,6 @@ func printUsageTable(rows []usageRow, total usageRow) {
 		}
 	}
 
-	// Pad before styling: escape bytes inside would count toward the width.
 	pad := func(i int, v string) string {
 		if leftAligned[i] {
 			return fmt.Sprintf("%-*s", widths[i], v)
@@ -277,7 +254,6 @@ func printUsageTable(rows []usageRow, total usageRow) {
 	}
 }
 
-// Keeps counts scannable: 812, 13.8k, 2.1M.
 func formatTokens(n int64) string {
 	switch {
 	case n >= 1_000_000:

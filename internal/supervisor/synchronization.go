@@ -48,21 +48,16 @@ func (s *Supervisor) syncOnce() {
 	}
 }
 
-// Records in knowledge that a routine stopped loading and,
-// later, that it loads again. Events rather than tasks: a broken file heals
-// by being edited, so there is nothing for a person to close. Unattributed
-// failures are left out -- abandonment already files a task for each.
+// Broken files heal by editing, so load failures are events rather than
+// human-owned tasks; unattributed failures stay in the log.
 func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	failing := map[string]string{}
 	for _, e := range errs {
 		var re *routine.Error
 		if !errors.As(e, &re) {
-			// No per-routine identity to dedupe by, so this logs every tick
-			// it persists.
 			slog.Warn("routine load error", "error", e)
 			continue
 		}
-		// The event is read in the repository, where the path is relative.
 		failing[re.Name] = strings.TrimPrefix(e.Error(), s.Dir+string(filepath.Separator))
 	}
 
@@ -98,10 +93,8 @@ func (s *Supervisor) reportLoadFailures(errs []error, now time.Time) {
 	s.pushBestEffort()
 }
 
-// Records a blocking condition when it first appears, as a
-// human-owned task -- only a person can clear it. The task id is date-scoped
-// so a restart doesn't re-record it, and the BLOCKED line announces the onset
-// once rather than every tick.
+// A blocker is a human-owned task -- only a person can clear it. The
+// date-scoped id prevents a restart from re-recording the same onset.
 func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 	if *warned {
 		return
@@ -119,21 +112,18 @@ func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 	if aerr := s.store.AppendHumanTask(taskID, fmt.Sprintf("%s (source: supervisor; added %s)", msg, date)); aerr != nil {
 		slog.Warn("could not record the supervisor blocker in knowledge -- this log line is the only copy",
 			"kind", kind, "task_id", taskID, "error", aerr)
-		*warned = false // retry on the next tick
+		*warned = false
 		return
 	}
 	if _, cerr := s.store.Commit("Record supervisor blocker"); cerr != nil {
 		slog.Warn("could not record the supervisor blocker in knowledge -- this log line is the only copy",
 			"kind", kind, "task_id", taskID, "error", cerr)
-		*warned = false // retry on the next tick
+		*warned = false
 		return
 	}
 	s.pushBestEffort()
 }
 
-// Clears a blocker whose condition has healed: any open task-<kind>-*
-// is completed in place. Runs every healthy tick and matches by id prefix, so
-// it also heals blockers raised before a restart.
 func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	*warned = false
 	changed, err := s.store.ResolveHumanTasks("task-"+kind+"-",

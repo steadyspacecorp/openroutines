@@ -84,9 +84,6 @@ func TestStatusReportsCredentialStoreErrors(t *testing.T) {
 	}
 }
 
-// A routine mid-retry or sitting out a circuit-breaker cool-down must not
-// render like a healthy one -- least of all with a next-fire time it will not
-// honor.
 func TestStatusShowsSchedulingState(t *testing.T) {
 	now := time.Now().UTC()
 	dir := statusAgent(t, map[string]string{
@@ -124,21 +121,16 @@ func TestStatusShowsSchedulingState(t *testing.T) {
 			t.Fatalf("status missing %q:\n%s", want, out)
 		}
 	}
-	// The cooling-down routine fires every five minutes; printing a next time
-	// it will not honor is the bug this replaces.
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "  flaky") && strings.Contains(line, "next") {
 			t.Fatalf("a cooling-down routine must not advertise a next firing: %q", line)
 		}
 	}
-	// A routine the supervisor has never seen has nothing to report.
 	if n := strings.Count(out, "watermark "); n != 2 {
 		t.Fatalf("expected watermarks for the two routines with state, got %d:\n%s", n, out)
 	}
 }
 
-// A spent attempt budget is settled by the next tick, not retried -- saying
-// "next attempt" there would be a time that never arrives.
 func TestStatusReportsSpentAttemptBudget(t *testing.T) {
 	now := time.Now().UTC()
 	dir := statusAgent(t, map[string]string{
@@ -162,11 +154,6 @@ func TestStatusReportsSpentAttemptBudget(t *testing.T) {
 	}
 }
 
-// The tick skips a routine that is inactive or declares neither a schedule nor
-// a trigger, before it ever reads the state -- so a pending run left on one is
-// going nowhere, and naming a next attempt would be the same lie the
-// cool-down case fixes. The cool-down's end has to appear on the breaker line
-// itself: the header clause that used to carry it prints only when active.
 func TestStatusHoldsPendingTheSupervisorWillNotAdvance(t *testing.T) {
 	now := time.Now().UTC()
 	dir := statusAgent(t, map[string]string{
@@ -195,16 +182,11 @@ func TestStatusHoldsPendingTheSupervisorWillNotAdvance(t *testing.T) {
 	if strings.Contains(out, "next attempt") {
 		t.Fatalf("a routine the supervisor skips must not promise an attempt:\n%s", out)
 	}
-	// "until then" with no antecedent: the header says only "inactive" here.
 	if !strings.Contains(out, "no new run starts until "+now.Add(2*time.Hour).Format("Mon 15:04")) {
 		t.Fatalf("the breaker line must carry the cool-down's end:\n%s", out)
 	}
 }
 
-// Reserving an attempt and failing one leave identical state on disk, so the
-// state file alone cannot say whether a run is executing. The run record,
-// written at settlement, is what distinguishes them -- and absent a log to
-// read, the retry rendering is the safe answer rather than a false "in flight".
 func TestStatusDistinguishesAnAttemptInFlight(t *testing.T) {
 	now := time.Now().UTC()
 	routines := map[string]string{
@@ -225,7 +207,6 @@ func TestStatusDistinguishesAnAttemptInFlight(t *testing.T) {
 		for _, st := range states {
 			saveState(t, dir, st)
 		}
-		// Only backoff's attempt settled.
 		writeRunLog(t, dir, `{"run_id":"run_backoffaaa","routine":"backoff","attempt":2,"outcome":"failed"}`)
 
 		out := capture(t, dir, func() { cmdStatus(nil) })
@@ -253,8 +234,6 @@ func TestStatusDistinguishesAnAttemptInFlight(t *testing.T) {
 	})
 }
 
-// A pending run whose retry is already due, or which no attempt has touched,
-// must not print a past time under the word "next".
 func TestStatusReportsAnOverdueAttemptAsDue(t *testing.T) {
 	now := time.Now().UTC()
 	dir := statusAgent(t, map[string]string{
@@ -273,8 +252,6 @@ func TestStatusReportsAnOverdueAttemptAsDue(t *testing.T) {
 	}
 }
 
-// A held run is old by definition -- that is why it is on screen -- so the
-// stamp has to stay unambiguous past the week that a weekday name covers.
 func TestStampWidensAsTimesGetDistant(t *testing.T) {
 	now := time.Date(2026, 7, 29, 14, 30, 0, 0, time.UTC)
 	for _, c := range []struct {
@@ -291,8 +268,6 @@ func TestStampWidensAsTimesGetDistant(t *testing.T) {
 	}
 }
 
-// Web access and MCP servers are authorities like skills and credentials; the
-// surfaces that answer "what can this routine reach" have to name them all.
 func TestGrantSurfacesNameEveryAuthority(t *testing.T) {
 	dir := statusAgent(t, map[string]string{
 		"reach": "---\nschedule: \"0 9 * * *\"\nskills: []\ncredentials: [api_token]\nmcp: [feed]\nwebfetch: true\nwebsearch: true\n---\nReach out.\n",

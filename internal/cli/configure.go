@@ -14,7 +14,6 @@ import (
 
 const configureUsage = "usage: openroutines configure [--yes]"
 
-// Interactively fills in openroutines.yml. Idempotent: existing values are defaults.
 func cmdConfigure(args []string) int {
 	positional, flags, help, err := parseFlags(args, map[string]flagSpec{"--yes": {}})
 	if err != nil {

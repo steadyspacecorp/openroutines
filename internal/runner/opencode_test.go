@@ -51,8 +51,6 @@ func TestLocalContainerCanWriteTheWholeWorkspace(t *testing.T) {
 	}
 }
 
-// A stand-in opencode that prints the environment it was
-// handed instead of doing any work.
 const reportEnv = `#!/bin/sh
 echo "HOME=$HOME"
 echo "XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
@@ -62,15 +60,12 @@ echo "ROUTINE_SECRET=${ROUTINE_SECRET-unset}"
 [ -f cwd-marker ] && echo "CWD=workspace"
 `
 
-// Capture re-enters the attempt's world to read its session store, but routine
-// credentials do not return with it.
 func TestHostCaptureUsesTheAttemptHomeWithoutCredentials(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("OPENROUTINES_DISABLE_SANDBOX", "1")
 	if err := os.WriteFile(filepath.Join(ws, "cwd-marker"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// What a prompt-injected routine would leave behind for capture to load.
 	writeMsg(t, filepath.Join(ws, ".home", ".config", "opencode", "plugin"), "evil.js", "export const Evil = async () => ({})")
 	fakeBin(t, "opencode", reportEnv)
 
@@ -100,12 +95,6 @@ func TestHostCaptureUsesTheAttemptHomeWithoutCredentials(t *testing.T) {
 	}
 }
 
-// Stands in for opencode's real defect: its CLI calls
-// process.exit() before an async stdout write drains, and stream writes to
-// a pipe are asynchronous, so a large payload through a pipe arrives cut
-// short with exit code 0 -- while writes to a file are synchronous and
-// arrive whole. The stand-in cuts deterministically where the real race
-// cuts sometimes: an exec that hands opencode a pipe fails these tests.
 const truncateOnPipe = `#!/bin/sh
 if [ -p /dev/stdout ]; then printf '{"messages":[{"in'; else printf '{"messages":[]}'; fi
 `
@@ -133,17 +122,11 @@ func TestNativeCaptureSurvivesOpencodesLossyPipeWrites(t *testing.T) {
 	}
 }
 
-// Stands in for the docker client: it records its arguments in
-// the workspace file the exec reads back -- the container's own stdout
-// route is a pipe, so nothing the exec returns may come from there -- and
-// says something on stdout to prove that stream is ignored.
 func fakeDocker(t *testing.T, ws string) {
 	t.Helper()
 	fakeBin(t, "docker", "#!/bin/sh\necho pipe-noise\nfor a in \"$@\"; do echo \"$a\"; done > "+ws+"/"+captureOutName+"\n")
 }
 
-// Local capture re-enters the same disposable container world as the run,
-// without forwarding the run's credential environment.
 func TestContainerCaptureUsesTheAttemptHomeWithoutCredentials(t *testing.T) {
 	ws := t.TempDir()
 	fakeDocker(t, ws)
@@ -177,9 +160,6 @@ func TestContainerCaptureUsesTheAttemptHomeWithoutCredentials(t *testing.T) {
 	}
 }
 
-// The workspace is model-written, so a symlink the attempt planted at the
-// landing path must not decide where the redirect writes or what the read
-// returns.
 func TestContainerCaptureClearsAPlantedLandingFile(t *testing.T) {
 	ws := t.TempDir()
 	victim := filepath.Join(t.TempDir(), "victim")
@@ -199,12 +179,6 @@ func TestContainerCaptureClearsAPlantedLandingFile(t *testing.T) {
 	}
 }
 
-// Local capture accepts that a planted workspace plugin runs inside the
-// capture container, bounded by the container.
-// Swapping the landing file for an absolute symlink mid-exec must not
-// breach that bound by walking the host filesystem with the supervisor's
-// eyes: the read must come from the descriptor opened before the exec,
-// never from re-resolving the model-writable path.
 func TestContainerCaptureIgnoresALandingFileSwappedMidExec(t *testing.T) {
 	ws := t.TempDir()
 	secret := filepath.Join(t.TempDir(), "secret")
@@ -223,10 +197,6 @@ func TestContainerCaptureIgnoresALandingFileSwappedMidExec(t *testing.T) {
 	}
 }
 
-// Capture stderr exists to explain a failure, and untrusted code can write
-// to it for the whole timeout (a workspace plugin under local capture), so
-// only a bounded tail is kept -- the end of the stream, where the
-// explanation lands.
 func TestCaptureKeepsOnlyTheTailOfStderr(t *testing.T) {
 	fakeBin(t, "opencode", `#!/bin/sh
 i=0

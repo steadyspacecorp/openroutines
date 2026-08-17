@@ -32,9 +32,6 @@ Waiting on a human
 
 Prefer concrete names, dates, links, and task ids already in the records. Do not infer that planned work happened, invent missing status, or replay the whole history.`
 
-// Runs one ephemeral model call over a fetched knowledge tree. It reuses the
-// ordinary attempt sandbox and provider-auth path, but has no routine grants
-// and no settlement path; the prompt forbids writes and external actions.
 func SummarizeKnowledge(dir, snapshotDir, commit string, since, through time.Time, recent string, out io.Writer) (result *AttemptResult, err error) {
 	agent, err := config.Load(dir)
 	if err != nil {

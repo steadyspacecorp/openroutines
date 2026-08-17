@@ -73,10 +73,6 @@ var devices = []string{
 	"/dev/tty", "/dev/ptmx", "/dev/pts",
 }
 
-// Command wraps argv in a Landlock domain granting the same OS bubblewrap
-// grants plus this attempt's own paths, by re-executing this binary as the
-// shim. This process's own path, not a lookup: an attempt is confined by the
-// code that spawned it, never by whatever `openroutines` is on PATH.
 func (landlockDomain) Command(workspace string, argv ...string) (*exec.Cmd, error) {
 	if err := validateWorkspace(workspace); err != nil {
 		return nil, err
@@ -106,10 +102,6 @@ func (landlockDomain) Command(workspace string, argv ...string) (*exec.Cmd, erro
 	return cmd, nil
 }
 
-// ExecConfined applies the rules named in args to this process and execs the
-// rest, replacing itself. Exported for the CLI verb, and reached by the sandbox
-// tests through the same entry point so the code that confines a real run is
-// the code under test.
 func ExecConfined(args []string) error {
 	var ro, rw []string
 	for len(args) > 0 {
@@ -183,11 +175,6 @@ func confine(ro, rw []string) error {
 	return cfg.RestrictScoped()
 }
 
-// Turns one path into a Landlock rule, or reports there is nothing to grant. A
-// missing path is skipped rather than fatal, the same tolerance bubblewrap's
-// --ro-bind-try gives: one image's layout should not become a requirement.
-// Rights follow what the path is -- Landlock rejects a directory right on a
-// regular file, and the ioctl right a terminal needs applies only to devices.
 func grant(path string, write bool) (landlock.Rule, bool) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -196,9 +183,9 @@ func grant(path string, write bool) (landlock.Rule, bool) {
 	if info.IsDir() {
 		if write {
 			rule := landlock.RWDirs(path)
-			// The pty slave is created beneath this directory, so its ioctl
-			// permission must come from the directory rule rather than a file rule.
 			if path == "/dev/pts" {
+				// The pty slave is created beneath this directory, so its ioctl
+				// permission must come from the directory rule rather than a file rule.
 				rule = rule.WithIoctlDev()
 			}
 			return rule, true

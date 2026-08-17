@@ -34,9 +34,6 @@ Usage:
 Run any command from inside an agent repository (except new).
 `
 
-// new is exempt from the agent-repo check below because it creates the
-// repository; sandbox-exec because it is the supervisor re-entering its own
-// binary to confine one attempt, not something anyone types.
 var commands = map[string]func([]string) int{
 	"new":               cmdNew,
 	"configure":         cmdConfigure,
@@ -58,9 +55,6 @@ var commands = map[string]func([]string) int{
 	sandbox.ShimCommand: cmdSandboxExec,
 }
 
-// Confines this process and execs the run it was handed, never returning on
-// success: the model process replaces it, keeping the pid the supervisor is
-// already waiting on.
 func cmdSandboxExec(args []string) int {
 	if err := sandbox.ExecConfined(args); err != nil {
 		return fail(err)
@@ -95,15 +89,11 @@ func Run(args []string) int {
 		return 2
 	}
 
-	// Asserting the agent-repo check here, before command-specific logic runs,
-	// turns a wrong-directory mistake into an obvious message instead of a
-	// confusing failure deep in whatever that command reads first (#64).
 	if !repoOptional[cmd] {
 		if _, err := os.Stat(config.Path(".")); err != nil {
 			return fail(fmt.Errorf("not an agent repository (no %s found)", config.FileName))
 		}
 		setupLogging(".")
-		// check already names the mismatch itself; avoid printing it twice.
 		if cmd != "check" {
 			warnOnPinMismatch(".")
 		}
@@ -112,10 +102,6 @@ func Run(args []string) int {
 	return handler(rest)
 }
 
-// Flags a binary that doesn't match the agent's pinned framework version --
-// otherwise a schema mismatch surfaces as a confusing field-level error
-// buried in a command's own output. Source builds are exempt: development
-// runs against pinned agents on purpose.
 func warnOnPinMismatch(dir string) {
 	pin, err := readVersionPin(dir)
 	if err != nil {
@@ -126,10 +112,6 @@ func warnOnPinMismatch(dir string) {
 	}
 }
 
-// Assigns the process logger's level and timezone from the agent's
-// configuration before any command runs. Best effort: a broken config or
-// timezone keeps the load-time defaults so `check` can still run and name
-// the problem itself.
 func setupLogging(dir string) {
 	agent, err := config.Load(dir)
 	if err != nil {

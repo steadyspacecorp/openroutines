@@ -1,8 +1,3 @@
-// The attempt's sessions are opencode's own record of the run, fetched once
-// after the model process exits. captureSessions distills token usage and
-// whether the run really finished; exportSessions preserves the same payloads
-// verbatim into operator storage.
-
 package runner
 
 import (
@@ -18,7 +13,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/scrub"
 )
 
-// Renders captured usage for an immediate, ephemeral call.
 func FormatUsage(u *Usage) string {
 	if u == nil {
 		return "usage unavailable"
@@ -44,38 +38,20 @@ func formatUsageTokens(n int64) string {
 	}
 }
 
-// One attempt's token consumption, summed from the assistant
-// messages of the attempt's opencode session. CostReported is opencode's
-// own estimate -- informational; tokens with the model and effort are the
-// durable record, and dollars derive at read time.
 type Usage = run.Tokens
 
-// What the run record keeps from the attempt's sessions. Usage is
-// nil when the runtime didn't report -- never zero. Failure is empty unless
-// the record positively says the session ended badly.
 type Capture struct {
 	Usage   *Usage
 	Failure string
 }
 
-// One session's export payload, complete JSON as opencode
-// rendered it. Fetched once and shared: capture reads its messages, export
-// writes it verbatim.
 type sessionExport struct {
 	id  string
 	raw []byte
 }
 
-// Runs one opencode subcommand in the attempt's context and
-// returns its stdout -- satisfied by the opencode runtime's exec method.
 type opencodeExec func(args ...string) ([]byte, error)
 
-// Asks opencode for the attempt's sessions, in list order --
-// most-recently-updated first (verified against 1.18.3), so the first export
-// belongs to the session that acted last. Top-level sessions only: a
-// subagent's child session is invisible to the CLI. A non-nil error means a
-// partial read; the exports that arrived are still returned. No sessions is
-// (nil, nil).
 func fetchSessions(oc opencodeExec, log *slog.Logger) ([]sessionExport, error) {
 	raw, err := completeJSON(oc, log, "session", "list", "--format", "json")
 	if err != nil {
@@ -105,10 +81,6 @@ func fetchSessions(oc opencodeExec, log *slog.Logger) ([]sessionExport, error) {
 	return exports, firstErr
 }
 
-// Runs one opencode subcommand expected to print a JSON
-// document, refusing a truncated one -- the backstop behind runToFile for
-// any surface the file cannot cover. The loss is a race, so one retry
-// usually returns the whole document.
 func completeJSON(oc opencodeExec, log *slog.Logger, args ...string) ([]byte, error) {
 	raw, err := oc(args...)
 	if err != nil {
@@ -128,8 +100,6 @@ func completeJSON(oc opencodeExec, log *slog.Logger, args ...string) ([]byte, er
 	return nil, fmt.Errorf("opencode %s returned truncated JSON twice (%d bytes)", strings.Join(args, " "), len(raw))
 }
 
-// Distills the fetched sessions. Bookkeeping must never fail a run, so an
-// unreadable export fails open.
 func captureSessions(exports []sessionExport, log *slog.Logger) Capture {
 	sessions, err := sessionMessages(exports)
 	if err != nil {
@@ -142,8 +112,6 @@ func captureSessions(exports []sessionExport, log *slog.Logger) Capture {
 	return summarize(sessions)
 }
 
-// Reads each export's message records, one group per
-// session in fetch order.
 func sessionMessages(exports []sessionExport) ([][]assistantInfo, error) {
 	var groups [][]assistantInfo
 	for _, s := range exports {
@@ -164,14 +132,8 @@ func sessionMessages(exports []sessionExport) ([][]assistantInfo, error) {
 	return groups, nil
 }
 
-// The finish reason opencode records for an assistant message
-// that ended its turn because the model was done -- as opposed to one that
-// ended a step to call tools and never came back.
 const finishStop = "stop"
 
-// Folds the sessions into the Capture. Usage sums every session;
-// the outcome is judged from the first-listed session alone -- a clean
-// ending in an older session must not vouch for the one that held the run.
 func summarize(sessions [][]assistantInfo) Capture {
 	var s Capture
 	var u Usage
@@ -195,10 +157,6 @@ func summarize(sessions [][]assistantInfo) Capture {
 	return s
 }
 
-// Reads whether one session ended the way a finished run ends, on
-// positive evidence only: an errored message, or finish reasons with no
-// finished turn. A record that says nothing leaves the process's own verdict
-// standing -- failing closed here would fail every run on the agent.
 func judge(msgs []assistantInfo) string {
 	finished := false
 	lastFinish := ""
@@ -220,10 +178,6 @@ func judge(msgs []assistantInfo) string {
 	return ""
 }
 
-// The slice of an opencode message record the capture
-// reads, measured against the real 1.18.3 runtime. Errored messages carry no
-// `finish` at all, which is why the error check is not folded into the
-// finish one.
 type assistantInfo struct {
 	Role   string `json:"role"`
 	Tokens *struct {
@@ -240,8 +194,6 @@ type assistantInfo struct {
 	Error  *namedError `json:"error"`
 }
 
-// Opencode's error shape on a message: a tagged name with the
-// provider's own message under data, when there is one.
 type namedError struct {
 	Name string `json:"name"`
 	Data struct {
@@ -256,8 +208,6 @@ func (e *namedError) describe() string {
 	return e.Name
 }
 
-// Folds one assistant message into the sum, reporting whether it
-// counted.
 func (m assistantInfo) addTo(u *Usage) bool {
 	if m.Tokens == nil {
 		return false
@@ -271,17 +221,12 @@ func (m assistantInfo) addTo(u *Usage) bool {
 	return true
 }
 
-// Designates operator storage for session history: when set, sessions land
-// directly in this directory whatever the outcome. An env var, not
-// configuration -- storage is wired up where the container is defined, not
-// in the repo.
+// Operator storage is wired where the container is defined, not in the repo;
+// exports land there whatever the attempt's outcome.
 const EnvSessionDir = "OPENROUTINES_SESSION_DIR"
 
 const sessionTimestampLayout = "20060102T150405Z"
 
-// Saves the attempt's session history into operator storage. The writes run
-// in the supervisor's process, so the model process never touches the volume.
-// Best-effort throughout -- broken storage must never fail the run.
 func exportSessions(exports []sessionExport, routineName, runID string, log *slog.Logger) {
 	root := os.Getenv(EnvSessionDir)
 	if root == "" || len(exports) == 0 {

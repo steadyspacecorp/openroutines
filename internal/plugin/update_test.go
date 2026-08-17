@@ -22,9 +22,6 @@ func writeTree(t *testing.T, root string, files map[string]string) {
 	}
 }
 
-// Creates an upstream plugin repository and installs it into a
-// fresh agent, exactly as plugin add does: fetched from a clone, with real
-// provenance.
 func updateFixture(t *testing.T) (agent, repo string) {
 	t.Helper()
 	repo = t.TempDir()
@@ -61,9 +58,6 @@ func TestPrepareUpdateReportsCurrent(t *testing.T) {
 	}
 }
 
-// A clean update three-way merges: local edits survive, upstream edits land,
-// routines new since the recorded revision arrive deactivated, and provenance
-// advances to the new revision.
 func TestUpdateMergesLocalEditsAndDeactivatesNewRoutines(t *testing.T) {
 	agent, repo := updateFixture(t)
 	installedRoutine := filepath.Join(agent, ".openroutines", "plugins", "demo", "routines", "demo.md")
@@ -121,8 +115,6 @@ func TestUpdateMergesLocalEditsAndDeactivatesNewRoutines(t *testing.T) {
 	}
 }
 
-// A conflicted update leaves the markers in place for the person to resolve
-// and keeps the recorded revision, so rerunning the update converges.
 func TestUpdateConflictKeepsRecordedRevision(t *testing.T) {
 	agent, repo := updateFixture(t)
 	installedRoutine := filepath.Join(agent, ".openroutines", "plugins", "demo", "routines", "demo.md")
@@ -161,8 +153,6 @@ func TestUpdateConflictKeepsRecordedRevision(t *testing.T) {
 	}
 }
 
-// A plugin update may add a routine shadowed by an agent-owned routine; the
-// vendored update lands normally and the agent-owned implementation wins.
 func TestUpdateAllowsAgentOwnedRoutineOverride(t *testing.T) {
 	agent, repo := updateFixture(t)
 	writeTree(t, repo, map[string]string{

@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// teamwork: off is enforced at import, not just instructed: a staged change
-// to events.md is discarded (worktree copy wins) while the rest imports.
 func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
 	setup := func(t *testing.T) (string, *AttemptWorkspace) {
 		t.Helper()
@@ -56,8 +54,6 @@ func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
 	}
 }
 
-// Builds a real agent repo with a materialized knowledge worktree:
-// Settle's commit step needs actual git.
 func settleFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -72,9 +68,6 @@ func settleFixture(t *testing.T) string {
 	return dir
 }
 
-// A new reporting routine's change set is empty by construction. Its first
-// successful run must still persist the current boundary, or every later run
-// is another "first run" that skips forward and receives nothing forever.
 func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	dir := settleFixture(t)
 	store := knowledge.NewStore(dir)
@@ -106,8 +99,6 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 		t.Fatalf("bootstrap cursor = %+v, err = %v; want %s by run_first", cursor, err, through)
 	}
 
-	// Once initialized, successful completion alone must not consume real
-	// pending changes: the explicit marker remains the delivery receipt.
 	newBoundary, err := store.Head()
 	if err != nil {
 		t.Fatal(err)
@@ -121,10 +112,6 @@ func TestSettleBootstrapsAnEmptyConsumerCursor(t *testing.T) {
 	}
 }
 
-// A completed attempt whose staged knowledge is rejected settles as crashed --
-// in the returned outcome, the failure event, the run record, and the
-// settlement commit alike. The run record saying "completed" while the run
-// was reported crashed is the divergence Settle exists to prevent.
 func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
 	dir := settleFixture(t)
 	staging := &AttemptWorkspace{KnowledgeDir: t.TempDir()}
@@ -152,8 +139,6 @@ func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
 	}
 }
 
-// A clean completion imports staged knowledge, runs the caller's stage hook
-// before the settlement commit (so its writes ride along), and commits.
 func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 	dir := settleFixture(t)
 	store := knowledge.NewStore(dir)
@@ -182,7 +167,6 @@ func TestSettleImportsAndCommitsCompletedRun(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(wt, "ledgers", "x.md")); string(got) != "worked\n" {
 		t.Fatalf("staged knowledge not imported: %q", got)
 	}
-	// The stage hook's write is inside the settlement commit, not left dirty.
 	if changed, _ := exec.Command("git", "-C", wt, "status", "--porcelain").Output(); len(changed) != 0 {
 		t.Fatalf("worktree dirty after settlement: %s", changed)
 	}
@@ -226,12 +210,10 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 	if staging.Consumed() {
 		t.Fatal("Consumed() true with no marker anywhere")
 	}
-	// Only the canonical receipt inside staged knowledge counts.
 	os.WriteFile(filepath.Join(staging.KnowledgeDir, knowledge.ConsumeMarker), nil, 0o644)
 	if !staging.Consumed() {
 		t.Fatal("marker in staged knowledge not honored")
 	}
-	// It is a receipt for the runtime, not knowledge content: import drops it.
 	r := &routine.Routine{Name: "report", Frontmatter: routine.Frontmatter{Reports: true}}
 	if _, _, err := importKnowledge(dir, r, staging); err != nil {
 		t.Fatal(err)
@@ -246,8 +228,6 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 	}
 }
 
-// The record carries model, effort, and per-attempt tokens when present,
-// and omits them -- never zeroes -- when the runtime didn't report.
 func TestRecordJSONUsage(t *testing.T) {
 	r := &routine.Routine{Name: "x"}
 	attempt := Attempt{RunID: "run_1"}

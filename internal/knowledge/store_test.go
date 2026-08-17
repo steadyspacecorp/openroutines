@@ -25,10 +25,6 @@ func deployKey(t *testing.T) string {
 	return string(raw)
 }
 
-// Removing a routine must remove every per-routine state file, subdirectories
-// included: a leftover trigger baseline means a re-created routine with the
-// same name never fires on its first genuine change, and a leftover cursor
-// replays or skips a change set.
 func TestRemoveRoutineStateCoversAllSubtrees(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
@@ -66,7 +62,6 @@ func TestRemoveRoutineStateCoversAllSubtrees(t *testing.T) {
 		}
 	}
 
-	// Idempotent, and quiet when there is no state at all.
 	if removed, err := store.RemoveRoutineState("x"); err != nil || len(removed) != 0 {
 		t.Fatalf("second removal: %v, %v", removed, err)
 	}
@@ -75,8 +70,6 @@ func TestRemoveRoutineStateCoversAllSubtrees(t *testing.T) {
 	}
 }
 
-// A second clone (a new container generation) must adopt the existing knowledge
-// branch from origin instead of minting a fresh root.
 func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	base := t.TempDir()
 	run := func(dir string, args ...string) string {
@@ -92,7 +85,6 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 	bare := filepath.Join(base, "origin.git")
 	run(base, "git", "init", "-q", "-b", "main", "--bare", bare)
 
-	// Generation 1: create knowledge, write a fact, push.
 	a := filepath.Join(base, "a")
 	run(base, "git", "clone", "-q", bare, a)
 	os.WriteFile(filepath.Join(a, "x.txt"), []byte("x"), 0o644)
@@ -110,7 +102,6 @@ func TestEnsureWorktreeAdoptsOriginBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Generation 2: fresh clone (no local knowledge branch), must adopt.
 	b := filepath.Join(base, "b")
 	run(base, "git", "clone", "-q", bare, b)
 	if err := NewStore(b).Ensure(); err != nil {
@@ -240,8 +231,6 @@ func TestDeployedRestartPreservesUnpushedKnowledge(t *testing.T) {
 	}
 }
 
-// Unknown remote state must not authorize a new durable lineage: if origin
-// already has knowledge, a local root would fork it permanently.
 func TestEnsureRefusesWhenOriginUnreachable(t *testing.T) {
 	dir := t.TempDir()
 	gitT(t, dir, "init", "-q", "-b", "main", dir)

@@ -1,7 +1,7 @@
 // Redacts secret values from text and byte streams before they
-// leave the process. Defense in depth: exact-value matching only (design
-// decision "Credentials", rule 3) -- the primary protection is that
-// undeclared secrets never enter the process. One process-wide registry:
+// leave the process. Defense in depth: exact-value matching only -- the primary
+// protection is that undeclared secrets never enter the process. One
+// process-wide registry:
 // code that materializes a secret calls Register, and every consumer (log
 // writer, run output stream, knowledge appends) redacts from the same set.
 package scrub
@@ -72,7 +72,6 @@ func RegisterEphemeral(name, value string) (release func()) {
 	}
 }
 
-// Replaces every registered secret value in s with [REDACTED:name].
 func Redacted(s string) string {
 	for _, e := range *process.Load() {
 		if e.value == "" {
@@ -83,8 +82,6 @@ func Redacted(s string) string {
 	return s
 }
 
-// Redacts registered secret values from a byte stream, line by line,
-// reading the registry as of each write -- a stream outlives registration.
 type Writer struct {
 	dst io.Writer
 	buf bytes.Buffer
@@ -105,7 +102,6 @@ func (w *Writer) Write(p []byte) (int, error) {
 	for {
 		line, err := w.buf.ReadString('\n')
 		if err != nil {
-			// Incomplete line: keep it buffered for the next write.
 			w.buf.WriteString(line)
 			break
 		}
@@ -119,7 +115,6 @@ func (w *Writer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Writes any buffered partial line, redacted.
 func (w *Writer) Flush() {
 	if w.buf.Len() > 0 {
 		_, _ = io.WriteString(w.dst, Redacted(w.buf.String()))
