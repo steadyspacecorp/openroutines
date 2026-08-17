@@ -8,7 +8,7 @@
 # suite never sets.
 FROM debian:trixie-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git bubblewrap procps \
+    && apt-get install -y --no-install-recommends git openssh-client bubblewrap procps \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10001 agent
 

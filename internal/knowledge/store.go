@@ -135,7 +135,8 @@ func (store *Store) Ensure() error {
 				tip, _ := store.repo.Run("rev-parse", "refs/heads/"+Branch)
 				slog.Info("knowledge: adopted the knowledge branch from origin", "tip", tip)
 			} else if lerr != nil {
-				slog.Warn("knowledge: could not reach origin to adopt the knowledge branch -- creating a local root; this will diverge if origin has one", "error", lerr)
+				slog.Error("knowledge: cannot verify origin before creating the knowledge branch", "detail", lerr)
+				return fmt.Errorf("origin state is unknown -- refusing to create the knowledge branch")
 			}
 		}
 	}
