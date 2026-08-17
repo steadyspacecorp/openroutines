@@ -8,10 +8,8 @@ OpenRoutines generates and runs single-purpose autonomous AI agents: one agent, 
 
 ## Sources of truth
 
-The README, public documentation, and design docs describe the intended user contract and design rationale, not automatic authority over the implementation.
+The README and public documentation describe the intended user contract and design rationale, not automatic authority over the implementation.
 Verify their claims against code and tests, and resolve disagreements by updating whichever side is stale.
-
-Add a Decision/Why entry to design.md only for a durable behavior choice whose rationale a future maintainer will need.
 
 ## Ownership
 
@@ -39,7 +37,7 @@ Use these terms consistently across code, logs, and docs:
 ## Conventions
 
 - The project is **OpenRoutines** in prose and `openroutines` in machine identifiers.
-- README.md and the design docs use `--` double hyphens, not em dashes; conversational but technical tone; no marketing superlatives.
+- README.md uses `--` double hyphens, not em dashes; conversational but technical tone; no marketing superlatives.
 - Documentation paragraphs use one sentence per physical line, a blank line between paragraphs -- no column-wrapping, and no giant one-line paragraphs either. A single-sentence edit should produce a single-line diff, not a whole-paragraph one.
 - Code comments default to none.
   Write one only to explain something non-obvious -- a hidden invariant, a rejected alternative, a security or kernel gotcha, or the reason behind a magic number.
