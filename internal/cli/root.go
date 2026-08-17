@@ -17,7 +17,7 @@ const usage = `OpenRoutines -- run simple, secure, and durable autonomous AI age
 
 Usage:
   openroutines new <path>           create a new agent repository
-  openroutines configure            fill in openroutines.yml, generate the master key
+  openroutines configure            fill in openroutines.yml
   openroutines check                validate the agent; made for CI
   openroutines status               show what the agent has and still needs
   openroutines knowledge            inspect and summarize knowledge from origin

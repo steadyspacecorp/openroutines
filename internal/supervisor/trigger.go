@@ -130,11 +130,7 @@ func (s *Supervisor) triggerCredential(name string) (*creds.Derived, error) {
 	if err != nil {
 		return nil, err
 	}
-	key, err := creds.LoadKey(s.Dir)
-	if err != nil {
-		return nil, err
-	}
-	store, err := creds.Read(s.Dir, key)
+	_, store, err := creds.Load(s.Dir)
 	if err != nil {
 		return nil, err
 	}

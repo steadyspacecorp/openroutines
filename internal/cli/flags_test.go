@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,12 +50,18 @@ func TestHelpFlagShowsUsageWithoutRunning(t *testing.T) {
 }
 
 // configure must refuse to run against a non-interactive stdin unless
-// --yes is given explicitly -- accepting EOF-as-default silently generated
-// a master key and wrote credentials against an unfamiliar flag like
-// --help (issue #67).
+// --yes is given explicitly -- accepting EOF-as-default silently wrote
+// configuration against an unfamiliar flag like --help (issue #67).
 func TestConfigureRefusesNonInteractiveWithoutYes(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "openroutines.yml"), []byte(statusAgentYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.Initialize(dir); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, config.FileName))
+	if err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
@@ -71,33 +78,116 @@ func TestConfigureRefusesNonInteractiveWithoutYes(t *testing.T) {
 	if code := cmdConfigure(nil); code == 0 {
 		t.Fatalf("configure on non-interactive stdin without --yes should fail, got exit 0")
 	}
-	if _, err := os.Stat(filepath.Join(dir, creds.KeyFileName)); err == nil {
-		t.Fatalf("configure must not generate a master key when it refuses to run")
+	after, err := os.ReadFile(filepath.Join(dir, config.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("configure wrote configuration after stdin ended")
 	}
 }
 
-func TestConfigureReportsGeneratedMasterKeyWithoutDeploymentInstructions(t *testing.T) {
+func TestConfigureRequiresTheCredentialStore(t *testing.T) {
 	dir := statusAgent(t, nil)
+	before, err := os.ReadFile(filepath.Join(dir, config.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out := captureCredentialsError(t, dir, func() int { return cmdConfigure([]string{"--yes"}) })
+	if code == 0 || !strings.Contains(out, creds.FileName+" is missing") {
+		t.Fatalf("configure without store: code=%d, output=%s", code, out)
+	}
+	for _, path := range []string{creds.KeyFileName, creds.FileName} {
+		if _, err := os.Stat(filepath.Join(dir, path)); !os.IsNotExist(err) {
+			t.Fatalf("configure created %s: %v", path, err)
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(dir, config.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("configure changed configuration before rejecting the missing store")
+	}
+}
 
-	stdin := os.Stdin
+func TestConfigurePromptsForTheDefaultProviderCredential(t *testing.T) {
+	dir := statusAgent(t, nil)
+	if err := creds.Initialize(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	var out string
+	withStdin(t, "\n\n\n\n\nprovider-secret\n", func() {
+		out = capture(t, dir, func() {
+			if code := cmdConfigure(nil); code != 0 {
+				t.Fatalf("configure exited %d", code)
+			}
+		})
+	})
+	if !strings.Contains(out, "fake API key (hidden; enter to skip): ") {
+		t.Fatalf("configure did not prompt for the provider credential:\n%s", out)
+	}
+	_, store, err := creds.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store["fake_api_key"]; got != "provider-secret" {
+		t.Fatalf("stored provider key = %q", got)
+	}
+}
+
+func TestConfigureLeavesExistingCredentialStoreAlone(t *testing.T) {
+	dir := statusAgent(t, nil)
+	key := []byte(strings.Repeat("a", 32))
+	if err := creds.Write(dir, key, map[string]string{"fake_api_key": "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(dir, creds.FileName)
+	beforeStore, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(creds.EnvMasterKeyFile, "")
+	beforeConfig, err := os.ReadFile(filepath.Join(dir, config.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	stderr := os.Stderr
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+	os.Stderr = w
+	code := cmdConfigure([]string{"--yes"})
+	os.Stderr = stderr
 	w.Close()
-	os.Stdin = r
-	defer func() { os.Stdin = stdin }()
-
-	out := capture(t, dir, func() {
-		if code := cmdConfigure([]string{"--yes"}); code != 0 {
-			t.Fatalf("configure exited %d", code)
-		}
-	})
-	if !strings.Contains(out, "Generated master.key\n") {
-		t.Fatalf("configure did not report the generated key plainly:\n%s", out)
+	out, err := os.ReadFile(filepath.Join(dir, config.FileName))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(out, "mount") || strings.Contains(out, creds.EnvMasterKeyFile) {
-		t.Fatalf("configure included deployment instructions in the generated-key message:\n%s", out)
+	if code == 0 {
+		t.Fatal("configure accepted a locked credential store")
+	}
+	message, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, creds.KeyFileName)); !os.IsNotExist(err) {
+		t.Fatalf("configure created a master key: %v", err)
+	}
+	afterStore, _ := os.ReadFile(storePath)
+	if string(afterStore) != string(beforeStore) {
+		t.Fatal("configure changed the credential store")
+	}
+	if string(out) != string(beforeConfig) {
+		t.Fatal("configure changed the configuration before validating credentials")
+	}
+	if !strings.Contains(string(message), "restore "+creds.KeyFileName) {
+		t.Fatalf("configure did not explain how to unlock the store:\n%s", message)
 	}
 }
 
@@ -105,6 +195,9 @@ func TestConfigureDoesNotChooseAModel(t *testing.T) {
 	dir := t.TempDir()
 	raw := "name: agent\nrepo:\nowner:\n  name:\n  email: owner@example.com\ntimezone: UTC\ndefaults:\n  model: '{{DEFAULT_MODEL}}'\n  timeout: 5m\n"
 	if err := os.WriteFile(filepath.Join(dir, config.FileName), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.Initialize(dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)

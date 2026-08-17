@@ -45,6 +45,7 @@ curl -fsSL https://get.openroutines.dev/install.sh | bash
 openroutines new my-agent
 cd my-agent
 openroutines configure
+openroutines check
 openroutines routines new doc-drift    # edit the file, then:
 openroutines routines run doc-drift    # runs locally in the production container
 ```

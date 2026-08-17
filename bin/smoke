@@ -22,11 +22,17 @@ printf 'smoke: testing %s\n' "$("$bin" version)"
 
 run new "$work/agent" || die "new"
 [ "$(readlink "$work/agent/CLAUDE.md")" = "AGENTS.md" ] || die "CLAUDE.md is not a symlink to AGENTS.md"
+cp "$work/agent/master.key" "$work/master.key.after-new"
+cp "$work/agent/.openroutines/credentials.yml.enc" "$work/credentials.after-new"
 cd "$work/agent"
 printf 'smoke-agent\nCI\nci@example.invalid\nUTC\nfake/model\nnot-a-real-key\n' \
   | "$bin" configure >"$work/out" 2>&1 || die "configure"
 sed -i.bak 's|^repo:.*|repo: https://github.com/acme/smoke-agent|' openroutines.yml && rm -f openroutines.yml.bak
-step "new + configure"
+cmp -s master.key "$work/master.key.after-new" || die "configure changed the master key"
+if cmp -s .openroutines/credentials.yml.enc "$work/credentials.after-new"; then
+  die "configure did not store the provider key"
+fi
+step "new initializes credentials; configure stores the provider key"
 
 run check || die "check on a fresh agent (should pass with warnings)"
 step "check passes on a fresh agent"

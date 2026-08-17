@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,8 @@ const (
 	header           = "ORV1:"
 )
 
+var errNoMasterKey = errors.New("no master key")
+
 // Constrains credential names: lowercase snake_case, so the
 // env-var mapping (slack_webhook -> SLACK_WEBHOOK) is always well-formed.
 var NamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -49,13 +52,69 @@ func ReservedEnvName(name string) bool {
 	return strings.HasPrefix(name, "ld_") || strings.HasPrefix(name, "xdg_")
 }
 
-// Mints a 32-byte master key, hex-encoded.
-func GenerateKey() string {
+func generateKey() []byte {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		panic(err) // crypto/rand failure is not recoverable
 	}
-	return hex.EncodeToString(buf)
+	return buf
+}
+
+// Mints a 32-byte master key, hex-encoded.
+func GenerateKey() string {
+	return hex.EncodeToString(generateKey())
+}
+
+// Creates a conventional master key and empty encrypted store for a fresh agent.
+func Initialize(dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, FileName)); err == nil {
+		return fmt.Errorf("%s already exists", FileName)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	key := generateKey()
+	keyPath := filepath.Join(dir, KeyFileName)
+	file, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.WriteString(hex.EncodeToString(key) + "\n"); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return Write(dir, key, map[string]string{})
+}
+
+// Loads the selected key and encrypted store without creating either.
+func Load(dir string) ([]byte, map[string]string, error) {
+	_, err := os.Stat(filepath.Join(dir, FileName))
+	if os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("%s is missing", FileName)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	key, err := LoadKey(dir)
+	if err != nil {
+		return nil, nil, unavailableKey(err)
+	}
+	values, err := Read(dir, key)
+	if err != nil {
+		return nil, nil, unavailableKey(err)
+	}
+	return key, values, nil
+}
+
+func unavailableKey(err error) error {
+	message := fmt.Sprintf("%s exists but no usable master key is available -- restore %s, set %s, or point %s at the original key", FileName, KeyFileName, EnvMasterKey, EnvMasterKeyFile)
+	if errors.Is(err, errNoMasterKey) {
+		return errors.New(message)
+	}
+	return fmt.Errorf("%s: %w", message, err)
 }
 
 // MasterKeyFilePath reports the selected key file, or nothing when a direct
@@ -81,7 +140,7 @@ func LoadKey(dir string) ([]byte, error) {
 	if keyHex == "" {
 		path := MasterKeyFilePath(dir)
 		if path == "" {
-			return nil, fmt.Errorf("no master key: set %s or %s, or create %s", EnvMasterKey, EnvMasterKeyFile, KeyFileName)
+			return nil, fmt.Errorf("%w: set %s or %s, or create %s", errNoMasterKey, EnvMasterKey, EnvMasterKeyFile, KeyFileName)
 		}
 		if mode.Current() == mode.DeployedContainer {
 			info, err := os.Stat(path)

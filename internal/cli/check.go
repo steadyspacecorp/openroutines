@@ -284,18 +284,13 @@ func checkCredentials(dir string, agent *config.Agent, routines []*routine.Routi
 		}
 	}
 	report.section("credentials")
-	key, err := creds.LoadKey(dir)
+	_, store, err := creds.Load(dir)
 	if err != nil {
 		if len(providerNeeds) > 0 {
 			report.failf("%v -- active routines cannot authenticate to their model provider without it", err)
 		} else {
 			report.warnf("%v", err)
 		}
-		return
-	}
-	store, err := creds.Read(dir, key)
-	if err != nil {
-		report.failf("%v", err)
 		return
 	}
 	report.okf("credentials decrypt (%d stored)", len(store))

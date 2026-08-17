@@ -9,6 +9,7 @@ import (
 
 	openroutines "github.com/steadyspacecorp/openroutines"
 	"github.com/steadyspacecorp/openroutines/internal/avatar"
+	"github.com/steadyspacecorp/openroutines/internal/creds"
 	"github.com/steadyspacecorp/openroutines/internal/repository"
 	"github.com/steadyspacecorp/openroutines/internal/version"
 )
@@ -91,6 +92,9 @@ func cmdNew(args []string) int {
 		return fail(err)
 	}
 	if err := os.WriteFile(filepath.Join(frameworkDir, "version"), []byte(version.Version+"\n"), 0o644); err != nil {
+		return fail(err)
+	}
+	if err := creds.Initialize(target); err != nil {
 		return fail(err)
 	}
 
