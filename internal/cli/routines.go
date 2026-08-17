@@ -72,11 +72,11 @@ const routinesUsage = `Manage this agent's routines (markdown files in routines/
 
 Usage:
   openroutines routines new <name>         create a routine (inactive until you activate it)
-  openroutines routines list               names, schedules, grants
+  openroutines routines list               names, schedules, access
   openroutines routines run <name> [--write-knowledge] [--rehearse [scenario]]
-                                           run once now, knowledge writes discarded; --write-knowledge
-                                           settles them; --rehearse runs against rehearsals/ fixtures
-                                           with every grant stripped
+                                           run once now without saving knowledge changes;
+                                           --write-knowledge saves them; --rehearse asks the routine not to change
+                                           outside systems and uses data from rehearsals/ when available
   openroutines routines edit <name>        open in $EDITOR, validate on close
   openroutines routines activate <name>    set active: true
   openroutines routines deactivate <name>  set active: false
@@ -107,9 +107,12 @@ func routinesRun(args []string) int {
 			return fail(err)
 		}
 		if fixture != "" {
-			fmt.Printf("rehearsal: fixture world from %s -- grants stripped, knowledge discarded\n\n", fixture)
+			fmt.Printf("rehearsal: scenario from %s\n", fixture)
+			fmt.Println("using rehearsal data with outside access limited; knowledge changes will not be saved")
+			fmt.Println()
 		} else {
-			fmt.Println("rehearsal: live world -- external actions instructed read-only, knowledge discarded")
+			fmt.Println("rehearsal: live data")
+			fmt.Println("asked not to make external changes, but changes are still possible; knowledge changes will not be saved")
 			fmt.Println()
 		}
 	}
@@ -129,7 +132,15 @@ func routinesRun(args []string) int {
 		fmt.Printf("note: concurrent knowledge edit -- canonical %s left unchanged; competing version saved at %s; curate them if they disagree\n", conflict.Path, conflict.Quarantine)
 	}
 	if !writeKnowledge {
-		fmt.Println("knowledge discarded: external actions were still performed and credentials were available -- pass --write-knowledge for a run that settles (first runs may still have initialized the knowledge worktree)")
+		fmt.Println("knowledge changes were not saved")
+		switch {
+		case fixture != "":
+			fmt.Println("outside access was limited, not eliminated; external changes were still possible")
+		case rehearse:
+			fmt.Println("external changes were discouraged, not prevented")
+		default:
+			fmt.Println("external changes may still have happened -- pass --write-knowledge to save knowledge changes")
+		}
 	} else if result.Commit != "" {
 		fmt.Printf("knowledge updated: commit %s on the %s branch\n", result.Commit, "knowledge")
 	}
@@ -153,12 +164,12 @@ func parseRoutineRunArgs(args []string) (name, scenario string, writeKnowledge, 
 		return positional[0], "", writeKnowledge, rehearse, false, nil
 	case len(positional) == 2 && rehearse:
 		if writeKnowledge {
-			return "", "", false, false, false, errors.New("--rehearse and --write-knowledge cannot combine: a rehearsal never settles")
+			return "", "", false, false, false, errors.New("--rehearse cannot be combined with --write-knowledge because rehearsal changes are never saved")
 		}
 		return positional[0], positional[1], writeKnowledge, rehearse, false, nil
 	}
 	if rehearse && writeKnowledge {
-		return "", "", false, false, false, errors.New("--rehearse and --write-knowledge cannot combine: a rehearsal never settles")
+		return "", "", false, false, false, errors.New("--rehearse cannot be combined with --write-knowledge because rehearsal changes are never saved")
 	}
 	return "", "", false, false, false, fmt.Errorf("%s", routinesRunUsage)
 }
@@ -190,9 +201,9 @@ func resolveRehearsal(name, scenario string) (string, error) {
 	}
 	if scenario != "" {
 		if len(have) > 0 {
-			return "", fmt.Errorf("no rehearsal fixture %q for %s -- have: %s", scenario, name, strings.Join(have, ", "))
+			return "", fmt.Errorf("no rehearsal scenario %q for %s -- have: %s", scenario, name, strings.Join(have, ", "))
 		}
-		return "", fmt.Errorf("no rehearsal fixtures for %s -- a named scenario needs %s", name, filepath.Join("rehearsals", name, scenario+".md"))
+		return "", fmt.Errorf("no rehearsal data for %s -- a named scenario needs %s", name, filepath.Join("rehearsals", name, scenario+".md"))
 	}
 	return "", nil
 }
@@ -372,7 +383,7 @@ func routinesList() int {
 		fmt.Println("No routines. Create one: openroutines routines new <name>")
 		return 0
 	}
-	fmt.Printf("%-20s %-16s %-8s %s\n", "NAME", "SCHEDULE", "ACTIVE", "GRANTS")
+	fmt.Printf("%-20s %-16s %-8s %s\n", "NAME", "SCHEDULE", "ACTIVE", "ACCESS")
 	for _, r := range routines {
 		fmt.Printf("%-20s %-16s %-8v %s\n", r.Name, scheduleSummary(r), r.Frontmatter.IsActive(), strings.Join(grantSummary(r), " "))
 	}

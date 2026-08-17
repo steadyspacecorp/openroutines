@@ -132,10 +132,10 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt,
 		if attempt.Rehearsal != "" {
 			fixture, err := os.ReadFile(attempt.Rehearsal)
 			if err != nil {
-				return fmt.Errorf("rehearsal fixture: %w", err)
+				return fmt.Errorf("rehearsal data: %w", err)
 			}
 			if err := os.WriteFile(filepath.Join(workspaceRoot, RehearsalFileName), fixture, 0o444); err != nil {
-				return fmt.Errorf("rehearsal fixture: %w", err)
+				return fmt.Errorf("rehearsal data: %w", err)
 			}
 		}
 		return nil
