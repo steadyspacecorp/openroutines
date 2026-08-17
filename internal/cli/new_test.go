@@ -148,3 +148,27 @@ func TestNewLeavesRepoForAfterPublishing(t *testing.T) {
 		t.Fatalf("new config does not contain an empty repo field:\n%s", raw)
 	}
 }
+
+func TestNewShowsPublicationBridge(t *testing.T) {
+	parent := t.TempDir()
+	var code int
+	out := capture(t, parent, func() { code = cmdNew([]string{"agent"}) })
+	if code != 0 {
+		t.Fatalf("new exited %d", code)
+	}
+	want := `Created agent "agent" at agent
+
+Next steps:
+
+1. Configure your agent:
+
+   cd agent && openroutines configure
+
+2. Create a repository on GitHub or another Git host, then set its URL in the repo field of openroutines.yml.
+
+3. Run openroutines check, then commit and push your agent to the repository.
+`
+	if out != want {
+		t.Fatalf("new output =\n%s\nwant:\n%s", out, want)
+	}
+}

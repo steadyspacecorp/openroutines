@@ -102,6 +102,17 @@ func cmdNew(args []string) int {
 		return fail(err)
 	}
 
-	fmt.Printf("Created agent %q at %s\n\nNext steps:\n  cd %s\n  openroutines configure\n", name, target, target)
+	fmt.Printf(`Created agent %q at %s
+
+Next steps:
+
+1. Configure your agent:
+
+   cd %s && openroutines configure
+
+2. Create a repository on GitHub or another Git host, then set its URL in the repo field of openroutines.yml.
+
+3. Run openroutines check, then commit and push your agent to the repository.
+`, name, target, target)
 	return 0
 }
