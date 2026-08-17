@@ -11,6 +11,20 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/repository"
 )
 
+func deployKey(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "deploy-key")
+	cmd := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generate deploy key: %v: %s", err, out)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
 // Removing a routine must remove every per-routine state file, subdirectories
 // included: a leftover trigger baseline means a re-created routine with the
 // same name never fires on its first genuine change, and a leftover cursor
@@ -129,7 +143,7 @@ func TestEnsureReplacesAWorktreeInvalidatedByFreshRepositoryMetadata(t *testing.
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv(repository.EnvDeployKey, "synthetic-deploy-key") // gitleaks:allow -- test fixture
+	t.Setenv(repository.EnvDeployKey, deployKey(t))
 	t.Setenv(repository.EnvDeployKeyFile, "")
 
 	if err := repository.Open(dir).Prepare("git@local:"+origin, true); err != nil {
@@ -191,7 +205,7 @@ func TestDeployedRestartPreservesUnpushedKnowledge(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv(repository.EnvDeployKey, "synthetic-deploy-key") // gitleaks:allow -- test fixture
+	t.Setenv(repository.EnvDeployKey, deployKey(t))
 	t.Setenv(repository.EnvDeployKeyFile, "")
 
 	configured := "git@local:" + origin
@@ -226,22 +240,25 @@ func TestDeployedRestartPreservesUnpushedKnowledge(t *testing.T) {
 	}
 }
 
-// A container replaced during a transient origin outage must not mint a
-// local root silently -- the resulting lineage would diverge from origin's
-// with no trace of why. Ensure still self-heals (it must: origin may never
-// come back), but it says so.
-func TestEnsureWarnsWhenOriginUnreachable(t *testing.T) {
+// Unknown remote state must not authorize a new durable lineage: if origin
+// already has knowledge, a local root would fork it permanently.
+func TestEnsureRefusesWhenOriginUnreachable(t *testing.T) {
 	dir := t.TempDir()
 	gitT(t, dir, "init", "-q", "-b", "main", dir)
 	gitT(t, dir, "remote", "add", "origin", filepath.Join(dir, "does-not-exist.git"))
 
 	logs := logtest.Capture(t)
-
-	if err := NewStore(dir).Ensure(); err != nil {
-		t.Fatal(err)
+	err := NewStore(dir).Ensure()
+	if err == nil || !strings.Contains(err.Error(), "origin state is unknown") {
+		t.Fatalf("Ensure error = %v", err)
 	}
-	logs.Expect("could not reach origin")
-	if _, err := os.Stat(filepath.Join(dir, "knowledge", ".git")); err != nil {
-		t.Fatalf("knowledge worktree not created despite the unreachable origin: %v", err)
+	for _, want := range []string{"does-not-exist.git", "Could not read from remote repository"} {
+		if strings.Contains(err.Error(), want) {
+			t.Fatalf("Ensure error inlined Git detail %q: %v", want, err)
+		}
+		logs.Expect("detail=", want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "knowledge")); !os.IsNotExist(err) {
+		t.Fatalf("knowledge was created despite unreachable origin: %v", err)
 	}
 }

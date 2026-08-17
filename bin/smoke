@@ -256,6 +256,7 @@ step "check rejects framework-version drift"
 if command -v docker >/dev/null 2>&1; then
   ctx="$work/isolation"
   mkdir -p "$ctx"
+  ssh-keygen -q -t ed25519 -N '' -f "$work/isolation-deploy-key"
   run new "$ctx/agent" || die "new isolation agent"
   cd "$ctx/agent"
   printf 'isolation-agent\nCI\nci@example.invalid\nUTC\nfake/model\nnot-a-real-key\n' \
@@ -298,7 +299,7 @@ EOF
   cp "$repo/testdata/isolation/opencode" "$ctx/opencode"
   cp "$repo/testdata/isolation/ssh" "$ctx/ssh"
   export OPENROUTINES_MASTER_KEY="$(cat master.key)"
-  export OPENROUTINES_DEPLOY_KEY=synthetic-deploy-key
+  export OPENROUTINES_DEPLOY_KEY="$(<"$work/isolation-deploy-key")"
   mv master.key "$work/isolation-master.key"
   arch="$(docker version --format '{{.Server.Arch}}')"
   (cd "$repo" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$ctx/openroutines" ./cmd/openroutines)

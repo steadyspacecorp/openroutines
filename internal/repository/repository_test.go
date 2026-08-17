@@ -8,13 +8,27 @@ import (
 	"testing"
 )
 
+func deployKeyFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "deploy-key")
+	cmd := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generate deploy key: %v: %s", err, out)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(raw))
+}
+
 func deployedRepository(t *testing.T) {
 	t.Helper()
 	previousSSH := sshCommand
 	t.Cleanup(func() { sshCommand = previousSSH })
 	sshCommand = ""
 	t.Setenv(EnvDeployKeyFile, "")
-	t.Setenv(EnvDeployKey, "synthetic-deploy-key") // gitleaks:allow -- test fixture
+	t.Setenv(EnvDeployKey, deployKeyFixture(t))
 	t.Setenv("HOME", t.TempDir())
 }
 
@@ -132,9 +146,9 @@ func TestDeployKeyPrecedence(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	defaultKey := "default fixture"
-	fileKey := "file fixture"
-	valueKey := "value fixture"
+	defaultKey := deployKeyFixture(t)
+	fileKey := deployKeyFixture(t)
+	valueKey := deployKeyFixture(t)
 	file := filepath.Join(t.TempDir(), "mounted-deploy.key")
 	if err := os.WriteFile(filepath.Join(dir, "deploy.key"), []byte(defaultKey), 0o600); err != nil {
 		t.Fatal(err)
@@ -170,12 +184,31 @@ func assertConfiguredDeployKey(t *testing.T, dir, home, want string) {
 	}
 }
 
+func TestConfigureDeployKeyRejectsMangledInput(t *testing.T) {
+	for _, key := range []string{
+		"-----BEGIN OPENSSH PRIVATE KEY----- body -----END OPENSSH PRIVATE KEY-----",                           // gitleaks:allow -- deliberately malformed
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nnot-base64\n-----END OPENSSH PRIVATE KEY-----",                   // gitleaks:allow -- deliberately malformed
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nc3ludGhldGljLWRlcGxveS1rZXk=\n-----END OPENSSH PRIVATE KEY-----", // gitleaks:allow -- decodes, but is not a key
+	} {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv(EnvDeployKey, key)
+		t.Setenv(EnvDeployKeyFile, "")
+		err := func() error {
+			_, err := configureDeployKey(t.TempDir())
+			return err
+		}()
+		if err == nil || !strings.Contains(err.Error(), "usable unencrypted SSH private key") {
+			t.Fatalf("malformed deploy key error = %v", err)
+		}
+	}
+}
+
 func TestPrepareUsesConventionalDeployKey(t *testing.T) {
 	dir := originRepo(t, "https://github.com/acme/legacy.git")
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(EnvDeployKey, "")
 	t.Setenv(EnvDeployKeyFile, "")
-	if err := os.WriteFile(filepath.Join(dir, "deploy.key"), []byte("default fixture"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "deploy.key"), []byte(deployKeyFixture(t)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
