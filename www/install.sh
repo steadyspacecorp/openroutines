@@ -37,7 +37,7 @@ INSTALL_DIR="${OPENROUTINES_INSTALL_DIR:-$HOME/.local/bin}"
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 
 BINARY="openroutines_${VERSION}_${OS}_${ARCH}"
-RELEASE_URL="$BASE_URL/releases/download/$VERSION"
+RELEASE_URL="https://github.com/steadyspacecorp/openroutines/releases/download/$VERSION"
 
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT

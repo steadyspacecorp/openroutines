@@ -1,11 +1,9 @@
 name: pages
 
 # The public install surface at get.openroutines.dev: GitHub Pages serves
-# install.sh, version.txt, and mirrored release binaries, and stays public
-# even while the repository is private -- so agent Dockerfiles install the
-# pinned release with no registry login or token. Runs after the release
-# workflow -- via workflow_run, because a release created with a workflow's
-# own token emits no release event.
+# install.sh and version.txt. Runs after the release workflow -- via
+# workflow_run, because a release created with a workflow's own token emits
+# no release event.
 on:
   push:
     branches: [main]
@@ -34,20 +32,13 @@ jobs:
         working-directory: www/
     steps:
       - uses: actions/checkout@v7
-      - name: Download and verify releases
-        # Agents pin versions, so mirror enough history that an agent a few
-        # releases behind still builds.
-        run: |
-          for tag in $(gh release list --exclude-drafts --limit 10 --json tagName --jq '.[].tagName'); do
-            gh release download "$tag" --dir "releases/download/$tag"
-            ( cd "releases/download/$tag" && sha256sum --check --strict checksums.txt )
-          done
-      - name: Write and verify version file
+      - name: Write version file
         # Newest release, not releases/latest: while every tag is a
         # prerelease, GitHub has no "latest" to point at.
         run: |
           version=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
-          test -d "releases/download/$version" && echo "$version" > version.txt
+          test -n "$version"
+          echo "$version" > version.txt
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
