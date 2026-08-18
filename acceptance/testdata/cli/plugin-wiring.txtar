@@ -1,0 +1,71 @@
+# Scaffold and configure an agent.
+exec openroutines new agent
+cd agent
+stdin ../configure.in
+exec openroutines configure
+replace-line openroutines.yml repo: 'repo: https://github.com/acme/acceptance-agent'
+cp ../opencode.json opencode.json
+exec openroutines plugin add $REPO/testdata/plugins/reporter --yes
+exec openroutines plugin add $REPO/testdata/plugins/toolkit --yes
+exec openroutines plugin add $REPO/testdata/plugins/watcher --yes
+
+# Raw, multiline, and typed credentials make the installed routines valid.
+exec openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out ../app-key.pem
+stdin ../fake.in
+exec openroutines credentials set reporter_token
+stdin ../app-key.pem
+exec openroutines credentials set watcher_app_key
+exec head -1 ../app-key.pem
+cp stdout ../half-key.pem
+stdin ../half-key.pem
+! exec openroutines credentials set half_key
+stderr 'beginning of a PEM key without its end'
+stdin ../fake.in
+exec openroutines credentials set support_desk_secret
+exec sh -c 'cat "$1" >> "$2"' sh ../credentials.yml openroutines.yml
+exec openroutines check
+
+-- configure.in --
+acceptance-agent
+CI
+ci@example.invalid
+UTC
+fake/model
+not-a-real-key
+-- fake.in --
+fake
+-- credentials.yml --
+credentials:
+  watcher_app_key:
+    type: github_app
+    app_id: "12345"
+  support_desk_secret:
+    type: oauth2_client
+    token_url: https://auth.example.invalid/oauth2/token
+    client_id: "client-abc"
+    inject_as: support_desk_token
+variables:
+  watch_repos: "acme/docs"
+-- opencode.json --
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "skill": {
+      "*": "deny"
+    },
+    "question": "deny"
+  },
+  "provider": {
+    "acceptance_gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "https://gateway.example.invalid/compat" }
+    }
+  },
+  "mcp": {
+    "reporter_feed": {
+      "type": "remote",
+      "url": "https://mcp.example.invalid/feed",
+      "headers": { "Authorization": "Bearer {env:REPORTER_TOKEN}" }
+    }
+  }
+}

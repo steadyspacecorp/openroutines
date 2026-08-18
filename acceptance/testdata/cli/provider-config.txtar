@@ -1,0 +1,43 @@
+# Scaffold and configure an agent.
+exec openroutines new agent
+cd agent
+stdin ../configure.in
+exec openroutines configure
+replace-line openroutines.yml repo: 'repo: https://github.com/acme/acceptance-agent'
+cp ../opencode.json opencode.json
+
+# Provider definitions are legitimate user configuration, but unreferenced ids are flagged.
+exec openroutines check
+! stdout 'opencode.json contains'
+stdout 'provider "acceptance_gateway" in opencode.json is not referenced'
+
+-- configure.in --
+acceptance-agent
+CI
+ci@example.invalid
+UTC
+fake/model
+not-a-real-key
+-- opencode.json --
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "skill": {
+      "*": "deny"
+    },
+    "question": "deny"
+  },
+  "provider": {
+    "acceptance_gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "https://gateway.example.invalid/compat" }
+    }
+  },
+  "mcp": {
+    "reporter_feed": {
+      "type": "remote",
+      "url": "https://mcp.example.invalid/feed",
+      "headers": { "Authorization": "Bearer {env:REPORTER_TOKEN}" }
+    }
+  }
+}

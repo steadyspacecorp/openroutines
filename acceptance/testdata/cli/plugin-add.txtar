@@ -1,0 +1,65 @@
+# Scaffold and configure an agent.
+exec openroutines new agent
+cd agent
+stdin ../configure.in
+exec openroutines configure
+cp ../opencode.json opencode.json
+
+# Non-interactive installation requires explicit consent.
+! exec openroutines plugin add $REPO/testdata/plugins/reporter
+stderr 'rerun with --yes'
+! exists .openroutines/plugins/reporter/routines/reporter-digest.md
+
+# Every synthetic fixture installs under its plugin directory without rewriting user config.
+cp opencode.json ../opencode.pre-plugins.json
+exec openroutines plugin add $REPO/testdata/plugins/reporter --yes
+stdout 'add to opencode.json''s mcp block'
+! stdout 'trigger: polls'
+cmp opencode.json ../opencode.pre-plugins.json
+exec openroutines plugin add $REPO/testdata/plugins/toolkit --yes
+exec openroutines plugin add $REPO/testdata/plugins/watcher --yes
+! stdout 'trigger: polls'
+exists .openroutines/plugins/reporter/routines/reporter-digest.md
+exists .openroutines/plugins/toolkit/skills/toolkit-notes
+exists .openroutines/plugins/watcher/routines/watcher.md
+exists .openroutines/plugins/reporter/.openroutines-source.yaml
+grep '^active: false$' .openroutines/plugins/reporter/routines/reporter-digest.md
+! exists knowledge/ledgers/watcher.md
+stdout 'seed knowledge/ledgers/watcher.md'
+stdout 'credentials set watcher_app_key'
+stdout 'type: github_app'
+
+# Reinstalling over existing files is refused.
+! exec openroutines plugin add $REPO/testdata/plugins/reporter --yes
+stderr 'refusing to replace'
+
+-- configure.in --
+acceptance-agent
+CI
+ci@example.invalid
+UTC
+fake/model
+not-a-real-key
+-- opencode.json --
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "skill": {
+      "*": "deny"
+    },
+    "question": "deny"
+  },
+  "provider": {
+    "acceptance_gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "https://gateway.example.invalid/compat" }
+    }
+  },
+  "mcp": {
+    "reporter_feed": {
+      "type": "remote",
+      "url": "https://mcp.example.invalid/feed",
+      "headers": { "Authorization": "Bearer {env:REPORTER_TOKEN}" }
+    }
+  }
+}

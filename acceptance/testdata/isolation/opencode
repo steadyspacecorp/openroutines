@@ -53,7 +53,7 @@ chmod 700 .home/locked
 # Escape the run's process group into a new session: where the sandbox has a
 # pid namespace this must not outlive the run. The escapee proves it started
 # by writing to staged knowledge before sleeping -- the record imports, so the
-# smoke test can tell a killed survivor from one that never existed.
+# The acceptance test can tell a killed survivor from one that never existed.
 setsid sh -c 'echo "escaped pid=$$" > knowledge/ledgers/escapee.md; exec sleep 300' </dev/null >/dev/null 2>&1 &
 while [ ! -s knowledge/ledgers/escapee.md ]; do sleep 0.1; done
 echo done

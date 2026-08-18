@@ -5,4 +5,4 @@ active: true
 credentials: [watcher_app_key]
 ---
 
-Smoke fixture. Watch the repositories in $WATCH_REPOS and record what changed, advancing the ledger watermark. This routine is never meant to run.
+Acceptance fixture. Watch the repositories in $WATCH_REPOS and record what changed, advancing the ledger watermark. This routine is never meant to run.

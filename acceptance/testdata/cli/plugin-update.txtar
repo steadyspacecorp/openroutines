@@ -1,0 +1,50 @@
+# Scaffold and configure an agent.
+exec openroutines new agent
+cd agent
+stdin ../configure.in
+exec openroutines configure
+
+# A local upstream provides the merge base for a three-way update.
+mkdir ../update-source ../update-source/routines
+cp ../plugin.md ../update-source/PLUGIN.md
+cp ../routine-v1.md ../update-source/routines/update-demo.md
+exec git -C ../update-source init -q
+exec git -C ../update-source add .
+exec git -C ../update-source -c user.name=Acceptance -c user.email=acceptance@example.invalid commit -qm initial
+exec openroutines plugin add ../update-source --yes
+
+# A local schedule edit survives while an upstream prompt edit lands.
+replace-line .openroutines/plugins/update-demo/routines/update-demo.md schedule: 'schedule: "0 8 * * *"'
+cp ../routine-v2.md ../update-source/routines/update-demo.md
+exec git -C ../update-source add .
+exec git -C ../update-source -c user.name=Acceptance -c user.email=acceptance@example.invalid commit -qm update
+exec openroutines plugin update update-demo --yes
+grep 'schedule: "0 8 ' .openroutines/plugins/update-demo/routines/update-demo.md
+grep 'Updated upstream prompt' .openroutines/plugins/update-demo/routines/update-demo.md
+exec openroutines plugin list
+stdout 'update-demo'
+
+-- configure.in --
+acceptance-agent
+CI
+ci@example.invalid
+UTC
+fake/model
+not-a-real-key
+-- plugin.md --
+---
+name: update-demo
+description: Acceptance plugin update fixture.
+---
+-- routine-v1.md --
+---
+schedule: "0 9 * * *"
+timeout: 10m
+---
+Original prompt.
+-- routine-v2.md --
+---
+schedule: "0 9 * * *"
+timeout: 10m
+---
+Updated upstream prompt.

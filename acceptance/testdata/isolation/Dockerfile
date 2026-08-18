@@ -1,6 +1,6 @@
-# Minimal stand-in for the deployable agent image, used by bin/smoke's
-# in-container isolation test: the same sandbox dependencies as
-# template/Dockerfile (keep them in lockstep, or the smoke test stops
+# Minimal stand-in for the deployable agent image, used by the acceptance suite's
+# in-container isolation tests: the same sandbox dependencies as
+# template/Dockerfile (keep them in lockstep, or the tests stop
 # resembling what deploys), a locally built openroutines binary instead of a
 # release, and a fake opencode. procps is the test's own, for the
 # escaped-descendant check. The test exists because every production-only gate

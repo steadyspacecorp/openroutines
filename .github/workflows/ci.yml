@@ -71,8 +71,10 @@ jobs:
         env:
           OPENROUTINES_REQUIRE_SANDBOX: 1
 
-      - name: smoke
-        run: make smoke
+      - name: acceptance
+        run: make test-acceptance
+        env:
+          OPENROUTINES_REQUIRE_DOCKER: 1
 
   # Same pattern as the org's other repos: the rtCamp default card into the
   # CI channel. Skips silently until SLACK_CI_WEBHOOK is set in repo secrets.
