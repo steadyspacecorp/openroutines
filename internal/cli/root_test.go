@@ -1,14 +1,17 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/logging"
+	"github.com/steadyspacecorp/openroutines/internal/version"
 )
 
 func TestRunRequiresAgentRepoBeforeCommandLogic(t *testing.T) {
@@ -51,6 +54,36 @@ func TestRunConfiguresLoggingFromEnvironment(t *testing.T) {
 	Run([]string{"routines", "list"})
 	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
 		t.Fatal("dispatch did not install the environment's log level")
+	}
+}
+
+func TestRunDoesNotWarnOnPinMismatchForCommandsThatHandleIt(t *testing.T) {
+	wasVersion := version.Version
+	version.Version = "v1.2.3"
+	t.Cleanup(func() { version.Version = wasVersion })
+
+	for _, command := range []string{"check", "update"} {
+		t.Run(command, func(t *testing.T) {
+			dir := t.TempDir()
+			capture(t, dir, func() {
+				if code := Run([]string{"new", "agent"}); code != 0 {
+					t.Fatalf("new exit code = %d, want 0", code)
+				}
+			})
+			agentDir := filepath.Join(dir, "agent")
+			if err := os.WriteFile(filepath.Join(agentDir, ".openroutines", "version"), []byte("v1.2.2\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			var logs bytes.Buffer
+			wasWriter := logging.Writer
+			logging.Writer = &logs
+			t.Cleanup(func() { logging.Writer = wasWriter })
+			capture(t, agentDir, func() { Run([]string{command}) })
+			if strings.Contains(logs.String(), "does not match") {
+				t.Fatalf("%s logged a pin mismatch warning: %s", command, logs.String())
+			}
+		})
 	}
 }
 

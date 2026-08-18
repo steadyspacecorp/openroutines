@@ -67,6 +67,11 @@ var repoOptional = map[string]bool{
 	sandbox.ShimCommand: true,
 }
 
+var handlesPinMismatch = map[string]bool{
+	"check":  true,
+	"update": true,
+}
+
 func Run(args []string) int {
 	if len(args) == 0 {
 		fmt.Print(usage)
@@ -94,7 +99,7 @@ func Run(args []string) int {
 			return fail(fmt.Errorf("not an agent repository (no %s found)", config.FileName))
 		}
 		setupLogging(".")
-		if cmd != "check" {
+		if !handlesPinMismatch[cmd] {
 			warnOnPinMismatch(".")
 		}
 	}
