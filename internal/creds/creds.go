@@ -75,6 +75,16 @@ func Initialize(dir string) error {
 	return Write(dir, key, map[string]string{})
 }
 
+// Absent reports whether the agent has neither a credential store nor any
+// master key -- the state of a repository created from a template rather than
+// by openroutines new.
+func Absent(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, FileName)); !os.IsNotExist(err) {
+		return false
+	}
+	return strings.TrimSpace(os.Getenv(EnvMasterKey)) == "" && MasterKeyFilePath(dir) == ""
+}
+
 func Load(dir string) ([]byte, map[string]string, error) {
 	_, err := os.Stat(filepath.Join(dir, FileName))
 	if os.IsNotExist(err) {
