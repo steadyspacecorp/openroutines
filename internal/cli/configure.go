@@ -34,9 +34,7 @@ func cmdConfigure(args []string) int {
 		return fail(err)
 	}
 	if creds.Absent(dir) {
-		// A repository created from a template has no store and no key.
-		// Initialize both, as openroutines new does; anything else missing
-		// (a store without its key, a key without its store) still fails.
+		// A repository created from a template, not openroutines new, has neither yet.
 		if err := creds.Initialize(dir); err != nil {
 			return fail(err)
 		}
