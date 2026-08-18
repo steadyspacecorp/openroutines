@@ -43,8 +43,3 @@ Use these terms consistently across code, logs, and docs:
   Write one only to explain something non-obvious -- a hidden invariant, a rejected alternative, a security or kernel gotcha, or the reason behind a magic number.
   Write for the future reader at that location: do not repeat the name or restate what the adjacent code already says.
   Do not treat existing comment density as precedent; every new comment must justify itself independently.
-
-## Verifying changes
-
-Run `make verify` before handoff; CI runs the equivalent gates.
-For template changes, rebuild the CLI, scaffold a fresh agent, and inspect the generated output.
