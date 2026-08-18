@@ -33,6 +33,13 @@ func cmdConfigure(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	if creds.Absent(dir) {
+		// A repository created from a template, not openroutines new, has neither yet.
+		if err := creds.Initialize(dir); err != nil {
+			return fail(err)
+		}
+		fmt.Printf("Generated %s and %s\n", creds.KeyFileName, creds.FileName)
+	}
 	key, store, err := creds.Load(dir)
 	if err != nil {
 		return fail(err)

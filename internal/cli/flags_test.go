@@ -77,20 +77,65 @@ func TestConfigureRefusesNonInteractiveWithoutYes(t *testing.T) {
 	}
 }
 
-func TestConfigureRequiresTheCredentialStore(t *testing.T) {
+func TestConfigureInitializesCredentialsWhenNoneExist(t *testing.T) {
 	dir := statusAgent(t, nil)
+	t.Setenv(creds.EnvMasterKey, "")
+	t.Setenv(creds.EnvMasterKeyFile, "")
+	var out string
+	withStdin(t, "\n", func() {
+		out = capture(t, dir, func() {
+			if code := cmdConfigure([]string{"--yes"}); code != 0 {
+				t.Fatalf("configure on a template checkout exited %d", code)
+			}
+		})
+	})
+	if !strings.Contains(out, "Generated "+creds.KeyFileName) {
+		t.Fatalf("configure did not report the generated key: %s", out)
+	}
+	info, err := os.Stat(filepath.Join(dir, creds.KeyFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("master key mode %04o, want 0600", info.Mode().Perm())
+	}
+	key, err := creds.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := creds.Read(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store) != 0 {
+		t.Fatalf("fresh store holds %d credential(s)", len(store))
+	}
+}
+
+func TestConfigureRefusesAKeyWithoutTheStore(t *testing.T) {
+	dir := statusAgent(t, nil)
+	key := creds.GenerateKey() + "\n"
+	keyPath := filepath.Join(dir, creds.KeyFileName)
+	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.ReadFile(filepath.Join(dir, config.FileName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	code, out := captureCredentialsError(t, dir, func() int { return cmdConfigure([]string{"--yes"}) })
 	if code == 0 || !strings.Contains(out, creds.FileName+" is missing") {
-		t.Fatalf("configure without store: code=%d, output=%s", code, out)
+		t.Fatalf("configure with only a key: code=%d, output=%s", code, out)
 	}
-	for _, path := range []string{creds.KeyFileName, creds.FileName} {
-		if _, err := os.Stat(filepath.Join(dir, path)); !os.IsNotExist(err) {
-			t.Fatalf("configure created %s: %v", path, err)
-		}
+	if _, err := os.Stat(filepath.Join(dir, creds.FileName)); !os.IsNotExist(err) {
+		t.Fatalf("configure created the missing store: %v", err)
+	}
+	raw, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != key {
+		t.Fatal("configure replaced an existing master key")
 	}
 	after, err := os.ReadFile(filepath.Join(dir, config.FileName))
 	if err != nil {
