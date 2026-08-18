@@ -1,0 +1,23 @@
+# Scaffold and configure an agent.
+exec openroutines new agent
+exec readlink agent/CLAUDE.md
+stdout '^AGENTS.md$'
+cp agent/master.key master.key.after-new
+cp agent/.openroutines/credentials.yml.enc credentials.after-new
+cd agent
+stdin ../configure.in
+exec openroutines configure
+replace-line openroutines.yml repo: 'repo: https://github.com/acme/acceptance-agent'
+cmp master.key ../master.key.after-new
+! cmp .openroutines/credentials.yml.enc ../credentials.after-new
+
+# A fresh configured agent passes its framework check.
+exec openroutines check
+
+-- configure.in --
+acceptance-agent
+CI
+ci@example.invalid
+UTC
+fake/model
+not-a-real-key

@@ -1,0 +1,25 @@
+# Scaffold and configure an agent.
+exec openroutines new agent
+cd agent
+stdin ../configure.in
+exec openroutines configure
+replace-line openroutines.yml repo: 'repo: https://github.com/acme/acceptance-agent'
+
+# Every deployed legacy configuration name still loads and nudges a rename.
+mv openroutines.yml openroutines.yaml
+exec openroutines check
+stdout 'legacy configuration name'
+mv openroutines.yaml agent.yaml
+exec openroutines check
+stdout 'legacy configuration name'
+mv agent.yaml openroutines.yml
+exec openroutines check
+! stdout 'legacy configuration name'
+
+-- configure.in --
+acceptance-agent
+CI
+ci@example.invalid
+UTC
+fake/model
+not-a-real-key

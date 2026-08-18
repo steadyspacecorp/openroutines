@@ -1,0 +1,49 @@
+# Scaffold and configure an agent.
+exec openroutines new agent
+cd agent
+stdin ../configure.in
+exec openroutines configure
+replace-line openroutines.yml repo: 'repo: https://github.com/acme/acceptance-agent'
+
+# Creating a routine produces a valid inactive routine.
+exec openroutines routines new acceptance-routine
+exec openroutines check
+
+# Check rejects an invalid routine.
+cp ../broken.md routines/broken.md
+! exec openroutines check
+stdout 'schedule "99 99'
+stdout 'credential name "Bad-Name" must be lowercase snake_case'
+stdout 'nonexistent'
+rm routines/broken.md
+
+# A routine that does not load remains protected from replacement and removable.
+cp ../unparseable.md routines/unparseable.md
+! exec openroutines check
+stdout 'routines/unparseable.md'
+! exec openroutines routines new unparseable
+stderr 'cannot create "unparseable"'
+grep Precious routines/unparseable.md
+exec openroutines routines remove unparseable
+! exists routines/unparseable.md
+
+-- configure.in --
+acceptance-agent
+CI
+ci@example.invalid
+UTC
+fake/model
+not-a-real-key
+-- broken.md --
+---
+schedule: "99 99 * * *"
+credentials: [Bad-Name]
+skills: [nonexistent]
+---
+Body
+-- unparseable.md --
+---
+schedule: "0 9 * * *"
+actve: false
+---
+Precious.

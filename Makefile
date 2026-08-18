@@ -5,7 +5,7 @@ SHELL := bash
 MAKEFLAGS += --warn-undefined-variables
 .DELETE_ON_ERROR:
 
-.PHONY: build lint fix tidy test test-race smoke check check-vuln check-tidy check-secrets verify release clean
+.PHONY: build lint fix tidy test test-race test-acceptance check check-vuln check-tidy check-secrets verify release clean
 
 # Build
 build:
@@ -31,8 +31,8 @@ test:
 test-race:
 	go test -race ./...
 
-smoke:
-	@bin/smoke
+test-acceptance:
+	go test -count=1 -tags=acceptance ./acceptance
 
 # Checks (CI gates the golangci-lint action doesn't already cover)
 check: check-vuln check-tidy
@@ -61,7 +61,7 @@ check-secrets:
 
 # Everything CI runs, in one target. No `build`: test-race compiles every
 # package, so a separate build step would only repeat it.
-verify: lint check check-secrets test-race smoke
+verify: lint check check-secrets test-race test-acceptance
 
 # Release & cleanup
 release:

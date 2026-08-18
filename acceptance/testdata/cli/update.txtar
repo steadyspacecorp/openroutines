@@ -1,0 +1,58 @@
+# Scaffold and configure an agent.
+exec openroutines new agent
+cd agent
+stdin ../configure.in
+exec openroutines configure
+cp ../opencode.json opencode.json
+
+# Update advances framework-owned pins, derives repo from origin, and preserves user config.
+cp opencode.json ../opencode.seeded.json
+cp ../old-version .openroutines/version
+replace-line Dockerfile 'ARG OPENROUTINES_VERSION=' 'ARG OPENROUTINES_VERSION=v0.0.0-old'
+replace-line openroutines.yml repo: 'repo: ""'
+exec git remote add origin git@github.com:acme/acceptance-agent.git
+exec openroutines update
+exec openroutines version
+cp stdout ../version
+cmp .openroutines/version ../version
+exec sh -c 'grep -Fx "ARG OPENROUTINES_VERSION=$(cat "$1")" "$2"' sh ../version Dockerfile
+cmp opencode.json ../opencode.seeded.json
+grep '^repo: https://github.com/acme/acceptance-agent$' openroutines.yml
+
+# Check rejects drift between the pin file and deploy image.
+replace-line Dockerfile 'ARG OPENROUTINES_VERSION=' 'ARG OPENROUTINES_VERSION=v0.0.0-old'
+! exec openroutines check
+stdout 'Dockerfile version pin does not match'
+
+-- configure.in --
+acceptance-agent
+CI
+ci@example.invalid
+UTC
+fake/model
+not-a-real-key
+-- old-version --
+v0.0.0-old
+-- opencode.json --
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "skill": {
+      "*": "deny"
+    },
+    "question": "deny"
+  },
+  "provider": {
+    "acceptance_gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "https://gateway.example.invalid/compat" }
+    }
+  },
+  "mcp": {
+    "reporter_feed": {
+      "type": "remote",
+      "url": "https://mcp.example.invalid/feed",
+      "headers": { "Authorization": "Bearer {env:REPORTER_TOKEN}" }
+    }
+  }
+}
