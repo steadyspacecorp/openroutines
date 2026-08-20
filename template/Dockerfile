@@ -4,7 +4,7 @@
 # paths, and each final stage drops to the unprivileged agent user, which can run
 # the binaries but never replace them.
 #
-#   base    -- OS packages (git, gh, jq, ssh), pinned opencode, the agent user.
+#   base    -- OS packages and common tools, pinned opencode, the agent user.
 #
 #   runtime -- base, as the agent user. `openroutines routines run/test` executes
 #              the model process in this stage with the run workspace mounted;
@@ -20,7 +20,8 @@
 FROM debian:trixie-slim AS base
 
 # Tools every run can rely on: git, gh for GitHub work, jq for reading JSON APIs,
-# ssh for git-over-ssh knowledge pushes, curl for the installs below.
+# rg for searching, unzip, Python, Node.js, ssh for git-over-ssh knowledge pushes,
+# and curl for the installs below.
 # bubblewrap is the preferred run sandbox: the supervisor wraps every model
 # process in its own mount, pid, ipc, uts and user namespaces, so one run
 # cannot see, signal, or name anything belonging to another. It is the only
@@ -28,7 +29,7 @@ FROM debian:trixie-slim AS base
 # namespaces the supervisor falls back to a Landlock domain, which needs
 # nothing but the kernel.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git gh jq openssh-client curl ca-certificates bubblewrap \
+    && apt-get install -y --no-install-recommends git gh jq ripgrep unzip python3 nodejs openssh-client curl ca-certificates bubblewrap \
     && rm -rf /var/lib/apt/lists/* \
     && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
     && useradd -m -u 10001 agent
