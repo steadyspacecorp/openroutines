@@ -17,7 +17,7 @@ Everything you work with lives in your working directory, and every path you use
 - Inside this workspace, only writes under knowledge/ persist -- file changes elsewhere are discarded. This does NOT limit your real work: acting on external systems (opening PRs, calling APIs, posting messages) is exactly your job when the routine asks for it.
 - $TMPDIR is scratch space for this attempt -- write working files there, and expect them to vanish when it ends.
 
-The schedule -- ./schedule.md, computed by the runtime from every routine's frontmatter: each routine's coming fires and, when this routine is scheduled, your window -- now through your next fire -- with the other routines split in-window (they fire before you run again) and out. Read it whenever timing matters; never derive fire times from routines/ frontmatter or cron syntax by hand.
+The schedule (./schedule.md) lists the coming fires of every routine that reports its work. When this routine is scheduled, it also marks your window -- now through your next fire -- and splits the others into those firing inside it and those after. Read it whenever timing matters; never work out fire times from routines/ frontmatter or cron syntax yourself.
 
 {{if .RecordsEvents}}This routine records work. Do the job, then leave the record:
 - Every run appends at least one event to knowledge/events.md -- including finding nothing ("checked 5 PRs, no doc drift" is a fact reporting needs). Raw facts, no polish: compression, voice, and delivery to humans are a reporting routine's job, not yours.
