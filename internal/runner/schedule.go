@@ -25,7 +25,6 @@ type scheduleRow struct {
 	name  string
 	spec  string
 	fires []time.Time
-	full  bool
 }
 
 func prepareSchedule(dir, workspace string, r *routine.Routine, tz string, now time.Time) error {
@@ -51,7 +50,7 @@ func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time
 
 	var rows []scheduleRow
 	for _, r := range all {
-		if r.Frontmatter.Schedule == "" || !r.Frontmatter.IsActive() {
+		if r.Frontmatter.Schedule == "" || !r.Frontmatter.IsActive() || !r.Frontmatter.FullTeamwork() {
 			continue
 		}
 		spec, err := schedule.Parse(r.Frontmatter.Schedule, loc)
@@ -62,7 +61,6 @@ func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time
 			name:  r.Name,
 			spec:  r.Frontmatter.Schedule,
 			fires: schedule.NextFires(spec, now, until, scheduleFireCount),
-			full:  r.Frontmatter.FullTeamwork(),
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return firstFire(rows[i]).Before(firstFire(rows[j])) })
@@ -73,22 +71,14 @@ func renderSchedule(all []*routine.Routine, self *routine.Routine, now time.Time
 		fmt.Fprintf(&b, "window: now → %s (%s's next fire on its next fire-day)\n",
 			windowEnd.Format(timeLayout), self.Name)
 	}
-	var full []scheduleRow
-	for _, row := range rows {
-		if row.full {
-			full = append(full, row)
-			continue
-		}
-		fmt.Fprintf(&b, "fact: %s next %s\n", row.name, formatFires(row.fires))
-	}
 	b.WriteString("\n")
 
 	if windowEnd.IsZero() {
-		writeTable(&b, "routine", full)
+		writeTable(&b, "routine", rows)
 		return b.String()
 	}
 	var in, out []scheduleRow
-	for _, row := range full {
+	for _, row := range rows {
 		if len(row.fires) > 0 && row.fires[0].Before(windowEnd) {
 			in = append(in, row)
 		} else {

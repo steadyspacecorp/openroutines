@@ -31,8 +31,6 @@ func TestRenderScheduleWindowSplit(t *testing.T) {
 	for _, want := range []string{
 		"now: Tue 2026-07-28 07:00 (UTC)",
 		"window: now → Wed 2026-07-29 07:00 (steady-check-in's next fire on its next fire-day)",
-		"fact: announcements next Tue 2026-07-28 08:30",
-		"fact: steady-inbox next Tue 2026-07-28 08:45",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
@@ -42,10 +40,24 @@ func TestRenderScheduleWindowSplit(t *testing.T) {
 		t.Fatal("teamwork: events must not disable event recording")
 	}
 
+	// schedule.md answers "what runs next, that I report on". A routine that
+	// is not teamwork: full is not reportable, so naming it here invites the
+	// reporter to write an intention about it.
+	for _, name := range []string{"announcements", "steady-inbox"} {
+		if strings.Contains(got, name) {
+			t.Fatalf("non-full routine %q must not appear in the schedule:\n%s", name, got)
+		}
+	}
+	if strings.Contains(got, "fact:") {
+		t.Fatalf("schedule must not carry fact lines:\n%s", got)
+	}
+
 	in := section(got, "in-window", "out (after window)")
 	out := section(got, "out (after window)", "")
-	if strings.Contains(in, "announcements") || strings.Contains(out, "announcements") {
-		t.Fatalf("teamwork: events routine must stay out of the work tables:\n%s", got)
+	// reports: true defaults to teamwork: off, so the reporter is absent from
+	// the tables even though the window line names it.
+	if strings.Contains(in, "steady-check-in") || strings.Contains(out, "steady-check-in") {
+		t.Fatalf("the reporting routine must not schedule itself:\n%s", got)
 	}
 	for name, wantIn := range map[string]bool{
 		"doc-drift":       true,
@@ -74,7 +86,7 @@ func TestRenderScheduleDegradesWithoutSelfSchedule(t *testing.T) {
 		t.Fatalf("no window without a self schedule:\n%s", got)
 	}
 	if !strings.Contains(got, "routine") || !strings.Contains(got, "doc-drift") {
-		t.Fatalf("facts table must still render:\n%s", got)
+		t.Fatalf("routine table must still render:\n%s", got)
 	}
 }
 
@@ -102,8 +114,6 @@ func TestRenderScheduleUsesAgentTimezoneNotArgumentZone(t *testing.T) {
 	for _, want := range []string{
 		"now: Tue 2026-07-28 07:00 (America/New_York)",
 		"window: now → Wed 2026-07-29 07:00 (steady-check-in's next fire on its next fire-day)",
-		"fact: announcements next Tue 2026-07-28 08:30",
-		"fact: steady-inbox next Tue 2026-07-28 08:45",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
