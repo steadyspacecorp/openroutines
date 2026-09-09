@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/steadyspacecorp/openroutines/internal/config"
+	"github.com/steadyspacecorp/openroutines/internal/knowledge"
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
@@ -36,6 +37,23 @@ func TestStageUsesSuppliedKnowledgeSnapshotWithoutMaterializingLocalBranch(t *te
 	}
 	if _, err := os.Stat(filepath.Join(dir, "knowledge")); !os.IsNotExist(err) {
 		t.Fatalf("read-only staging materialized local knowledge: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(prepared.workspace.KnowledgeDir, knowledge.NewEventsFile)); !os.IsNotExist(err) {
+		t.Fatal("teamwork: off routine was handed a new-events.md")
+	}
+
+	recording := &routine.Routine{Name: "daily", Frontmatter: routine.Frontmatter{}, Body: "work"}
+	prepared, err = Stage(dir, agent, recording, Attempt{RunID: "run_rec", Number: 1, SnapshotDir: snapshot, ReadOnly: true}, &sync.Mutex{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.workspace.Cleanup()
+	page, err := os.ReadFile(filepath.Join(prepared.workspace.KnowledgeDir, knowledge.NewEventsFile))
+	if err != nil || !strings.HasPrefix(string(page), "# New events") {
+		t.Fatalf("new-events page = %q, %v; want a fresh page with its format for a recording routine", page, err)
+	}
+	if _, err := os.Stat(filepath.Join(prepared.workspace.BaseDir, knowledge.NewEventsFile)); !os.IsNotExist(err) {
+		t.Fatal("new-events.md leaked into the import base")
 	}
 }
 

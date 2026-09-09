@@ -29,7 +29,7 @@ func Settle(dir string, r *routine.Routine, workspace *AttemptWorkspace, result 
 	store := knowledge.NewStore(dir)
 	settlement := &Settlement{Outcome: result.Outcome, Detail: detail}
 	if result.Outcome == Completed {
-		eventsDiscarded, conflicts, err := importKnowledge(dir, r, workspace)
+		eventsDiscarded, conflicts, err := importKnowledge(dir, r, workspace, attempt.RunID)
 		if err != nil {
 			settlement.Outcome = Crashed
 			settlement.Detail = "knowledge rejected: " + err.Error()
@@ -68,14 +68,22 @@ func Settle(dir string, r *routine.Routine, workspace *AttemptWorkspace, result 
 	return settlement, nil
 }
 
-func importKnowledge(dir string, r *routine.Routine, workspace *AttemptWorkspace) (eventsDiscarded bool, conflicts []knowledge.Conflict, err error) {
+func importKnowledge(dir string, r *routine.Routine, workspace *AttemptWorkspace, runID string) (eventsDiscarded bool, conflicts []knowledge.Conflict, err error) {
 	store := knowledge.NewStore(dir)
-	if !r.Frontmatter.RecordsEvents() {
-		if eventsDiscarded, err = knowledge.RestoreFile(workspace.KnowledgeDir, workspace.BaseDir, "events.md"); err != nil {
-			return false, nil, err
-		}
+	if eventsDiscarded, err = knowledge.RestoreFile(workspace.KnowledgeDir, workspace.BaseDir, "events.md"); err != nil {
+		return false, nil, err
+	}
+	entries, err := knowledge.TakeNewEvents(workspace.KnowledgeDir)
+	if err != nil {
+		return false, nil, err
 	}
 	conflicts, err = store.Import(workspace.KnowledgeDir, workspace.BaseDir)
+	if err != nil {
+		return false, nil, err
+	}
+	if r.Frontmatter.RecordsEvents() {
+		err = store.AppendNewEvents(r.Name, runID, time.Now(), entries)
+	}
 	return eventsDiscarded, conflicts, err
 }
 

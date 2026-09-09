@@ -119,6 +119,11 @@ func Stage(dir string, agent *config.Agent, r *routine.Routine, attempt Attempt,
 		if err := knowledge.CloneTree(workspace.BaseDir, workspace.KnowledgeDir); err != nil {
 			return err
 		}
+		if r.Frontmatter.RecordsEvents() {
+			if err := knowledge.WriteNewEventsStub(workspace.KnowledgeDir); err != nil {
+				return err
+			}
+		}
 		if r.Frontmatter.Reports {
 			through, firstRun, err := prepareChanges(dir, workspaceRoot, r.Name)
 			if err != nil {
