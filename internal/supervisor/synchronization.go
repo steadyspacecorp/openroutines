@@ -28,9 +28,10 @@ func (s *Supervisor) syncOnce() {
 		s.blockOnce("sync", "knowledge sync conflict -- sync stopped, running on local state", errors.New(rep.Detail), &s.blockers.syncWarned)
 		s.strandBlocked()
 	case rep.Unreachable:
-		// Recorded locally, published when origin returns -- an outage whose
-		// only trace is a log line in a replaced container is no trace.
-		s.blockOnce("origin", "origin unreachable -- knowledge is not durable and no new runs start until it returns", errors.New(rep.Detail), &s.blockers.originWarned)
+		if !s.blockers.originWarned {
+			s.blockers.originWarned = true
+			slog.Error("BLOCKED", "kind", "origin", "reason", "origin unreachable -- knowledge is not durable and no new runs start until it returns", "error", rep.Detail)
+		}
 	case rep.Detail != "":
 		// Sync could not even read the local worktree; an open blocker must
 		// not be resolved on the strength of it.
@@ -38,7 +39,10 @@ func (s *Supervisor) syncOnce() {
 	default:
 		s.blockers.syncBlocked = false
 		s.recover("sync", "knowledge sync with origin recovered", &s.blockers.syncWarned)
-		s.recover("origin", "origin reachable again -- knowledge sync resumed", &s.blockers.originWarned)
+		if s.blockers.originWarned {
+			s.blockers.originWarned = false
+			slog.Error("RECOVERED", "kind", "origin", "reason", "origin reachable again -- knowledge sync resumed")
+		}
 		if rep.Adopted {
 			slog.Info("knowledge: adopted remote commits")
 		}

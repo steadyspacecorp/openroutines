@@ -217,10 +217,16 @@ func (s *Supervisor) commitIntent(message string) bool {
 	}
 	if err := s.store.Push(); err != nil {
 		// An identity that isn't durable is how duplicates happen.
-		s.blockOnce("push", "intent push failed -- runs held until origin is reachable", err, &s.blockers.unreachWarned)
+		if !s.blockers.unreachWarned {
+			s.blockers.unreachWarned = true
+			slog.Error("BLOCKED", "kind", "push", "reason", "intent push failed -- runs held until origin is reachable", "error", err)
+		}
 		return false
 	}
-	s.recover("push", "push to origin recovered -- runs resumed", &s.blockers.unreachWarned)
+	if s.blockers.unreachWarned {
+		s.blockers.unreachWarned = false
+		slog.Error("RECOVERED", "kind", "push", "reason", "push to origin recovered -- runs resumed")
+	}
 	return true
 }
 
