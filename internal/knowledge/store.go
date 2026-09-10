@@ -42,10 +42,12 @@ var primitives = map[string]string{
 		"Format (one line per entry):\n\n```markdown\n" +
 		"- YYYY-MM-DD <routine>: <what happened, why it matters, links, people>\n" +
 		"- YYYY-MM-DD <routine> NO-OP: <what was checked and found clean>\n```\n",
-	"tasks.md": "# Tasks\n\nWhat must happen, and who owns the next action. One canonical entry per\n" +
-		"task, from discovery to resolution: update it in place (complete, cancel,\n" +
-		"or move between sections) rather than re-recording it elsewhere. A blocked\n" +
-		"task names what it is waiting on.\n\n" +
+	"tasks.md": "# Tasks\n\nWhat must happen, and who owns the next action. Agent-owned when a\n" +
+		"routine will do it; Human-owned when the agent's work waits on a person's\n" +
+		"decision or action. One canonical entry per task, from discovery to\n" +
+		"resolution: update it in place (complete, cancel, or move between\n" +
+		"sections) rather than re-recording it elsewhere. A blocked task names\n" +
+		"what it is waiting on.\n\n" +
 		"Format:\n\n```markdown\n" +
 		"## Agent-owned\n\n" +
 		"- [ ] `task-YYYYMMDD-<n>` <description> (routine: <handler>; source: <where it came from>; added YYYY-MM-DD)\n" +
