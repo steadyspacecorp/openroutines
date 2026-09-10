@@ -2,8 +2,10 @@ package knowledge
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"strings"
@@ -43,10 +45,19 @@ func TakeNewEvents(stagingDir string) ([]string, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
+	// Read before Import validates staging, so the per-file cap is enforced
+	// here, on the bytes actually read.
+	raw, err := io.ReadAll(io.LimitReader(f, maxFile+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxFile {
+		return nil, fmt.Errorf("staged knowledge file %q exceeds %d bytes -- rejected", NewEventsFile, maxFile)
+	}
 
 	var entries []string
 	inFence, open := false, false
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 0, 64<<10), maxFile)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

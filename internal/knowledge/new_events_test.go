@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,19 @@ func TestTakeNewEventsParsesEntriesAndRemovesTheFile(t *testing.T) {
 	entries, err = TakeNewEvents(staging)
 	if err != nil || entries != nil {
 		t.Fatalf("absent page: entries=%v err=%v, want nil nil", entries, err)
+	}
+}
+
+func TestTakeNewEventsRejectsAnOversizedPage(t *testing.T) {
+	staging := t.TempDir()
+	line := []byte("- x\n")
+	page := bytes.Repeat(line, maxFile/len(line)+1)
+	if err := os.WriteFile(filepath.Join(staging, NewEventsFile), page, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := TakeNewEvents(staging)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("entries=%d err=%v, want the per-file cap enforced", len(entries), err)
 	}
 }
 
