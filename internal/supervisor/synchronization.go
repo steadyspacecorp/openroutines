@@ -28,9 +28,10 @@ func (s *Supervisor) syncOnce() {
 		s.blockOnce("sync", "knowledge sync conflict -- sync stopped, running on local state", errors.New(rep.Detail), &s.blockers.syncWarned)
 		s.strandBlocked()
 	case rep.Unreachable:
-		// Recorded locally, published when origin returns -- an outage whose
-		// only trace is a log line in a replaced container is no trace.
-		s.blockOnce("origin", "origin unreachable -- knowledge is not durable and no new runs start until it returns", errors.New(rep.Detail), &s.blockers.originWarned)
+		if !s.blockers.originWarned {
+			s.blockers.originWarned = true
+			slog.Error("BLOCKED", "kind", "origin", "reason", "origin unreachable -- knowledge is not durable and no new runs start until it returns", "error", rep.Detail)
+		}
 	case rep.Detail != "":
 		// Sync could not even read the local worktree; an open blocker must
 		// not be resolved on the strength of it.
@@ -124,8 +125,13 @@ func (s *Supervisor) blockOnce(kind, reason string, err error, warned *bool) {
 	s.pushBestEffort()
 }
 
+// Outages no longer file a task, but one filed by an earlier version and
+// left open across an upgrade still resolves here.
 func (s *Supervisor) recover(kind, msg string, warned *bool) {
-	*warned = false
+	if *warned {
+		*warned = false
+		slog.Error("RECOVERED", "kind", kind, "reason", msg)
+	}
 	changed, err := s.store.ResolveHumanTasks("task-"+kind+"-",
 		"done "+time.Now().UTC().Format("2006-01-02")+" -- "+msg)
 	if err != nil {
@@ -136,7 +142,6 @@ func (s *Supervisor) recover(kind, msg string, warned *bool) {
 	if !changed {
 		return
 	}
-	slog.Error("RECOVERED", "kind", kind, "reason", msg)
 	_, _ = s.store.Commit("Resolve supervisor blocker")
 	s.pushBestEffort()
 }

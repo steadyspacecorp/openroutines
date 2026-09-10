@@ -787,7 +787,7 @@ func TestStrandedRefFromAnotherContainerSurvives(t *testing.T) {
 	}
 }
 
-func TestUnreachableOriginRecordsADurableBlocker(t *testing.T) {
+func TestUnreachableOriginLeavesKnowledgeAlone(t *testing.T) {
 	dir := fixture(t, "ok")
 	bare := withOrigin(t, dir)
 	s := newSupervisor(t, dir)
@@ -808,15 +808,34 @@ func TestUnreachableOriginRecordsADurableBlocker(t *testing.T) {
 
 	s.tickWait(ctx, t0.Add(183*time.Second))
 
+	for _, file := range []string{"tasks.md", "events.md"} {
+		if got := gitOut(t, bare, "cat-file", "-p", "refs/heads/knowledge:"+file); strings.Contains(got, "origin unreachable") {
+			t.Fatalf("an outage nobody acts on belongs in the log, not in %s: %q", file, got)
+		}
+	}
+}
+
+func TestLegacyOutageTasksResolveOnRecovery(t *testing.T) {
+	dir := fixture(t, "ok")
+	bare := withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	store := knowledge.NewStore(dir)
+	for _, kind := range []string{"origin", "push"} {
+		if err := store.AppendHumanTask("task-"+kind+"-20260901", kind+" unreachable (source: supervisor; added 2026-09-01)"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.Commit("Seed legacy outage tasks"); err != nil {
+		t.Fatal(err)
+	}
+
+	s.tickWait(context.Background(), time.Now().Truncate(time.Minute))
+
 	tasks := gitOut(t, bare, "cat-file", "-p", "refs/heads/knowledge:tasks.md")
-	if !strings.Contains(tasks, "origin unreachable") {
-		t.Fatalf("the outage should be recorded where a person looks: %q", tasks)
-	}
-	if got := strings.Count(tasks, "origin unreachable"); got != 1 {
-		t.Fatalf("the outage is recorded once, not once per tick (%d): %q", got, tasks)
-	}
-	if !strings.Contains(tasks, "[x]") {
-		t.Fatalf("the blocker should be resolved in place once origin returned: %q", tasks)
+	for _, kind := range []string{"origin", "push"} {
+		if !strings.Contains(tasks, "- [x] `task-"+kind+"-20260901`") {
+			t.Fatalf("a legacy %s outage task must resolve once origin is reachable: %q", kind, tasks)
+		}
 	}
 }
 
