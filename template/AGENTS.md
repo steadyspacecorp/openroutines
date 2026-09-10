@@ -92,7 +92,9 @@ agent, and git history keeps everything you remove.
 The shape, in broad strokes: `events.md` holds what happened, `tasks.md`
 holds what must happen and who owns it (Agent-owned / Human-owned),
 `context.md` holds facts that inform but need no action, and
-`ledgers/<routine>.md` is one routine's private state. Each file opens with
+`ledgers/<routine>.md` is one routine's private state. A run writes its
+events to `new-events.md`, a fresh page per attempt; the supervisor appends them
+to `events.md`, which a run reads but never writes. Each file opens with
 a fenced example of its own format. Aged entries are trimmed to
 `knowledge.retention` (default 30 days); `tasks.md` and the ledgers are exempt.
 

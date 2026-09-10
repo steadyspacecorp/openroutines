@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
-	setup := func(t *testing.T) (string, *AttemptWorkspace) {
+func TestImportKnowledgeKeepsTheSharedLogReadOnly(t *testing.T) {
+	setup := func(t *testing.T, record string) (string, *AttemptWorkspace) {
 		t.Helper()
 		dir := t.TempDir()
 		wt := filepath.Join(dir, knowledge.Dir)
@@ -25,32 +25,52 @@ func TestImportKnowledgeEnforcesEventsOptOut(t *testing.T) {
 		os.WriteFile(filepath.Join(staging.BaseDir, "tasks.md"), []byte("none\n"), 0o644)
 		os.WriteFile(filepath.Join(staging.KnowledgeDir, "events.md"), []byte("base\n- sneaky event\n"), 0o644)
 		os.WriteFile(filepath.Join(staging.KnowledgeDir, "tasks.md"), []byte("- [ ] real work\n"), 0o644)
+		if record != "" {
+			os.WriteFile(filepath.Join(staging.KnowledgeDir, knowledge.NewEventsFile), []byte(record), 0o644)
+		}
 		return dir, staging
 	}
+	read := func(dir, name string) string {
+		raw, _ := os.ReadFile(filepath.Join(dir, knowledge.Dir, name))
+		return string(raw)
+	}
 
-	dir, staging := setup(t)
+	dir, staging := setup(t, "- quiet work\n")
 	r := &routine.Routine{Name: "quiet", Frontmatter: routine.Frontmatter{Teamwork: routine.TeamworkOff}}
-	discarded, _, err := importKnowledge(dir, r, staging)
+	discarded, _, err := importKnowledge(dir, r, staging, "run_q")
 	if err != nil || !discarded {
 		t.Fatalf("discarded=%v err=%v, want true nil", discarded, err)
 	}
-	wt := filepath.Join(dir, knowledge.Dir)
-	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "base\n" {
-		t.Fatalf("events.md = %q, want staged change discarded", got)
+	if got := read(dir, "events.md"); got != "base\n" {
+		t.Fatalf("events.md = %q, want the staged edit discarded and no record appended for teamwork: off", got)
 	}
-	if got, _ := os.ReadFile(filepath.Join(wt, "tasks.md")); string(got) != "- [ ] real work\n" {
+	if got := read(dir, "tasks.md"); got != "- [ ] real work\n" {
 		t.Fatalf("tasks.md = %q, want staged change imported", got)
 	}
-
-	dir, staging = setup(t)
-	r = &routine.Routine{Name: "loud", Frontmatter: routine.Frontmatter{}}
-	discarded, _, err = importKnowledge(dir, r, staging)
-	if err != nil || discarded {
-		t.Fatalf("discarded=%v err=%v, want false nil", discarded, err)
+	if _, err := os.Stat(filepath.Join(dir, knowledge.Dir, knowledge.NewEventsFile)); !os.IsNotExist(err) {
+		t.Fatal("new-events.md must never reach the worktree")
 	}
-	wt = filepath.Join(dir, knowledge.Dir)
-	if got, _ := os.ReadFile(filepath.Join(wt, "events.md")); string(got) != "base\n- sneaky event\n" {
-		t.Fatalf("events.md = %q, want staged change imported for a recording routine", got)
+
+	dir, staging = setup(t, "- loud work\n")
+	r = &routine.Routine{Name: "loud", Frontmatter: routine.Frontmatter{}}
+	discarded, _, err = importKnowledge(dir, r, staging, "run_l")
+	if err != nil || !discarded {
+		t.Fatalf("discarded=%v err=%v, want true nil: the shared log is read-only for every routine", discarded, err)
+	}
+	got := read(dir, "events.md")
+	if strings.Contains(got, "sneaky") || !strings.HasPrefix(got, "base\n- ") || !strings.HasSuffix(got, " loud (run_l): loud work\n") {
+		t.Fatalf("events.md = %q, want the record appended with its stamp and the direct edit discarded", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, knowledge.Dir, knowledge.NewEventsFile)); !os.IsNotExist(err) {
+		t.Fatal("new-events.md must never reach the worktree")
+	}
+
+	dir, staging = setup(t, "")
+	if _, _, err := importKnowledge(dir, r, staging, "run_e"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(dir, "events.md"); !strings.HasSuffix(got, " loud (run_e): NO-OP: the run recorded no event\n") {
+		t.Fatalf("events.md = %q, want a NO-OP stamped for a recording routine that left no record", got)
 	}
 }
 
@@ -215,7 +235,7 @@ func TestConsumeMarkerLivesInStagedKnowledge(t *testing.T) {
 		t.Fatal("marker in staged knowledge not honored")
 	}
 	r := &routine.Routine{Name: "report", Frontmatter: routine.Frontmatter{Reports: true}}
-	if _, _, err := importKnowledge(dir, r, staging); err != nil {
+	if _, _, err := importKnowledge(dir, r, staging, "run_m"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(wt, knowledge.ConsumeMarker)); !os.IsNotExist(err) {

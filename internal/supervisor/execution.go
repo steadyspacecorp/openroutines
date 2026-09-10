@@ -135,7 +135,7 @@ func (s *Supervisor) execute(ctx context.Context, r *routine.Routine, st *schedu
 		return
 	}
 	if settlement.EventsDiscarded {
-		log.Info("discarded staged events.md change (teamwork: off)")
+		log.Info("discarded staged events.md change -- the shared log is read-only in a run")
 	}
 	conflictsCommitted := s.recordKnowledgeConflicts(r, pending, settlement, log)
 	shouldPush := reportSettlement(ctx, settlement, result, abandoned, log)

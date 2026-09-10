@@ -273,12 +273,12 @@ func TestInstructionRendering(t *testing.T) {
 		t.Fatalf("no-events rule rendered for an events-recording routine:\n%s", full)
 	}
 	plain := render(routine.Frontmatter{Teamwork: routine.TeamworkOff})
-	for _, banned := range []string{"Every run appends", "This routine reports", "append an event to knowledge/events.md"} {
+	for _, banned := range []string{"Every run appends", "This routine reports", "append an event to knowledge/new-events.md"} {
 		if strings.Contains(plain, banned) {
 			t.Fatalf("conditional block %q rendered when its flag was off:\n%s", banned, plain)
 		}
 	}
-	for _, want := range []string{"does not record events", "never write to knowledge/events.md"} {
+	for _, want := range []string{"does not record events", "there is no knowledge/new-events.md"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("teamwork: off instruction missing %q:\n%s", want, plain)
 		}
