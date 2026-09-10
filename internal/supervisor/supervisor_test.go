@@ -815,6 +815,30 @@ func TestUnreachableOriginLeavesKnowledgeAlone(t *testing.T) {
 	}
 }
 
+func TestLegacyOutageTasksResolveOnRecovery(t *testing.T) {
+	dir := fixture(t, "ok")
+	bare := withOrigin(t, dir)
+	s := newSupervisor(t, dir)
+	store := knowledge.NewStore(dir)
+	for _, kind := range []string{"origin", "push"} {
+		if err := store.AppendHumanTask("task-"+kind+"-20260901", kind+" unreachable (source: supervisor; added 2026-09-01)"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.Commit("Seed legacy outage tasks"); err != nil {
+		t.Fatal(err)
+	}
+
+	s.tickWait(context.Background(), time.Now().Truncate(time.Minute))
+
+	tasks := gitOut(t, bare, "cat-file", "-p", "refs/heads/knowledge:tasks.md")
+	for _, kind := range []string{"origin", "push"} {
+		if !strings.Contains(tasks, "- [x] `task-"+kind+"-20260901`") {
+			t.Fatalf("a legacy %s outage task must resolve once origin is reachable: %q", kind, tasks)
+		}
+	}
+}
+
 func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	dir := fixture(t, "slow")
 	base := t.TempDir()

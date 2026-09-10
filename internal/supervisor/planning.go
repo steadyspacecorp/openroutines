@@ -223,10 +223,7 @@ func (s *Supervisor) commitIntent(message string) bool {
 		}
 		return false
 	}
-	if s.blockers.unreachWarned {
-		s.blockers.unreachWarned = false
-		slog.Error("RECOVERED", "kind", "push", "reason", "push to origin recovered -- runs resumed")
-	}
+	s.recover("push", "push to origin recovered -- runs resumed", &s.blockers.unreachWarned)
 	return true
 }
 
