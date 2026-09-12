@@ -44,11 +44,6 @@ func Settle(dir string, r *routine.Routine, workspace *AttemptWorkspace, result 
 			settlement.Detail += " -- " + result.Hint
 		}
 	}
-	if settlement.Outcome != Completed && settlement.Outcome != Canceled {
-		if err := store.AppendEvent(fmt.Sprintf("%s supervisor: routine %s (%s %s) %s", datestamp(), r.Name, attempt.RunID, attempt.ID(), settlement.Detail)); err != nil {
-			r.Log().Warn("could not record the failure event -- this log line is the only copy", "run_id", attempt.RunID, "error", err)
-		}
-	}
 	record := *result
 	record.Outcome = settlement.Outcome
 	if err := store.AppendRunRecord(recordJSON(r, attempt, &record)); err != nil {
@@ -143,5 +138,3 @@ func recordJSON(r *routine.Routine, attempt Attempt, result *AttemptResult) stri
 }
 
 func timestamp() string { return time.Now().UTC().Format(time.RFC3339) }
-
-func datestamp() string { return time.Now().UTC().Format("2006-01-02") }
