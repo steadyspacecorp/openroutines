@@ -252,10 +252,6 @@ func (s *Supervisor) abandon(r *routine.Routine, st *schedule.State, detail stri
 	st.Watermark = pending.CoveredThrough
 	st.Pending = nil
 	if cooldown := st.RecordAbandonment(now); cooldown > 0 {
-		if err := s.store.AppendEvent(fmt.Sprintf("%s supervisor: routine %s circuit breaker tripped after %d consecutive abandonments -- cooling down for %s, next success resets", date, r.Name, st.ConsecutiveAbandons, cooldown)); err != nil {
-			r.Log().Warn("could not record the circuit breaker event in knowledge -- this log line is the only copy",
-				"run_id", pending.RunID, "error", err)
-		}
 		r.Log().Error("circuit breaker tripped", "cooldown", cooldown, "run_id", pending.RunID)
 	}
 	r.Log().Error("run abandoned", "run_id", pending.RunID, "attempts", pending.Attempts)

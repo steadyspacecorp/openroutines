@@ -146,7 +146,7 @@ func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
 		t.Fatalf("settlement = %+v, want crashed with knowledge-rejected detail", settlement)
 	}
 	if settlement.Commit == "" {
-		t.Fatal("settlement should have committed the record and event")
+		t.Fatal("settlement should have committed the record")
 	}
 	wt := filepath.Join(dir, knowledge.Dir)
 	records, _ := os.ReadFile(filepath.Join(wt, "runs.jsonl"))
@@ -154,8 +154,8 @@ func TestSettleRecordsRejectedImportAsCrashed(t *testing.T) {
 		t.Fatalf("run record should carry the settled outcome: %s", records)
 	}
 	events, _ := os.ReadFile(filepath.Join(wt, "events.md"))
-	if !strings.Contains(string(events), "run_reject attempt_01) knowledge rejected") {
-		t.Fatalf("failure event missing: %s", events)
+	if strings.Contains(string(events), "run_reject") {
+		t.Fatalf("a failed attempt is the run record's to hold, not an event: %s", events)
 	}
 }
 

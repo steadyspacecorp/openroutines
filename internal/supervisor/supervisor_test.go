@@ -336,8 +336,8 @@ func TestSessionThatEndedMidTurnIsNotCompleted(t *testing.T) {
 	if st.Watermark.After(t0) {
 		t.Errorf("the watermark must not advance past unfinished work, got %v", st.Watermark)
 	}
-	if events := readFile(t, filepath.Join(dir, "knowledge", "events.md")); !strings.Contains(events, "crashed") {
-		t.Errorf("the failure should be recorded as an event: %q", events)
+	if events := readFile(t, filepath.Join(dir, "knowledge", "events.md")); strings.Contains(events, "crashed") {
+		t.Errorf("a failed attempt belongs to the run record, not to events: %q", events)
 	}
 }
 
@@ -542,8 +542,8 @@ func TestRetrySameRunIDThenAbandon(t *testing.T) {
 		t.Fatalf("tasks missing human-owned abandonment task for %s: %q", runID, tasks)
 	}
 	events := readFile(t, filepath.Join(dir, "knowledge", "events.md"))
-	if !strings.Contains(events, runID) {
-		t.Fatalf("events missing failure entries for %s: %q", runID, events)
+	if strings.Contains(events, runID) {
+		t.Fatalf("failed attempts belong to the run record and the abandonment task, not to events: %q", events)
 	}
 	records := readFile(t, filepath.Join(dir, "knowledge", "runs.jsonl"))
 	if got := strings.Count(records, runID); got != MaxAttempts {
@@ -601,8 +601,8 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 		t.Fatalf("no runs should start during cool-down: %+v", st.Pending)
 	}
 	events := readFile(t, filepath.Join(dir, "knowledge", "events.md"))
-	if !strings.Contains(events, "circuit breaker tripped") {
-		t.Fatalf("breaker event missing: %q", events)
+	if strings.Contains(events, "circuit breaker") {
+		t.Fatalf("a cooldown heals on its own and belongs to state and the log, not to events: %q", events)
 	}
 
 	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
