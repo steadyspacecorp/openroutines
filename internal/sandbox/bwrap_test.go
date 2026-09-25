@@ -1,6 +1,8 @@
 package sandbox
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -20,7 +22,15 @@ func TestBubblewrapMountsWorkspaceWritable(t *testing.T) {
 	}
 }
 
+// unshare searches for its command itself, in an environment the caller may
+// have emptied -- where glibc's default path misses /usr/local/bin.
 func TestOuterUserNamespacePrecedesBubblewrap(t *testing.T) {
+	bin := t.TempDir()
+	bwrapPath := filepath.Join(bin, "bwrap")
+	if err := os.WriteFile(bwrapPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
 	workspace := t.TempDir()
 	cmd, err := (bubblewrap{proc: privateProc, outerUserNamespace: true}).Command(workspace, "true")
 	if err != nil {
@@ -28,7 +38,7 @@ func TestOuterUserNamespacePrecedesBubblewrap(t *testing.T) {
 	}
 
 	wantPrefix := []string{
-		"unshare", "--user", "--map-root-user", "--", "bwrap",
+		"unshare", "--user", "--map-root-user", "--", bwrapPath,
 		"--unshare-pid", "--unshare-ipc", "--unshare-uts",
 	}
 	if len(cmd.Args) < len(wantPrefix) || !slices.Equal(cmd.Args[:len(wantPrefix)], wantPrefix) {

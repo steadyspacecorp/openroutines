@@ -15,6 +15,7 @@ var (
 	testRoot        string
 	openroutinesBin string
 	isolationImage  string
+	bubblewrapImage string
 )
 
 func TestMain(m *testing.M) {
@@ -47,8 +48,10 @@ func TestMain(m *testing.M) {
 	}
 
 	code := m.Run()
-	if isolationImage != "" {
-		_ = exec.Command("docker", "image", "rm", "-f", isolationImage).Run()
+	for _, image := range []string{isolationImage, bubblewrapImage} {
+		if image != "" {
+			_ = exec.Command("docker", "image", "rm", "-f", image).Run()
+		}
 	}
 	if err := os.RemoveAll(testRoot); err != nil && code == 0 {
 		fmt.Fprintln(os.Stderr, err)
