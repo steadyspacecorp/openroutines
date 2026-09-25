@@ -44,6 +44,28 @@ func TestIsolationBubblewrap(t *testing.T) {
 	)
 }
 
+// The profile takes away what gVisor lacks: Landlock, mount_setattr, and --
+// until September 2026 -- openat2. A bwrap built without its fallbacks for
+// those syscalls, as distros now package it, fails every mount there, and with
+// no Landlock beneath it no sandbox is left.
+func TestIsolationBubblewrapWithoutNewerSyscalls(t *testing.T) {
+	fixture := isolation(t)
+	profile := filepath.Join(repoRoot, "acceptance", "testdata", "isolation", "seccomp-gvisor.json")
+	out := fixture.run(t,
+		"-e", "EXPECT_TREE_COLLAPSE=1",
+		"-e", "OPENROUTINES_LOG_LEVEL=debug",
+		"--security-opt", "seccomp="+profile,
+		"--security-opt", "apparmor=unconfined",
+		fixture.image, "sh", "-c", isolationScript,
+	)
+	assertContains(t, out,
+		`selected="bubblewrap namespaces, shared /proc"`,
+		"agent-repo=No such file or directory",
+		"deploy-key=No such file or directory",
+		"workspace-write=x",
+	)
+}
+
 func TestIsolationLandlock(t *testing.T) {
 	fixture := isolation(t)
 	out := fixture.run(t,
@@ -159,13 +181,6 @@ func buildIsolationFixture() (*isolationFixture, error) {
 		return nil, err
 	}
 
-	templateDockerfile, err := os.ReadFile(filepath.Join(repoRoot, "template", "Dockerfile"))
-	if err != nil {
-		return nil, err
-	}
-	if !bytes.Contains(templateDockerfile, []byte("bubblewrap")) {
-		return nil, fmt.Errorf("template Dockerfile does not install the preferred run sandbox")
-	}
 	for _, name := range []string{"Dockerfile", "opencode", "ssh"} {
 		if err := copyFile(filepath.Join(repoRoot, "acceptance", "testdata", "isolation", name), filepath.Join(contextDir, name)); err != nil {
 			return nil, err
@@ -194,8 +209,13 @@ func buildIsolationFixture() (*isolationFixture, error) {
 		return nil, err
 	}
 
+	bubblewrapImage = fmt.Sprintf("openroutines-acceptance-bubblewrap-%d", os.Getpid())
+	template := filepath.Join(repoRoot, "template")
+	if _, err := runCommand("", nil, "docker", "build", "--quiet", "--target", "bubblewrap", "-t", bubblewrapImage, template); err != nil {
+		return nil, err
+	}
 	isolationImage = fmt.Sprintf("openroutines-acceptance-%d", os.Getpid())
-	if _, err := runCommand("", nil, "docker", "build", "--quiet", "-t", isolationImage, contextDir); err != nil {
+	if _, err := runCommand("", nil, "docker", "build", "--quiet", "--build-arg", "BUBBLEWRAP_IMAGE="+bubblewrapImage, "-t", isolationImage, contextDir); err != nil {
 		return nil, err
 	}
 	return &isolationFixture{

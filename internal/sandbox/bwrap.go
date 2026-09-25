@@ -98,9 +98,15 @@ func (b bubblewrap) Command(workspace string, argv ...string) (*exec.Cmd, error)
 	)
 	args = append(args, "--chdir", workspace, "--")
 	if b.outerUserNamespace {
+		// Resolved here, not by unshare: an emptied environment would leave
+		// unshare searching glibc's default path, which misses /usr/local/bin.
+		path, err := exec.LookPath(bwrap)
+		if err != nil {
+			return nil, err
+		}
 		// gVisor rejects bwrap's combined user-and-mount namespace clone but
 		// permits the same namespaces when the mapped user namespace exists first.
-		args = append([]string{"--user", "--map-root-user", "--", bwrap}, args...)
+		args = append([]string{"--user", "--map-root-user", "--", path}, args...)
 		return exec.Command(unshare, append(args, argv...)...), nil
 	}
 	return exec.Command(bwrap, append(args, argv...)...), nil
