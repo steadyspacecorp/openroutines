@@ -39,7 +39,11 @@ func Settle(dir string, r *routine.Routine, workspace *AttemptWorkspace, result 
 			advanceConsumer(dir, r, workspace, attempt.RunID)
 		}
 	} else if settlement.Detail == "" && result.Outcome != Canceled {
-		settlement.Detail = fmt.Sprintf("%s after %s (exit %d)", result.Outcome, result.Duration, result.ExitCode)
+		exit := fmt.Sprintf("exit %d", result.ExitCode)
+		if result.ExitCode < 0 {
+			exit = "killed"
+		}
+		settlement.Detail = fmt.Sprintf("%s after %s (%s)", result.Outcome, result.Duration, exit)
 		if result.Hint != "" {
 			settlement.Detail += " -- " + result.Hint
 		}
