@@ -282,10 +282,14 @@ func (p *PreparedAttempt) Run(ctx context.Context) (result *AttemptResult, retur
 		runtime.reap(cmd)
 	case <-time.After(timeout):
 		result.Outcome = Timeout
+		result.ExitCode = -1
 		kill()
+		runtime.reap(cmd)
 	case <-ctx.Done():
 		result.Outcome = Canceled
+		result.ExitCode = -1
 		kill()
+		runtime.reap(cmd)
 	}
 	result.Duration = time.Since(started).Round(time.Millisecond)
 	if out != nil {
