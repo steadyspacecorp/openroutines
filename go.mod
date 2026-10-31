@@ -13,6 +13,6 @@ require (
 require golang.org/x/tools v0.26.0 // indirect
 
 require (
-	github.com/landlock-lsm/go-landlock v0.10.1
+	github.com/landlock-lsm/go-landlock v0.11.0
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )
