@@ -6,6 +6,9 @@ on:
   pull_request:
   # The release workflow reuses this as its pre-release gate.
   workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 13 * * 1"
 
 permissions:
   contents: read
