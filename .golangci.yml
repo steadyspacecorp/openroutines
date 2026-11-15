@@ -49,6 +49,12 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+      # errcheck requires `_ = <-ch` to discard a received error, which S1005
+      # flags until https://github.com/dominikh/go-tools/issues/1844 ships.
+      - linters:
+          - staticcheck
+        text: S1005
+        source: '_ = <-'
 
 issues:
   max-issues-per-linter: 0

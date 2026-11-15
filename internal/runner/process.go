@@ -13,11 +13,11 @@ const containerExitGrace = 5 * time.Second
 
 func killClient(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Logger) {
 	select {
-	case <-done:
+	case _ = <-done:
 	case <-time.After(grace):
 		log.Warn("docker client did not exit after the container stopped -- killed", "grace", grace)
 		_ = cmd.Process.Kill()
-		<-done
+		_ = <-done
 	}
 }
 
@@ -33,11 +33,11 @@ func killGroup(cmd *exec.Cmd, grace time.Duration, done chan error, log *slog.Lo
 	target := signalTarget(cmd)
 	_ = syscall.Kill(target, syscall.SIGTERM)
 	select {
-	case <-done:
+	case _ = <-done:
 	case <-time.After(grace):
 		log.Warn("run did not exit on SIGTERM -- killed", "grace", grace)
 		_ = syscall.Kill(target, syscall.SIGKILL)
-		<-done
+		_ = <-done
 	}
 }
 
