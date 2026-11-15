@@ -269,8 +269,7 @@ func (p *PreparedAttempt) Run(ctx context.Context) (result *AttemptResult, retur
 			attemptLog.Warn("run output abandoned after the drain deadline -- a descendant outlived the attempt and the log tail is truncated", "deadline", pipeDrainDeadline)
 		} else if werr != nil {
 			result.Outcome = Crashed
-			var ee *exec.ExitError
-			if errors.As(werr, &ee) {
+			if ee, ok := errors.AsType[*exec.ExitError](werr); ok {
 				result.ExitCode = ee.ExitCode()
 			} else {
 				result.ExitCode = -1
@@ -317,11 +316,11 @@ func (p *PreparedAttempt) Run(ctx context.Context) (result *AttemptResult, retur
 		result.Hint = capture.Failure
 	}
 	if result.Outcome == Crashed && authFailurePattern.MatchString(capture.Failure) {
-		provider := strings.SplitN(model, "/", 2)[0]
+		provider, _, _ := strings.Cut(model, "/")
 		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
 		result.Hint = authHint(p.agentDir, model, injected)
 	} else if result.Outcome == Crashed && isModelNotFound(capture.Failure) {
-		provider := strings.SplitN(model, "/", 2)[0]
+		provider, _, _ := strings.Cut(model, "/")
 		_, injected := secrets.env[strings.ToUpper(creds.ProviderKeyName(provider))]
 		result.Hint = modelNotFoundHint(model, injected, secrets.credentialErr)
 	}

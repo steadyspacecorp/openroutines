@@ -151,8 +151,7 @@ func gitEnv(dir string, env []string, args ...string) (string, error) {
 }
 
 func gitExitCode(err error) int {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exit.ExitCode()
 	}
 	return -1

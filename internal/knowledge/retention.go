@@ -122,7 +122,7 @@ func trimRunRecords(path string, cutoff time.Time) (bool, error) {
 	}
 	var kept []string
 	dropped := 0
-	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(raw), "\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}

@@ -182,7 +182,7 @@ func (s *OriginSnapshot) resolve(rel string) (string, error) {
 		return "", fmt.Errorf("path must stay inside knowledge: %q", rel)
 	}
 	path := s.Dir
-	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
 		path = filepath.Join(path, part)
 		info, err := os.Lstat(path)
 		if err != nil {

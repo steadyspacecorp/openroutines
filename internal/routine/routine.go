@@ -181,8 +181,7 @@ func Concerns(err error, name string) bool {
 	if err == nil {
 		return false
 	}
-	var re *Error
-	if errors.As(err, &re) {
+	if re, ok := errors.AsType[*Error](err); ok {
 		return re.Name == name
 	}
 	return true
@@ -248,8 +247,7 @@ func LoadAgent(root string) ([]*Routine, []error) {
 		claimed[r.Name] = true
 	}
 	for _, err := range errs {
-		var re *Error
-		if errors.As(err, &re) {
+		if re, ok := errors.AsType[*Error](err); ok {
 			claimed[re.Name] = true
 		}
 	}
@@ -268,8 +266,7 @@ func LoadAgent(root string) ([]*Routine, []error) {
 	}
 	broken := map[string]bool{}
 	for _, err := range errs {
-		var re *Error
-		if errors.As(err, &re) {
+		if re, ok := errors.AsType[*Error](err); ok {
 			broken[re.Name] = true
 		}
 	}

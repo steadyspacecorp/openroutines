@@ -109,7 +109,7 @@ func (s *State) Save(stateDir string) error {
 
 func Occurrences(spec *Spec, after, until time.Time) (first, last time.Time, n int) {
 	t := after
-	for i := 0; i < 100000; i++ {
+	for range 100000 {
 		t = spec.Next(t)
 		if t.IsZero() || t.After(until) {
 			return
@@ -140,7 +140,7 @@ func WindowEnd(spec *Spec, after, until time.Time) time.Time {
 	after = after.In(spec.loc)
 	y0, d0 := after.Year(), after.YearDay()
 	t := after
-	for i := 0; i < 100000; i++ {
+	for range 100000 {
 		t = spec.Next(t)
 		if t.IsZero() || t.After(until) {
 			break

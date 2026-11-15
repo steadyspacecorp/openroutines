@@ -123,7 +123,7 @@ func TestSyncRefusesRewrittenHistory(t *testing.T) {
 		t.Fatalf("b adopted rewritten content: %q", got)
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if rep := NewStore(b).Sync(); !rep.Rewritten {
 			t.Fatalf("sync call %d after rewrite: expected continued refusal, got %+v", i+2, rep)
 		}

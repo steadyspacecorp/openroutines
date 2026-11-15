@@ -15,7 +15,7 @@ import (
 var authFailurePattern = regexp.MustCompile(`(?i)invalid x-api-key|api key is invalid|invalid api key|incorrect api key|401 unauthorized|authentication_error|missing.{0,20}api key|error:\s*unauthorized|invalid bearer token`)
 
 func authHint(dir, model string, injected bool) string {
-	provider := strings.SplitN(model, "/", 2)[0]
+	provider, _, _ := strings.Cut(model, "/")
 	keyName := creds.ProviderKeyName(provider)
 	endpoint := provider
 	if oc, err := config.LoadOpenCode(dir); err == nil {
@@ -30,7 +30,7 @@ func authHint(dir, model string, injected bool) string {
 }
 
 func modelNotFoundHint(model string, injected bool, credentialErr error) string {
-	provider := strings.SplitN(model, "/", 2)[0]
+	provider, _, _ := strings.Cut(model, "/")
 	keyName := creds.ProviderKeyName(provider)
 	if credentialErr != nil {
 		return fmt.Sprintf("model %s could not be resolved; credentials could not be loaded: %v (run openroutines check)", model, credentialErr)
@@ -67,7 +67,7 @@ func (s *runSecrets) release() {
 }
 
 func resolveCredentials(dir string, agent *config.Agent, r *routine.Routine, model string) (_ *runSecrets, err error) {
-	provider := strings.SplitN(model, "/", 2)[0]
+	provider, _, _ := strings.Cut(model, "/")
 	providerKey := creds.ProviderKeyName(provider)
 	out := &runSecrets{env: map[string]string{}}
 	defer func() {

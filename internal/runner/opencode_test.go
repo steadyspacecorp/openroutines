@@ -244,7 +244,7 @@ func TestSuccessfulCaptureReapsItsDescendants(t *testing.T) {
 func parseEnv(t *testing.T, out string) map[string]string {
 	t.Helper()
 	env := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		k, v, ok := strings.Cut(line, "=")
 		if !ok {
 			t.Fatalf("unparsable line %q", line)

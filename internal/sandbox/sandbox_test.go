@@ -345,7 +345,7 @@ func TestTheSandboxGrantsOnlyTheNamedPartsOfEtc(t *testing.T) {
 		if err != nil {
 			t.Fatalf("walking /etc failed: %v: %s", err, out)
 		}
-		for _, path := range strings.Fields(out) {
+		for path := range strings.FieldsSeq(out) {
 			named := false
 			for _, entry := range osConfig {
 				if within(path, entry) || within(entry, path) {

@@ -605,7 +605,7 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 		t.Fatalf("a cooldown heals on its own and belongs to state and the log, not to events: %q", events)
 	}
 
-	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	binDir, _, _ := strings.Cut(os.Getenv("PATH"), string(os.PathListSeparator))
 	os.WriteFile(filepath.Join(binDir, "fake-mode"), []byte("ok\n"), 0o644)
 	after := st.CooldownUntil.Add(time.Minute)
 	s.tickWait(ctx, after)
@@ -708,7 +708,7 @@ func TestRewrittenOriginHaltsDispatch(t *testing.T) {
 	run(c, "git", "-c", "user.name=x", "-c", "user.email=x@x", "commit", "--amend", "-q", "--no-edit", "-m", "rewritten")
 	run(c, "git", "push", "-q", "--force", "origin", "knowledge")
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		s.tickWait(ctx, t0.Add(time.Duration(2+i)*time.Minute))
 	}
 	ledger = readFile(t, filepath.Join(dir, "knowledge", "ledgers", "fake.md"))
@@ -869,7 +869,7 @@ func TestLeaseExcludesASecondInstanceWhileRunsExecute(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 	holder.tickWait(ctx, t0)
 
-	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	binDir, _, _ := strings.Cut(os.Getenv("PATH"), string(os.PathListSeparator))
 	started := filepath.Join(binDir, "started")
 	waitForRuns := func(n int) {
 		t.Helper()
@@ -954,7 +954,7 @@ func TestLeaseStaysLiveThroughALongRun(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 	holder.tickWait(ctx, t0)
 
-	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	binDir, _, _ := strings.Cut(os.Getenv("PATH"), string(os.PathListSeparator))
 	started := filepath.Join(binDir, "started")
 	done := make(chan struct{})
 	go func() {
@@ -1054,7 +1054,7 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 	t0 := time.Now().Truncate(time.Minute)
 	holder.tickWait(ctx, t0)
 
-	binDir := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	binDir, _, _ := strings.Cut(os.Getenv("PATH"), string(os.PathListSeparator))
 	started := filepath.Join(binDir, "started")
 	done := make(chan struct{})
 	go func() {
@@ -1087,7 +1087,7 @@ func TestLostLeaseCancelsTheRun(t *testing.T) {
 		t.Fatalf("a canceled run's staged knowledge must not be imported: %q", got)
 	}
 	canceled := false
-	for _, line := range strings.Split(logs.String(), "\n") {
+	for line := range strings.SplitSeq(logs.String(), "\n") {
 		if !strings.Contains(line, "lease lost mid-run") {
 			continue
 		}
@@ -1296,7 +1296,7 @@ func TestRunRecordCarriesUsage(t *testing.T) {
 	s.tickWait(ctx, t0.Add(time.Minute))
 	records := readFile(t, filepath.Join(dir, "knowledge", "runs.jsonl"))
 	last := ""
-	for _, l := range strings.Split(strings.TrimSpace(records), "\n") {
+	for l := range strings.SplitSeq(strings.TrimSpace(records), "\n") {
 		if l != "" {
 			last = l
 		}

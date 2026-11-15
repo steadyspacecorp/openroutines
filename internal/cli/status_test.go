@@ -121,7 +121,7 @@ func TestStatusShowsSchedulingState(t *testing.T) {
 			t.Fatalf("status missing %q:\n%s", want, out)
 		}
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(line, "  flaky") && strings.Contains(line, "next") {
 			t.Fatalf("a cooling-down routine must not advertise a next firing: %q", line)
 		}
@@ -284,7 +284,7 @@ func TestGrantSurfacesNameEveryAuthority(t *testing.T) {
 				t.Fatalf("%s missing grant %q:\n%s", name, want, out)
 			}
 		}
-		for _, line := range strings.Split(out, "\n") {
+		for line := range strings.SplitSeq(out, "\n") {
 			if !strings.HasPrefix(strings.TrimSpace(line), "quiet") {
 				continue
 			}

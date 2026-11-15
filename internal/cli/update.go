@@ -161,7 +161,7 @@ func githubRepoValue(path string) (string, bool) {
 
 func dockerfileUsesVersion(raw []byte, version string) bool {
 	want := "ARG OPENROUTINES_VERSION=" + version
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		if strings.TrimSpace(line) == want {
 			return true
 		}
@@ -171,15 +171,15 @@ func dockerfileUsesVersion(raw []byte, version string) bool {
 
 func printDiff(got, want string) {
 	gotLines := map[string]bool{}
-	for _, l := range strings.Split(got, "\n") {
+	for l := range strings.SplitSeq(got, "\n") {
 		gotLines[l] = true
 	}
 	wantLines := map[string]bool{}
-	for _, l := range strings.Split(want, "\n") {
+	for l := range strings.SplitSeq(want, "\n") {
 		wantLines[l] = true
 	}
 	shown := 0
-	for _, l := range strings.Split(got, "\n") {
+	for l := range strings.SplitSeq(got, "\n") {
 		if !wantLines[l] && strings.TrimSpace(l) != "" {
 			fmt.Printf("  - %s\n", l)
 			if shown++; shown > 20 {
@@ -188,7 +188,7 @@ func printDiff(got, want string) {
 			}
 		}
 	}
-	for _, l := range strings.Split(want, "\n") {
+	for l := range strings.SplitSeq(want, "\n") {
 		if !gotLines[l] && strings.TrimSpace(l) != "" {
 			fmt.Printf("  + %s\n", l)
 			if shown++; shown > 40 {

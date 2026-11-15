@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -158,15 +159,15 @@ func TestPathResolvesLegacySpellings(t *testing.T) {
 	names := make([]string, 0, len(LegacyFileNames)+1)
 	names = append(names, FileName)
 	names = append(names, LegacyFileNames...)
-	for i := len(names) - 1; i >= 0; i-- {
-		if err := os.WriteFile(filepath.Join(dir, names[i]), []byte("name: a\n"), 0o644); err != nil {
+	for i, name := range slices.Backward(names) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("name: a\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if got := filepath.Base(Path(dir)); got != names[i] {
-			t.Fatalf("with %v present, Path should resolve %s, got %s", names[i:], names[i], got)
+		if got := filepath.Base(Path(dir)); got != name {
+			t.Fatalf("with %v present, Path should resolve %s, got %s", names[i:], name, got)
 		}
 		if _, err := Load(dir); err != nil {
-			t.Fatalf("%s should load: %v", names[i], err)
+			t.Fatalf("%s should load: %v", name, err)
 		}
 	}
 }

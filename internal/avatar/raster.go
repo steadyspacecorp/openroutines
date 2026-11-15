@@ -21,11 +21,11 @@ func rasterize(shapes []shape, fills []string, size int) ([]byte, error) {
 	const sub = 4
 	scale := float64(size) / 96
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	for py := 0; py < size; py++ {
-		for px := 0; px < size; px++ {
+	for py := range size {
+		for px := range size {
 			var r, g, b int
-			for sy := 0; sy < sub; sy++ {
-				for sx := 0; sx < sub; sx++ {
+			for sy := range sub {
+				for sx := range sub {
 					x := (float64(px) + (float64(sx)+0.5)/sub) / scale
 					y := (float64(py) + (float64(sy)+0.5)/sub) / scale
 					c := colors[0]
