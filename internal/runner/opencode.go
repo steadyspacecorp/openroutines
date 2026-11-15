@@ -298,7 +298,7 @@ func runToFile(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 	case runErr = <-done:
 	case <-ctx.Done():
 		_ = syscall.Kill(signalTarget(cmd), syscall.SIGKILL)
-		<-done
+		_ = <-done
 		runErr = ctx.Err()
 	}
 	if runErr != nil {

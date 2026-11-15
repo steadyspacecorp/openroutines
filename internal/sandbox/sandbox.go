@@ -242,7 +242,7 @@ func probeWithin(b Backend, timeout time.Duration) error {
 	case err = <-done:
 	case <-timer.C:
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		<-done
+		_ = <-done
 		return fmt.Errorf("timed out after %s", timeout)
 	}
 	if err == nil {
