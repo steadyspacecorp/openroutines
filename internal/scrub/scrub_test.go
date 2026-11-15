@@ -29,7 +29,7 @@ func TestBufferCapOnNewlineFreeOutput(t *testing.T) {
 	var out bytes.Buffer
 	w := NewWriter(&out)
 	chunk := bytes.Repeat([]byte("x"), 256<<10)
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		w.Write(chunk)
 	}
 	if w.buf.Len() > maxBuffered {

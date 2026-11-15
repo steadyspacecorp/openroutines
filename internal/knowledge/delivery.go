@@ -160,7 +160,7 @@ func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 		}
 		cur = nil
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		switch {
 		case strings.HasPrefix(line, "\x00"):
 			flushCommit()

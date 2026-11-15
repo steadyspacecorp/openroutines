@@ -113,7 +113,7 @@ func (store *Store) Import(stagingDir, baseDir string) (conflicted []Conflict, e
 		// Refuse to import over uncommitted human curation -- it has no reflog to
 		// recover from. Supervisor-owned paths legitimately carry this attempt's
 		// own in-flight bookkeeping.
-		for _, line := range strings.Split(out, "\n") {
+		for line := range strings.SplitSeq(out, "\n") {
 			// Run trims the output, eating the first line's status column;
 			// a path containing spaces degrades toward refusal, never toward
 			// a silent import.

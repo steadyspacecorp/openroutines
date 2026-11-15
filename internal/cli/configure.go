@@ -142,8 +142,8 @@ func defaultTimezone(current string) string {
 		return current
 	}
 	if tz, err := os.Readlink("/etc/localtime"); err == nil {
-		if i := strings.Index(tz, "zoneinfo/"); i >= 0 {
-			return tz[i+len("zoneinfo/"):]
+		if _, after, ok := strings.Cut(tz, "zoneinfo/"); ok {
+			return after
 		}
 	}
 	return "UTC"

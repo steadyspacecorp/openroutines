@@ -251,8 +251,7 @@ func observe(body io.Reader, selector string) (string, error) {
 }
 
 func redactURL(err error) error {
-	var u *url.Error
-	if errors.As(err, &u) {
+	if u, ok := errors.AsType[*url.Error](err); ok {
 		return fmt.Errorf("poll %s: %w", u.Op, u.Err)
 	}
 	return err
@@ -262,7 +261,7 @@ func validatePointer(p string) error {
 	if !strings.HasPrefix(p, "/") {
 		return fmt.Errorf("pointer %q must start with /", p)
 	}
-	for _, tok := range strings.Split(p[1:], "/") {
+	for tok := range strings.SplitSeq(p[1:], "/") {
 		for i := 0; i < len(tok); i++ {
 			if tok[i] == '~' && (i+1 >= len(tok) || tok[i+1] != '0' && tok[i+1] != '1') {
 				return fmt.Errorf("pointer %q has an invalid ~ escape", p)
@@ -274,7 +273,7 @@ func validatePointer(p string) error {
 
 func resolvePointer(doc any, pointer string) (any, bool) {
 	cur := doc
-	for _, tok := range strings.Split(pointer[1:], "/") {
+	for tok := range strings.SplitSeq(pointer[1:], "/") {
 		tok = strings.ReplaceAll(strings.ReplaceAll(tok, "~1", "/"), "~0", "~")
 		switch node := cur.(type) {
 		case map[string]any:

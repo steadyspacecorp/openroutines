@@ -133,7 +133,7 @@ func TestConfigureLevel(t *testing.T) {
 
 func field(t *testing.T, line, key string) string {
 	t.Helper()
-	for _, pair := range strings.Fields(strings.TrimSpace(line)) {
+	for pair := range strings.FieldsSeq(strings.TrimSpace(line)) {
 		if k, v, ok := strings.Cut(pair, "="); ok && k == key {
 			return v
 		}

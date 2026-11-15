@@ -8,8 +8,6 @@ import (
 	"github.com/steadyspacecorp/openroutines/internal/routine"
 )
 
-func boolPtr(v bool) *bool { return &v }
-
 func scheduleFixture() []*routine.Routine {
 	return []*routine.Routine{
 		{Name: "steady-check-in", Frontmatter: routine.Frontmatter{Schedule: "0 7,8 * * 1-5", Reports: true}},
@@ -19,7 +17,7 @@ func scheduleFixture() []*routine.Routine {
 		{Name: "roadmap-groomer", Frontmatter: routine.Frontmatter{Schedule: "0 17 * * 2"}},
 		{Name: "a11y-sweep", Frontmatter: routine.Frontmatter{Schedule: "30 9 * * 3"}},
 		{Name: "release-notes", Frontmatter: routine.Frontmatter{Schedule: "0 21 * * 1"}},
-		{Name: "retired", Frontmatter: routine.Frontmatter{Schedule: "0 9 * * *", Active: boolPtr(false)}},
+		{Name: "retired", Frontmatter: routine.Frontmatter{Schedule: "0 9 * * *", Active: new(false)}},
 	}
 }
 
@@ -92,7 +90,7 @@ func TestRenderScheduleDegradesWithoutSelfSchedule(t *testing.T) {
 
 func TestRenderScheduleInactiveSelfKeepsWindow(t *testing.T) {
 	probe := &routine.Routine{Name: "check-in-probe", Frontmatter: routine.Frontmatter{
-		Schedule: "0 7 * * 1-5", Active: boolPtr(false), Teamwork: routine.TeamworkOff,
+		Schedule: "0 7 * * 1-5", Active: new(false), Teamwork: routine.TeamworkOff,
 	}}
 	all := append(scheduleFixture(), probe)
 	now := time.Date(2026, 7, 28, 7, 0, 0, 0, time.UTC)
@@ -130,8 +128,8 @@ func section(got, from, to string) string {
 	if to == "" {
 		return rest
 	}
-	if end := strings.Index(rest, to); end >= 0 {
-		return rest[:end]
+	if before, _, ok := strings.Cut(rest, to); ok {
+		return before
 	}
 	return rest
 }

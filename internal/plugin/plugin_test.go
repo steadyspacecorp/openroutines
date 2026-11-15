@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,9 +74,7 @@ func write(t *testing.T, extra map[string]string) string {
 		"PLUGIN.md":        "---\nname: demo\ndescription: A demo plugin.\ncredentials:\n  demo_token:\n    description: A demo token\n---\nBody.\n",
 		"routines/demo.md": "---\nschedule: \"0 9 * * *\"\ncredentials: [demo_token]\n---\nDo the demo.\n",
 	}
-	for k, v := range extra {
-		files[k] = v
-	}
+	maps.Copy(files, extra)
 	for rel, content := range files {
 		p := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
