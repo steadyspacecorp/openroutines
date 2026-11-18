@@ -101,8 +101,8 @@ a fenced example of its own format. Aged entries are trimmed to
 The runtime injects the full knowledge discipline into every run -- routine
 prompts should not restate it. Write a routine's prompt as the job itself.
 In particular, a reporting routine just declares `reports: true`: the
-runtime hands it `changes.md` -- every knowledge change since it last reported
--- and the consume semantics for free, so its prompt only needs the
+runtime hands it `changes.md` -- every event and task change since it last
+reported -- and the consume semantics for free, so its prompt only needs the
 composition, the destination, and what counts as delivered.
 
 ## Secrets

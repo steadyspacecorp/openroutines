@@ -53,6 +53,7 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 	appendKnowledge(t, dir, "tasks.md", "- [ ] `task-20260721-1` decide the thing (source: doc-drift; added 2026-07-21)")
 
 	appendKnowledge(t, dir, "ledgers/doc-drift.md", "- private cursor note")
+	appendKnowledge(t, dir, "context.md", "- teammate is reworking the docs nav")
 	appendKnowledge(t, dir, "runs.jsonl", `{"run_id":"run_b"}`)
 	if _, err := NewStore(dir).Commit("Run a11y-sweep (run_b): completed"); err != nil {
 		t.Fatal(err)
@@ -83,7 +84,7 @@ func TestChangesWalksCommitByCommit(t *testing.T) {
 			t.Fatalf("missing %q in changes: %s", want, all)
 		}
 	}
-	for _, banned := range []string{"private cursor note", "run_b\"", "ledgers/"} {
+	for _, banned := range []string{"private cursor note", "run_b\"", "ledgers/", "docs nav", "context.md"} {
 		if strings.Contains(all, banned) {
 			t.Fatalf("excluded path leaked into changes (%q): %s", banned, all)
 		}
