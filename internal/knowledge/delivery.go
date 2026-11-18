@@ -103,6 +103,10 @@ type FileDelta struct {
 
 var deliveryExcludes = []string{":(exclude)state", ":(exclude)runs.jsonl", ":(exclude)ledgers"}
 
+// The feed carries what reporting routines report: events and task changes.
+// Context is standing state, read from context.md itself.
+var feedExcludes = append([]string{":(exclude)context.md"}, deliveryExcludes...)
+
 var ErrCursorUnreachable = errors.New("consumer cursor is not on the knowledge branch")
 
 func (store *Store) reachable(from, through string) error {
@@ -136,7 +140,7 @@ func (store *Store) Changes(from, through string) ([]CommitChange, error) {
 		"--format=%x00%H%x1f%ad%x1f%s", "-p", "-U0", "--no-color",
 		"--invert-grep", "--grep=^" + trimTrailer + "$",
 		from + ".." + through, "--", ".",
-	}, deliveryExcludes...)
+	}, feedExcludes...)
 	// NUL and unit-separator sentinels are emitted by git because argv cannot
 	// carry a literal NUL; trim commits are excluded so consumed history is not replayed.
 	out, err := store.worktree.Run(args...)
